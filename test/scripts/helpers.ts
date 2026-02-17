@@ -30,6 +30,7 @@ export const BPMN_FILES: Record<string, string> = {
   'message-catch.bpmn': 'message-catch-then-continue.bpmn',
   'message-throw.bpmn': 'message-throw-to-callback.bpmn',
   'subprocess.bpmn': 'embedded-subprocess-minimal.bpmn',
+  'linear-service-and-user-task.bpmn': 'linear-service-and-user-task.bpmn',
 };
 
 export function loadBpmn(modelFile: string): string {
@@ -43,11 +44,19 @@ export type TestContext = {
   instanceId: string;
 };
 
+/** Set PURGE_DB=true or PURGE_DB=1 to drop the database before/between tests. Default: keep data for analysis. */
+export function shouldPurgeDb(): boolean {
+  const v = process.env.PURGE_DB ?? '';
+  return v === 'true' || v === '1';
+}
+
 export async function setupDb(): Promise<Db> {
   require('dotenv').config();
   process.env.MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017/Test?serverSelectionTimeoutMS=5000';
   const db = await connectDb();
-  await db.dropDatabase();
+  if (shouldPurgeDb()) {
+    await db.dropDatabase();
+  }
   await ensureIndexes(db);
   return db;
 }
@@ -59,10 +68,11 @@ export async function teardownDb(): Promise<void> {
 export async function deployAndStart(
   db: Db,
   bpmnFile: string,
-  options?: { businessKey?: string }
+  options?: { businessKey?: string; processName?: string }
 ): Promise<TestContext> {
   const bpmn = loadBpmn(bpmnFile);
-  const { definitionId } = await deployDefinition(db, { name: 'Test', version: 1, bpmnXml: bpmn });
+  const name = options?.processName ?? 'Test';
+  const { definitionId } = await deployDefinition(db, { name, version: 1, bpmnXml: bpmn });
   const { instanceId } = await startInstance(db, {
     commandId: uuidv4(),
     definitionId,

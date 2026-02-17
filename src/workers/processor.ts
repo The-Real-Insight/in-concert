@@ -4,7 +4,11 @@ import { getClient } from '../db/client';
 import { getCollections } from '../db/collections';
 import { getDefinition } from '../model/service';
 import { applyTransition } from '../engine/transition';
-import type { ProcessInstanceStateDoc, ContinuationDoc } from '../db/collections';
+import type {
+  ProcessInstanceStateDoc,
+  ContinuationDoc,
+  OutboxDoc,
+} from '../db/collections';
 
 const LEASE_MS = 30_000;
 
@@ -27,12 +31,15 @@ export async function claimContinuation(db: Db): Promise<ContinuationDoc | null>
   return result;
 }
 
-export async function processContinuation(db: Db, continuation: ContinuationDoc): Promise<void> {
+export async function processContinuation(
+  db: Db,
+  continuation: ContinuationDoc
+): Promise<Omit<OutboxDoc, '_id'>[]> {
   const cols = getCollections(db);
   const { ProcessInstanceState, ProcessInstanceEvents, Continuations, Outbox } = cols;
 
   const stateDoc = await ProcessInstanceState.findOne({ _id: continuation.instanceId });
-  if (!stateDoc) return;
+  if (!stateDoc) return [];
 
   const { ProcessInstances } = cols;
   const instanceDoc = await ProcessInstances.findOne(
@@ -40,9 +47,9 @@ export async function processContinuation(db: Db, continuation: ContinuationDoc)
     { projection: { definitionId: 1 } }
   );
   const definitionId = instanceDoc?.definitionId as string | undefined;
-  if (!definitionId) return;
+  if (!definitionId) return [];
   const def = await getDefinition(db, definitionId);
-  if (!def) return;
+  if (!def) return [];
 
   const result = applyTransition(
     stateDoc as ProcessInstanceStateDoc,
@@ -56,7 +63,7 @@ export async function processContinuation(db: Db, continuation: ContinuationDoc)
       { _id: continuation._id },
       { $set: { status: 'DONE', updatedAt: new Date() } }
     );
-    return;
+    return [];
   }
 
   const now = new Date();
@@ -82,6 +89,13 @@ export async function processContinuation(db: Db, continuation: ContinuationDoc)
         if (updateResult.matchedCount === 0) {
           throw new Error('Version conflict');
         }
+        if (result.statePatch.status === 'COMPLETED') {
+          await ProcessInstances.updateOne(
+            { _id: continuation.instanceId },
+            { $set: { status: 'COMPLETED', endedAt: now, updatedAt: now } },
+            opts
+          );
+        }
       }
 
       for (const nc of result.newContinuations) {
@@ -101,6 +115,7 @@ export async function processContinuation(db: Db, continuation: ContinuationDoc)
         opts
       );
     });
+    return result.outbox;
   } finally {
     await session.endSession();
   }

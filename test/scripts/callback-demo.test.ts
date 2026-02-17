@@ -5,6 +5,7 @@
  */
 import type { Db } from 'mongodb';
 import { ensureIndexes } from '../../src/db/indexes';
+import { v4 as uuidv4 } from 'uuid';
 import {
   setupDb,
   teardownDb,
@@ -12,9 +13,15 @@ import {
   runWorker,
   completeWorkItem,
   getState,
+  shouldPurgeDb,
 } from './helpers';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Unique process name per test run to avoid conflicts when not purging */
+function uniqueProcessName(base: string): string {
+  return `${base}_${uuidv4().slice(0, 8)}`;
+}
 
 let db: Db;
 
@@ -28,13 +35,17 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.dropDatabase();
-  await ensureIndexes(db);
+  if (shouldPurgeDb()) {
+    await db.dropDatabase();
+    await ensureIndexes(db);
+  }
 });
 
 describe('Callback demo - User task', () => {
   it('Linear flow with user task: mock logs work item, waits 10s, completes', async () => {
-    const { instanceId } = await deployAndStart(db, 'start-user-task-end.bpmn');
+    const { instanceId } = await deployAndStart(db, 'start-user-task-end.bpmn', {
+      processName: uniqueProcessName('UserTaskDemo'),
+    });
 
     await runWorker(db);
 
@@ -63,7 +74,9 @@ describe('Callback demo - User task', () => {
 
 describe('Callback demo - Service task', () => {
   it('Linear flow with service task: mock logs work item, waits 10s, completes', async () => {
-    const { instanceId } = await deployAndStart(db, 'start-service-task-end.bpmn');
+    const { instanceId } = await deployAndStart(db, 'start-service-task-end.bpmn', {
+      processName: uniqueProcessName('ServiceTaskDemo'),
+    });
 
     await runWorker(db);
 

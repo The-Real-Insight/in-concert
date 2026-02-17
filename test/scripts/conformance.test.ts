@@ -2,7 +2,9 @@
  * BPMN Conformance Test Matrix - see readme/TEST.md
  * Uses mock callbacks with log output per spec.
  * Requires MongoDB (MONGO_URL).
+ * Each test deploys with a unique process name so runs don't require purging.
  */
+import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import { ensureIndexes } from '../../src/db/indexes';
 import {
@@ -18,6 +20,7 @@ import {
   assertMonotonicEvents,
   assertNoDuplicateTokens,
   BPMN_FILES,
+  shouldPurgeDb,
 } from './helpers';
 
 const LINEAR = 'linear.bpmn';
@@ -29,9 +32,11 @@ function bpmnFile(key: string): string {
 }
 
 let db: Db;
+let runId: string;
 
 beforeAll(async () => {
   jest.setTimeout(10000);
+  runId = uuidv4().slice(0, 8);
   db = await setupDb();
 }, 10000);
 
@@ -41,14 +46,18 @@ afterAll(async () => {
 
 beforeEach(async () => {
   mockCallbacks.reset();
-  await db.dropDatabase();
-  await ensureIndexes(db);
+  if (shouldPurgeDb()) {
+    await db.dropDatabase();
+    await ensureIndexes(db);
+  }
 });
 
 describe('T01 - Simple linear flow', () => {
   it('Start → complete Task_A: instance completes', async () => {
     const modelFile = bpmnFile(LINEAR);
-    const { instanceId } = await deployAndStart(db, modelFile);
+    const { instanceId } = await deployAndStart(db, modelFile, {
+      processName: `T01_Linear_${runId}`,
+    });
     await runWorker(db);
 
     const state = await getState(db, instanceId);
@@ -73,7 +82,9 @@ describe('T01 - Simple linear flow', () => {
 describe('T02 - XOR branch selected', () => {
   it('Decision returns Flow_A: Task_A created, Task_B not created', async () => {
     const modelFile = bpmnFile(XOR);
-    const { instanceId } = await deployAndStart(db, modelFile);
+    const { instanceId } = await deployAndStart(db, modelFile, {
+      processName: `T02_XOR_${runId}`,
+    });
     await runWorker(db);
 
     const state = await getState(db, instanceId);
@@ -109,7 +120,9 @@ describe('T03 - XOR default branch', () => {
 describe('T04 - Parallel split/join', () => {
   it('Complete only Task_A: instance remains RUNNING', async () => {
     const modelFile = bpmnFile(AND);
-    const { instanceId } = await deployAndStart(db, modelFile);
+    const { instanceId } = await deployAndStart(db, modelFile, {
+      processName: `T04_AND_${runId}`,
+    });
     await runWorker(db);
 
     const state = await getState(db, instanceId);
@@ -129,7 +142,9 @@ describe('T04 - Parallel split/join', () => {
 describe('T05 - Parallel join fires', () => {
   it('Complete Task_A and Task_B: instance completes', async () => {
     const modelFile = bpmnFile(AND);
-    const { instanceId } = await deployAndStart(db, modelFile);
+    const { instanceId } = await deployAndStart(db, modelFile, {
+      processName: `T05_AND_${runId}`,
+    });
     await runWorker(db);
 
     const state = await getState(db, instanceId);
@@ -181,7 +196,9 @@ describe('T16 - Embedded subprocess', () => {
 describe('T17 - Duplicate work completion', () => {
   it('Submit same completion twice: idempotent', async () => {
     const modelFile = bpmnFile(LINEAR);
-    const { instanceId } = await deployAndStart(db, modelFile);
+    const { instanceId } = await deployAndStart(db, modelFile, {
+      processName: `T17_Linear_${runId}`,
+    });
     await runWorker(db);
 
     const state = await getState(db, instanceId);
@@ -202,7 +219,9 @@ describe('T17 - Duplicate work completion', () => {
 describe('T18 - Duplicate decision', () => {
   it('Submit same decision twice: idempotent', async () => {
     const modelFile = bpmnFile(XOR);
-    const { instanceId } = await deployAndStart(db, modelFile);
+    const { instanceId } = await deployAndStart(db, modelFile, {
+      processName: `T18_XOR_${runId}`,
+    });
     await runWorker(db);
 
     const state = await getState(db, instanceId);

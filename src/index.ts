@@ -1,9 +1,12 @@
+import { createServer } from 'http';
 import express from 'express';
 import { connectDb, closeDb, getDb } from './db/client';
 import { ensureIndexes } from './db/indexes';
 import { apiRouter } from './api/routes';
 import { config } from './config';
 import { claimContinuation, processContinuation } from './workers/processor';
+import { broadcastOutbox } from './ws/broadcast';
+import { attachWebSocketServer } from './ws/server';
 
 const app = express();
 app.use(express.json());
@@ -18,7 +21,10 @@ async function workerLoop() {
       const continuation = await claimContinuation(db);
       if (continuation) {
         try {
-          await processContinuation(db, continuation);
+          const outbox = await processContinuation(db, continuation);
+          if (outbox.length > 0) {
+            broadcastOutbox(outbox);
+          }
         } catch (err) {
           console.error('Continuation failed:', err);
           const { Continuations } = (await import('./db/collections')).getCollections(db);
@@ -39,14 +45,17 @@ async function main() {
   const db = await connectDb();
   await ensureIndexes(db);
 
-  const server = app.listen(config.port, () => {
-    console.log(`tri-bpmn-engine listening on port ${config.port}`);
+  const httpServer = createServer(app);
+  attachWebSocketServer(httpServer);
+
+  httpServer.listen(config.port, () => {
+    console.log(`tri-bpmn-engine listening on port ${config.port} (HTTP + WS /ws)`);
   });
 
   workerLoop();
 
   process.on('SIGTERM', async () => {
-    server.close();
+    httpServer.close();
     await closeDb();
     process.exit(0);
   });

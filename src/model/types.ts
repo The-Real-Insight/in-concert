@@ -2,6 +2,7 @@ export type NodeDef = {
   id: string;
   type: string;
   name?: string;
+  laneRef?: string; // lane name (role) from BPMN laneSet
   incoming: string[];
   outgoing: string[];
   attachedToRef?: string;

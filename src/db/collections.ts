@@ -182,6 +182,7 @@ export type NodeDef = {
   id: string;
   type: string;
   name?: string;
+  laneRef?: string;
   incoming: string[];
   outgoing: string[];
   attachedToRef?: string;

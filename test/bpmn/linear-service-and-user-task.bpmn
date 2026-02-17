@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_LinearServiceUser"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_Case" isExecutable="true">
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_FrontOffice" name="FrontOffice">
+        <bpmn:flowNodeRef>Task_EnterCaseData</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_BackOffice" name="BackOffice">
+        <bpmn:flowNodeRef>Task_ApproveAssessment</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_Accounting" name="Accounting">
+        <bpmn:flowNodeRef>Task_InitiatePayment</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:userTask id="Task_EnterCaseData" name="EnterCaseData"/>
+    <bpmn:serviceTask id="Task_AssessCase" name="AssessCase"/>
+    <bpmn:userTask id="Task_ApproveAssessment" name="ApproveAssessment"/>
+    <bpmn:userTask id="Task_InitiatePayment" name="InitiatePayment"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_EnterCaseData"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_EnterCaseData" targetRef="Task_AssessCase"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_AssessCase" targetRef="Task_ApproveAssessment"/>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Task_ApproveAssessment" targetRef="Task_InitiatePayment"/>
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Task_InitiatePayment" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

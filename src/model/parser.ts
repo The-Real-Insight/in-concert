@@ -86,7 +86,25 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   if (processes.length === 0) {
     throw new Error('No process found in BPMN');
   }
-  const process = processes[0] as { id: string; flowElements?: unknown[] };
+  const process = processes[0] as {
+    id: string;
+    flowElements?: unknown[];
+    laneSets?: { lanes?: { id: string; name?: string; flowNodeRef?: unknown[] }[] }[];
+  };
+
+  const nodeIdToLane: Record<string, string> = {};
+  const laneSets = process.laneSets ?? [];
+  for (const ls of laneSets) {
+    const lanes = ls.lanes ?? [];
+    for (const lane of lanes) {
+      const laneName = lane.name ?? lane.id;
+      const refs: unknown[] = lane.flowNodeRef ?? [];
+      for (const ref of refs) {
+        const nodeId = typeof ref === 'string' ? ref : (ref as { id?: string })?.id;
+        if (nodeId) nodeIdToLane[nodeId] = laneName;
+      }
+    }
+  }
 
   const flowElements = process.flowElements ?? [];
   const nodes: Record<string, NodeDef> = {};
@@ -120,6 +138,7 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       id: flowEl.id,
       type: getNodeType(type),
       name: flowEl.name,
+      laneRef: nodeIdToLane[flowEl.id],
       incoming,
       outgoing,
     };

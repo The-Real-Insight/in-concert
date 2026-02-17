@@ -33,6 +33,7 @@ npm run dev
 - **Gateways**: XOR (split + join), AND (split + join)
 - **Workers**: Claims and processes continuations; in-process polling
 - **Outbox**: CALLBACK_WORK, CALLBACK_DECISION enqueued for delivery
+- **WebSocket**: Push callbacks to clients at `/ws` (REST mode)
 - **Event sourcing**: Append-only events per instance
 - **Optimistic concurrency**: Versioned state updates
 
