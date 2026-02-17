@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_Subprocess"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_Subprocess" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+
+    <bpmn:subProcess id="Sub_1" name="Sub">
+      <bpmn:startEvent id="Sub_Start"/>
+      <bpmn:serviceTask id="Sub_Task" name="SubTask"/>
+      <bpmn:endEvent id="Sub_End"/>
+      <bpmn:sequenceFlow id="Sub_F1" sourceRef="Sub_Start" targetRef="Sub_Task"/>
+      <bpmn:sequenceFlow id="Sub_F2" sourceRef="Sub_Task" targetRef="Sub_End"/>
+    </bpmn:subProcess>
+
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Sub_1"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Sub_1" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

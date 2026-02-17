@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_MessageThrow"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_MessageThrow" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+
+    <bpmn:intermediateThrowEvent id="Throw_OrderShipped">
+      <bpmn:messageEventDefinition messageRef="Message_OrderShipped"/>
+    </bpmn:intermediateThrowEvent>
+
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:message id="Message_OrderShipped" name="OrderShipped"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Throw_OrderShipped"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Throw_OrderShipped" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

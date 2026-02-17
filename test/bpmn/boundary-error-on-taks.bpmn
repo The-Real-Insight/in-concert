@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_BoundaryError"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:error id="Error_MyError" errorCode="MyError"/>
+
+  <bpmn:process id="Process_BoundaryError" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:serviceTask id="Task_A" name="A"/>
+
+    <bpmn:boundaryEvent id="BoundaryError_1" attachedToRef="Task_A" cancelActivity="true">
+      <bpmn:errorEventDefinition errorRef="Error_MyError"/>
+    </bpmn:boundaryEvent>
+
+    <bpmn:serviceTask id="Task_HandleError" name="HandleError"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="Flow_Normal" sourceRef="Task_A" targetRef="EndEvent_1"/>
+    <bpmn:sequenceFlow id="Flow_Error" sourceRef="BoundaryError_1" targetRef="Task_HandleError"/>
+    <bpmn:sequenceFlow id="Flow_E" sourceRef="Task_HandleError" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_XOR"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_XOR" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:exclusiveGateway id="Gateway_XOR" default="Flow_Default"/>
+    <bpmn:serviceTask id="Task_A" name="A"/>
+    <bpmn:serviceTask id="Task_B" name="B"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Gateway_XOR"/>
+    <bpmn:sequenceFlow id="Flow_A" sourceRef="Gateway_XOR" targetRef="Task_A" name="Flow_A"/>
+    <bpmn:sequenceFlow id="Flow_B" sourceRef="Gateway_XOR" targetRef="Task_B" name="Flow_B"/>
+    <bpmn:sequenceFlow id="Flow_Default" sourceRef="Gateway_XOR" targetRef="Task_B" name="default"/>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Task_A" targetRef="EndEvent_1"/>
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Task_B" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

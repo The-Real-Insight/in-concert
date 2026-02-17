@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_TimerCatch"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_TimerCatch" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:intermediateCatchEvent id="Timer_1">
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">PT1S</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Timer_1"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Timer_1" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

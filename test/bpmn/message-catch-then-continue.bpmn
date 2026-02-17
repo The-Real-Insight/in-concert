@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_MessageCatch"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_MessageCatch" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+
+    <bpmn:intermediateCatchEvent id="Catch_OrderPaid">
+      <bpmn:messageEventDefinition messageRef="Message_OrderPaid"/>
+    </bpmn:intermediateCatchEvent>
+
+    <bpmn:serviceTask id="Task_A" name="A"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:message id="Message_OrderPaid" name="OrderPaid"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Catch_OrderPaid"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Catch_OrderPaid" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_A" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>
