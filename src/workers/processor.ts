@@ -31,15 +31,20 @@ export async function claimContinuation(db: Db): Promise<ContinuationDoc | null>
   return result;
 }
 
+export type ProcessContinuationResult = {
+  outbox: Omit<OutboxDoc, '_id'>[];
+  events: import('../db/collections').ProcessInstanceEventDoc[];
+};
+
 export async function processContinuation(
   db: Db,
   continuation: ContinuationDoc
-): Promise<Omit<OutboxDoc, '_id'>[]> {
+): Promise<ProcessContinuationResult> {
   const cols = getCollections(db);
   const { ProcessInstanceState, ProcessInstanceEvents, Continuations, Outbox } = cols;
 
   const stateDoc = await ProcessInstanceState.findOne({ _id: continuation.instanceId });
-  if (!stateDoc) return [];
+  if (!stateDoc) return { outbox: [], events: [] };
 
   const { ProcessInstances } = cols;
   const instanceDoc = await ProcessInstances.findOne(
@@ -47,9 +52,9 @@ export async function processContinuation(
     { projection: { definitionId: 1 } }
   );
   const definitionId = instanceDoc?.definitionId as string | undefined;
-  if (!definitionId) return [];
+  if (!definitionId) return { outbox: [], events: [] };
   const def = await getDefinition(db, definitionId);
-  if (!def) return [];
+  if (!def) return { outbox: [], events: [] };
 
   const result = applyTransition(
     stateDoc as ProcessInstanceStateDoc,
@@ -63,7 +68,7 @@ export async function processContinuation(
       { _id: continuation._id },
       { $set: { status: 'DONE', updatedAt: new Date() } }
     );
-    return [];
+    return { outbox: [], events: [] };
   }
 
   const now = new Date();
@@ -115,7 +120,7 @@ export async function processContinuation(
         opts
       );
     });
-    return result.outbox;
+    return { outbox: result.outbox, events: result.events };
   } finally {
     await session.endSession();
   }

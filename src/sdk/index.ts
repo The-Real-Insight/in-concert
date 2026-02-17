@@ -16,6 +16,13 @@
  * const client = new BpmnEngineClient({ mode: 'local', db });
  */
 export { BpmnEngineClient } from './client';
+export { TriSdk } from './facade';
+export type {
+  TriSdkConfig,
+  TriSdkEngineConfig,
+  TaskListParams,
+  TaskListResult,
+} from './facade';
 export type { SdkConfig, SdkConfigRest, SdkConfigLocal } from './client';
 export type {
   DeployParams,

@@ -8,6 +8,7 @@ import { getCollections } from '../../src/db/collections';
 import { deployDefinition } from '../../src/model/service';
 import { startInstance } from '../../src/instance/service';
 import { claimContinuation, processContinuation } from '../../src/workers/processor';
+import { broadcastAll } from '../../src/ws/broadcast';
 
 const callbackLog = jest.fn();
 
@@ -90,6 +91,17 @@ export async function runWorker(db: Db, maxIterations = 50): Promise<void> {
   }
 }
 
+/** Like runWorker but also broadcasts to in-process handlers (e.g. worklist projection). */
+export async function runWorkerWithProjection(db: Db, maxIterations = 50): Promise<void> {
+  for (let i = 0; i < maxIterations; i++) {
+    const cont = await claimContinuation(db);
+    if (!cont) break;
+    callbackLog(`continuation:${cont.kind}`, cont.payload);
+    const { outbox, events } = await processContinuation(db, cont);
+    broadcastAll(outbox, events);
+  }
+}
+
 export async function completeWorkItem(
   db: Db,
   instanceId: string,
@@ -137,6 +149,19 @@ export async function getEvents(db: Db, instanceId: string) {
 export async function getState(db: Db, instanceId: string) {
   const { ProcessInstanceState } = getCollections(db);
   return ProcessInstanceState.findOne({ _id: instanceId });
+}
+
+/** Get worklist tasks (human_tasks projection). Pass filters like { status: 'OPEN' } or { instanceId }. */
+export async function getWorklistTasks(
+  db: Db,
+  filter: { status?: string; instanceId?: string; assigneeUserId?: string } = {}
+) {
+  const { HumanTasks } = getCollections(db);
+  const q: Record<string, unknown> = {};
+  if (filter.status) q.status = filter.status;
+  if (filter.instanceId) q.instanceId = filter.instanceId;
+  if (filter.assigneeUserId) q.assigneeUserId = filter.assigneeUserId;
+  return HumanTasks.find(q).sort({ createdAt: -1 }).toArray();
 }
 
 export function assertMonotonicEvents(events: { seq: number }[]): void {

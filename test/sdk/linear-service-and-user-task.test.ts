@@ -1,6 +1,7 @@
 /**
  * SDK test: linear-service-and-user-task process.
  * Tests invocation/execution and logs callbacks with task properties (name, role/lane).
+ * Includes worklist test: leave user tasks uncompleted and retrieve via HumanTasks projection.
  */
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,13 +12,21 @@ import {
   teardownDb,
   shouldPurgeDb,
   loadBpmn,
+  deployAndStart,
+  runWorkerWithProjection,
+  completeWorkItem,
+  getWorklistTasks,
+  getState,
 } from '../scripts/helpers';
 import { ensureIndexes } from '../../src/db/indexes';
+import { addStreamHandler } from '../../src/ws/broadcast';
+import { createProjectionHandler } from '../../src/worklist/projection';
 
 jest.setTimeout(20000);
 
 let db: Db;
 let client: BpmnEngineClient;
+let unsubscribeProjection: (() => void) | null = null;
 
 const callbackLog: Array<{ kind: string; name?: string; role?: string; workItemId: string }> = [];
 
@@ -25,9 +34,11 @@ beforeAll(async () => {
   db = await setupDb();
   await ensureIndexes(db);
   client = new BpmnEngineClient({ mode: 'local', db });
+  unsubscribeProjection = addStreamHandler(createProjectionHandler(db));
 });
 
 afterAll(async () => {
+  unsubscribeProjection?.();
   await teardownDb();
 });
 
@@ -104,6 +115,45 @@ describe('SDK: linear-service-and-user-task', () => {
     expect(callbackLog.map((c) => ({ name: c.name, role: c.role }))).toEqual(
       expectedOrder.map((e) => ({ name: e.name, role: e.role }))
     );
+  });
+
+  it('leaves ApproveAssessment uncompleted and retrieves worklist', async () => {
+    const { instanceId } = await deployAndStart(db, 'linear-service-and-user-task.bpmn', {
+      processName: uniqueName('WorklistTest'),
+    });
+
+    // Run until EnterCaseData (user task) is created and projected
+    await runWorkerWithProjection(db);
+    const afterEnter = await getWorklistTasks(db, { instanceId });
+    expect(afterEnter.length).toBeGreaterThanOrEqual(1);
+    const enterTask = afterEnter.find((t) => t.name === 'EnterCaseData');
+    expect(enterTask).toBeDefined();
+    expect(enterTask!.status).toBe('OPEN');
+
+    // Complete EnterCaseData, run worker to reach AssessCase (service task)
+    await completeWorkItem(db, instanceId, enterTask!._id);
+    await runWorkerWithProjection(db);
+
+    // Complete AssessCase (service task) - only work item at this point
+    const stateAfterAssess = await getState(db, instanceId);
+    const assessWorkItem = stateAfterAssess?.waits?.workItems?.[0];
+    if (assessWorkItem) {
+      await completeWorkItem(db, instanceId, assessWorkItem.workItemId);
+      await runWorkerWithProjection(db);
+    }
+
+    // ApproveAssessment (user task) is now active; intentionally leave it uncompleted
+    const openTasks = await getWorklistTasks(db, { status: 'OPEN' });
+    const approveTask = openTasks.find((t) => t.name === 'ApproveAssessment' && t.instanceId === instanceId);
+    expect(approveTask).toBeDefined();
+    expect(approveTask!.status).toBe('OPEN');
+    expect(approveTask!.role).toBe('BackOffice');
+    expect(approveTask!.candidateRoles).toContain('BackOffice');
+
+    // EnterCaseData should be COMPLETED in projection
+    const completedTasks = await getWorklistTasks(db, { instanceId });
+    const completedEnter = completedTasks.find((t) => t.name === 'EnterCaseData');
+    expect(completedEnter?.status).toBe('COMPLETED');
   });
 
   it('subscribeToCallbacks receives and logs task properties', async () => {

@@ -205,7 +205,7 @@ export class BpmnEngineClient {
     for (let i = 0; i < maxIterations; i++) {
       const cont = await claimContinuation(this.config.db);
       if (!cont) break;
-      const outbox = await processContinuation(this.config.db, cont);
+      const { outbox } = await processContinuation(this.config.db, cont);
       count++;
       if (outbox.length > 0 && onCallbacks) {
         const items: CallbackItem[] = outbox.map((ob) => ({

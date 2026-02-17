@@ -7,7 +7,28 @@ export const COLLECTION_NAMES = {
   ProcessInstanceEvents: 'ProcessInstanceEvents',
   Continuations: 'Continuations',
   Outbox: 'Outbox',
+  HumanTasks: 'HumanTasks',
 } as const;
+
+export type HumanTaskStatus = 'OPEN' | 'CLAIMED' | 'COMPLETED' | 'CANCELED';
+
+export type HumanTaskDoc = {
+  _id: string;
+  instanceId: string;
+  definitionId?: string;
+  nodeId: string;
+  name: string;
+  role?: string;
+  status: HumanTaskStatus;
+  assigneeUserId?: string;
+  candidateRoles?: string[];
+  createdAt: Date;
+  claimedAt?: Date;
+  completedAt?: Date;
+  canceledAt?: Date;
+  result?: unknown;
+  version: number;
+};
 
 export type ProcessDefinitionDoc = {
   _id: string;
@@ -228,5 +249,6 @@ export function getCollections(database: Db) {
       COLLECTION_NAMES.Continuations
     ),
     Outbox: database.collection<OutboxDoc>(COLLECTION_NAMES.Outbox),
+    HumanTasks: database.collection<HumanTaskDoc>(COLLECTION_NAMES.HumanTasks),
   };
 }

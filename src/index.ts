@@ -3,14 +3,18 @@ import express from 'express';
 import { connectDb, closeDb, getDb } from './db/client';
 import { ensureIndexes } from './db/indexes';
 import { apiRouter } from './api/routes';
+import { worklistRouter } from './worklist/routes';
+import { createProjectionHandler } from './worklist/projection';
+import { addStreamHandler } from './ws/broadcast';
 import { config } from './config';
 import { claimContinuation, processContinuation } from './workers/processor';
-import { broadcastOutbox } from './ws/broadcast';
+import { broadcastAll } from './ws/broadcast';
 import { attachWebSocketServer } from './ws/server';
 
 const app = express();
 app.use(express.json());
 app.use(apiRouter);
+app.use(worklistRouter);
 
 const POLL_MS = 500;
 
@@ -21,10 +25,8 @@ async function workerLoop() {
       const continuation = await claimContinuation(db);
       if (continuation) {
         try {
-          const outbox = await processContinuation(db, continuation);
-          if (outbox.length > 0) {
-            broadcastOutbox(outbox);
-          }
+          const { outbox, events } = await processContinuation(db, continuation);
+          broadcastAll(outbox, events);
         } catch (err) {
           console.error('Continuation failed:', err);
           const { Continuations } = (await import('./db/collections')).getCollections(db);
@@ -44,6 +46,8 @@ async function workerLoop() {
 async function main() {
   const db = await connectDb();
   await ensureIndexes(db);
+
+  addStreamHandler(createProjectionHandler(db));
 
   const httpServer = createServer(app);
   attachWebSocketServer(httpServer);
