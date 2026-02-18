@@ -25,6 +25,8 @@ export type HumanTaskDoc = {
   createdAt: Date;
   claimedAt?: Date;
   completedAt?: Date;
+  completedBy?: string;
+  completedByDetails?: UserDetails;
   canceledAt?: Date;
   result?: unknown;
   version: number;
@@ -40,6 +42,14 @@ export type ProcessDefinitionDoc = {
   createdAt: Date;
 };
 
+export type UserDetails = {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  photoUrl?: string;
+};
+
 export type ProcessInstanceDoc = {
   _id: string;
   definitionId: string;
@@ -51,6 +61,8 @@ export type ProcessInstanceDoc = {
   status: 'RUNNING' | 'COMPLETED' | 'TERMINATED' | 'FAILED';
   createdAt: Date;
   endedAt?: Date;
+  startedBy?: string;
+  startedByDetails?: UserDetails;
 };
 
 export type TokenStatus = 'ACTIVE' | 'WAITING' | 'CONSUMED';

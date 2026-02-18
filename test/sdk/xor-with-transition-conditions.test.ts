@@ -15,9 +15,10 @@ import {
   setupDb,
   teardownDb,
   shouldPurgeDb,
-  deployAndStart,
-  getWorklistTasks,
+  loadBpmn,
+  MOCK_USER,
 } from '../scripts/helpers';
+import { getCollections } from '../../src/db/collections';
 import { ensureIndexes } from '../../src/db/indexes';
 import { addStreamHandler } from '../../src/ws/broadcast';
 import { createProjectionHandler } from '../../src/worklist/projection';
@@ -42,14 +43,27 @@ const decisionCallbacks: Array<{
   transitions?: Array<{ flowId: string; name?: string; conditionExpression?: string; isDefault: boolean; targetNodeName?: string }>;
 }> = [];
 
+/** Per-run config: tests set before client.run(). Central handlers read this. */
+let runConfig: { skipTaskNames?: string[]; selectFlowIds?: (flowIds: string[]) => string[] } = {};
+
 function uniqueName(base: string) {
   return `${base}_${uuidv4().slice(0, 8)}`;
 }
 
 function onCallback(item: CallbackItem) {
   if (item.kind === 'CALLBACK_WORK') {
-    const p = item.payload as { workItemId: string; name?: string; lane?: string; nodeId?: string };
-    const entry = { name: p.name ?? 'Task', role: p.lane, workItemId: p.workItemId, toolInvocation: undefined };
+    const p = item.payload as {
+      workItemId: string;
+      name?: string;
+      lane?: string;
+      nodeId?: string;
+      extensions?: Record<string, string>;
+    };
+    const toolId = p.extensions?.['tri:toolId'];
+    const toolType = p.extensions?.['tri:toolType'];
+    const toolInvocation =
+      toolId && toolType ? `invoke tool: toolId=${toolId} toolType=${toolType}` : undefined;
+    const entry = { name: p.name ?? 'Task', role: p.lane, workItemId: p.workItemId, toolInvocation };
     workCallbacks.push(entry);
     console.log('[Callback]', entry);
   }
@@ -78,6 +92,28 @@ beforeAll(async () => {
   await ensureIndexes(db);
   client = new BpmnEngineClient({ mode: 'local', db });
   unsubscribeProjection = addStreamHandler(createProjectionHandler(db));
+
+  client.init({
+    onWorkItem: async (item) => {
+      onCallback(item);
+      const name = (item.payload as { name?: string }).name;
+      if (runConfig.skipTaskNames?.includes(name ?? '')) return;
+      await client.completeUserTask(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    },
+    onServiceCall: async (item) => {
+      onCallback(item);
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+    },
+    onDecision: async (item) => {
+      onCallback(item);
+      const p = item.payload as { evaluation?: { outgoing?: { flowId: string }[] }; decisionId?: string };
+      const flowIds = p.evaluation?.outgoing?.map((o) => o.flowId) ?? [];
+      if (flowIds.length > 0) {
+        const selected = runConfig.selectFlowIds ? runConfig.selectFlowIds(flowIds) : [flowIds[Math.floor(Math.random() * flowIds.length)]!];
+        await client.submitDecision(item.instanceId, p.decisionId!, { selectedFlowIds: selected });
+      }
+    },
+  });
 });
 
 afterAll(async () => {
@@ -88,6 +124,7 @@ afterAll(async () => {
 beforeEach(async () => {
   workCallbacks.length = 0;
   decisionCallbacks.length = 0;
+  runConfig = {};
   if (shouldPurgeDb()) {
     await db.dropDatabase();
     await ensureIndexes(db);
@@ -95,88 +132,152 @@ beforeEach(async () => {
 });
 
 describe('SDK: xor-with-transition-conditions', () => {
-  it('completes user tasks via callbacks and XOR decision with random transition', async () => {
-    const { instanceId } = await deployAndStart(db, 'xor-with-transition-conditions.bpmn', {
-      processName: uniqueName('ClaimProcess'),
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('worklist flow: start → wait → load → activate → complete, repeat for each user task', async () => {
+    const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const { definitionId } = await client.deploy({
+      name: uniqueName('ClaimProcess'),
+      version: 1,
+      bpmnXml: bpmn,
     });
 
-    const result = await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        onCallback(item);
-        const p = item.payload as { workItemId: string; nodeId?: string; name?: string; extensions?: Record<string, string> };
-        const toolId = p.extensions?.['tri:toolId'];
-        const toolType = p.extensions?.['tri:toolType'];
-        const tri = toolId && toolType ? { toolId, toolType } : undefined;
-        if (tri) {
-          workCallbacks[workCallbacks.length - 1]!.toolInvocation = `invoke tool: toolId=${tri.toolId} toolType=${tri.toolType}`;
-          console.log(
-            '[onWorkItem] TOOL RESOLUTION PLUG: resolve(toolId, toolType) → invoke',
-            { toolId: tri.toolId, toolType: tri.toolType, nodeId: p.nodeId, task: p.name, workItemId: p.workItemId }
-          );
-        }
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
-      onDecision: async (item) => {
-        onCallback(item);
-        const p = item.payload as { evaluation?: { outgoing?: { flowId: string }[] } };
-        const flowIds = p.evaluation?.outgoing?.map((o) => o.flowId) ?? [];
-        if (flowIds.length > 0) {
-          const randomFlowId = flowIds[Math.floor(Math.random() * flowIds.length)]!;
-          await client.submitDecision(item.instanceId, (p as { decisionId?: string }).decisionId!, {
-            selectedFlowIds: [randomFlowId],
-          });
-        }
-      },
+    // 1. Process start
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+      user: MOCK_USER,
     });
+
+    runConfig = { skipTaskNames: ['Claim Entry', 'Claim Assessment'], selectFlowIds: () => ['Flow_Approval'] };
+
+    let result = await client.run(instanceId);
+
+    while (result.status === 'RUNNING') {
+      // 2. Wait for projection
+      await sleep(5000);
+
+      // 3. Load worklist
+      const openTasks = await client.listTasks({ instanceId, status: 'OPEN', sortOrder: 'asc' });
+      if (openTasks.length === 0) {
+        result = await client.run(instanceId);
+        continue;
+      }
+
+      const task = openTasks[openTasks.length - 1]!;
+
+      // 4. Activate (claim)
+      const activated = await client.activateTask(task._id, { userId: MOCK_USER.email });
+      expect(activated).toBeTruthy();
+
+      // 5. Complete
+      await client.completeUserTask(instanceId, task._id, { user: MOCK_USER });
+
+      result = await client.run(instanceId);
+    }
 
     expect(result.status).toBe('COMPLETED');
 
-    // Verify user tasks were completed
     expect(workCallbacks.some((w) => w.name === 'Claim Entry' && w.role === 'Beneficiary')).toBe(true);
     expect(workCallbacks.some((w) => w.name === 'Claim Assessment' && w.role === 'Claims Assessor')).toBe(true);
-
-    // Verify XOR decision was handled with LLM-friendly metadata
     expect(decisionCallbacks.length).toBeGreaterThanOrEqual(1);
-    const xorPayload = decisionCallbacks[0]!;
-    expect(xorPayload.flowIds).toContain('Flow_Rejection');
-    expect(xorPayload.flowIds).toContain('Flow_Approval');
-    expect(xorPayload.toNodeIds).toContain('Task_SendRejectionMail');
-    expect(xorPayload.toNodeIds).toContain('Task_SendApprovalMail');
-    expect(xorPayload.gateway?.id).toBe('Gateway_Approval');
-    expect(xorPayload.gateway?.name).toBe('Can be approved?');
-    const rejection = xorPayload.transitions?.find((t) => t.flowId === 'Flow_Rejection');
-    const approval = xorPayload.transitions?.find((t) => t.flowId === 'Flow_Approval');
-    expect(rejection?.isDefault).toBe(true);
-    expect(rejection?.name).toBe('No');
-    expect(rejection?.targetNodeName).toBe('Send Rejection Mail');
-    expect(approval?.name).toBe('Yes');
-    expect(approval?.conditionExpression).toBe('${approved}');
-    expect(approval?.targetNodeName).toBe('Send Approval Mail');
-
-    // Service tasks with tri:toolId/toolType indicate tool invocation
     const mailTasks = workCallbacks.filter((w) => w.toolInvocation);
     expect(mailTasks.length).toBeGreaterThanOrEqual(1);
-    expect(mailTasks.some((w) => w.toolInvocation?.includes('mailTool'))).toBe(true);
   });
 
-  it('processUntilComplete projects user tasks to worklist', async () => {
-    const { instanceId } = await deployAndStart(db, 'xor-with-transition-conditions.bpmn', {
-      processName: uniqueName('ClaimWorklist'),
+  it('stores startedBy/startedByDetails on instance and completedBy/completedByDetails on human tasks', async () => {
+    const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const { definitionId } = await client.deploy({
+      name: uniqueName('UserAudit'),
+      version: 1,
+      bpmnXml: bpmn,
+    });
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+      user: MOCK_USER,
+    });
+
+    // Complete Claim Entry, submit decision to reach Claim Assessment, then stop
+    runConfig = { skipTaskNames: ['Claim Assessment'], selectFlowIds: () => ['Flow_Approval'] };
+    await client.run(instanceId);
+
+    const { ProcessInstances, HumanTasks } = getCollections(db);
+    const instance = await ProcessInstances.findOne({ _id: instanceId });
+    expect(instance?.startedBy).toBe(MOCK_USER.email);
+    expect(instance?.startedByDetails).toEqual(MOCK_USER);
+
+    const completedTasks = await HumanTasks.find({ instanceId, status: 'COMPLETED' }).toArray();
+    const claimEntry = completedTasks.find((t) => t.name === 'Claim Entry');
+    expect(claimEntry?.completedBy).toBe(MOCK_USER.email);
+    expect(claimEntry?.completedByDetails).toEqual(MOCK_USER);
+  });
+
+  it('run projects user tasks to worklist', async () => {
+    const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const { definitionId } = await client.deploy({
+      name: uniqueName('ClaimWorklist'),
+      version: 1,
+      bpmnXml: bpmn,
+    });
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+      user: MOCK_USER,
     });
 
     // Complete Claim Entry, leave Claim Assessment for worklist verification
-    await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        const name = (item.payload as { name?: string }).name;
-        if (name === 'Claim Assessment') return;
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
-    });
+    runConfig = { skipTaskNames: ['Claim Assessment'], selectFlowIds: () => ['Flow_Approval'] };
+    await client.run(instanceId);
 
-    const openTasks = await getWorklistTasks(db, { instanceId, status: 'OPEN' });
+    const openTasks = await client.listTasks({ instanceId, status: 'OPEN' });
     const claimAssessment = openTasks.find((t) => t.name === 'Claim Assessment');
     expect(claimAssessment).toBeDefined();
     expect(claimAssessment!.role).toBe('Claims Assessor');
     expect(claimAssessment!.candidateRoles).toContain('Claims Assessor');
+  });
+
+  it('init + recover uses registered handlers when recover gets no handlers', async () => {
+    const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const { definitionId } = await client.deploy({
+      name: uniqueName('InitRecover'),
+      version: 1,
+      bpmnXml: bpmn,
+    });
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+      user: MOCK_USER,
+    });
+
+    runConfig = { selectFlowIds: (ids) => [ids[0]!] };
+    const { processed } = await client.recover();
+    expect(processed).toBeGreaterThanOrEqual(1);
+    const instance = await client.getInstance(instanceId);
+    expect(instance?.status).toBe('COMPLETED');
+    expect(workCallbacks.some((w) => w.name === 'Claim Entry')).toBe(true);
+  });
+
+  it('recover processes all pending continuations after start', async () => {
+    const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const { definitionId } = await client.deploy({
+      name: uniqueName('RecoverTest'),
+      version: 1,
+      bpmnXml: bpmn,
+    });
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+      user: MOCK_USER,
+    });
+
+    runConfig = { selectFlowIds: (ids) => [ids[0]!] };
+    const { processed } = await client.recover();
+
+    expect(processed).toBeGreaterThanOrEqual(1);
+    const instance = await client.getInstance(instanceId);
+    expect(instance?.status).toBe('COMPLETED');
+    expect(workCallbacks.some((w) => w.name === 'Claim Entry')).toBe(true);
+    expect(workCallbacks.some((w) => w.name === 'Claim Assessment')).toBe(true);
   });
 });

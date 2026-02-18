@@ -42,11 +42,15 @@ export function createProjectionHandler(db: Db) {
     if (payload.lifecycle) {
       for (const ev of payload.lifecycle) {
         if (ev.type === 'WORK_ITEM_COMPLETED') {
-          const workItemId = (ev.payload as { workItemId?: string }).workItemId;
+          const p = ev.payload as { workItemId?: string; completedBy?: string; completedByDetails?: unknown };
+          const workItemId = p.workItemId;
           if (workItemId) {
+            const update: Record<string, unknown> = { status: 'COMPLETED', completedAt: now };
+            if (p.completedBy != null) update.completedBy = p.completedBy;
+            if (p.completedByDetails != null) update.completedByDetails = p.completedByDetails;
             await HumanTasks.updateOne(
               { _id: workItemId },
-              { $set: { status: 'COMPLETED', completedAt: now }, $inc: { version: 1 } }
+              { $set: update, $inc: { version: 1 } }
             );
           }
         }

@@ -8,4 +8,4 @@
  */
 export { connectDb, closeDb, getDb } from './client';
 export { ensureIndexes } from './indexes';
-export { COLLECTION_NAMES } from './collections';
+export { COLLECTION_NAMES, getCollections } from './collections';

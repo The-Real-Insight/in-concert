@@ -20,6 +20,7 @@ import {
   assertNoDuplicateTokens,
   BPMN_FILES,
   shouldPurgeDb,
+  MOCK_USER,
 } from './helpers';
 
 const LINEAR = 'linear.bpmn';
@@ -58,14 +59,17 @@ describe('T01 - Simple linear flow', () => {
     const modelFile = bpmnFile(LINEAR);
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T01_Linear_${runId}`,
+      user: MOCK_USER,
     });
 
+    const completeWork = async (item: { instanceId: string; payload: { workItemId: string } }) => {
+      const state = await getState(db, instanceId);
+      mockCallbacks.log('workItem', state?.waits?.workItems?.[0]);
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    };
     const result = await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        const state = await getState(db, instanceId);
-        mockCallbacks.log('workItem', state?.waits?.workItems?.[0]);
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
+      onWorkItem: completeWork,
+      onServiceCall: completeWork,
     });
 
     expect(result.status).toBe('COMPLETED');
@@ -84,12 +88,15 @@ describe('T02 - XOR branch selected', () => {
     const modelFile = bpmnFile(XOR);
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T02_XOR_${runId}`,
+      user: MOCK_USER,
     });
 
+    const completeWork = async (item: { instanceId: string; payload: { workItemId: string } }) => {
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    };
     const result = await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
+      onWorkItem: completeWork,
+      onServiceCall: completeWork,
       onDecision: async (item) => {
         const p = item.payload as { decisionId?: string; evaluation?: { outgoing?: { flowId: string }[] } };
         const decisionId = p.decisionId;
@@ -127,15 +134,17 @@ describe('T04 - Parallel split/join', () => {
     const modelFile = bpmnFile(AND);
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T04_AND_${runId}`,
+      user: MOCK_USER,
     });
 
+    const completeTaskAOnly = async (item: { instanceId: string; payload: { workItemId: string; nodeId?: string } }) => {
+      if (item.payload.nodeId === 'Task_A') {
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+      }
+    };
     await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        const nodeId = (item.payload as { nodeId?: string }).nodeId;
-        if (nodeId === 'Task_A') {
-          await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-        }
-      },
+      onWorkItem: completeTaskAOnly,
+      onServiceCall: completeTaskAOnly,
     });
 
     const afterState = await getState(db, instanceId);
@@ -150,12 +159,15 @@ describe('T05 - Parallel join fires', () => {
     const modelFile = bpmnFile(AND);
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T05_AND_${runId}`,
+      user: MOCK_USER,
     });
 
+    const completeWork = async (item: { instanceId: string; payload: { workItemId: string } }) => {
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    };
     const result = await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
+      onWorkItem: completeWork,
+      onServiceCall: completeWork,
     });
 
     expect(result.status).toBe('COMPLETED');
@@ -202,13 +214,16 @@ describe('T17 - Duplicate work completion', () => {
     const modelFile = bpmnFile(LINEAR);
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T17_Linear_${runId}`,
+      user: MOCK_USER,
     });
 
+    const completeWork = async (item: { instanceId: string; payload: { workItemId: string } }) => {
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    };
     await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
+      onWorkItem: completeWork,
+      onServiceCall: completeWork,
     });
 
     const finalState = await getState(db, instanceId);
@@ -224,9 +239,15 @@ describe('T18 - Duplicate decision', () => {
     const modelFile = bpmnFile(XOR);
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T18_XOR_${runId}`,
+      user: MOCK_USER,
     });
 
+    const completeWork = async (item: { instanceId: string; payload: { workItemId: string } }) => {
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    };
     await client.processUntilComplete(instanceId, {
+      onWorkItem: completeWork,
+      onServiceCall: completeWork,
       onDecision: async (item) => {
         const p = item.payload as { decisionId?: string };
         const decisionId = p.decisionId!;

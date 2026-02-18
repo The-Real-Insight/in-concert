@@ -13,6 +13,7 @@ import type {
   InstanceState,
   CallbackItem,
   CallbackHandlers,
+  EngineInitConfig,
 } from './types';
 
 export type SdkConfigRest = {
@@ -29,9 +30,29 @@ export type SdkConfig = SdkConfigRest | SdkConfigLocal;
 
 export class BpmnEngineClient {
   private config: SdkConfig;
+  private initHandlers: CallbackHandlers | null = null;
+  private serviceVocabulary: Record<string, unknown> | null = null;
 
   constructor(config: SdkConfig) {
     this.config = config;
+  }
+
+  /**
+   * Initialize the engine (call once at server start).
+   * Registers how to process interruptions (work items, decisions) and optional service vocabulary.
+   */
+  init(config: EngineInitConfig): void {
+    this.initHandlers = {
+      onWorkItem: config.onWorkItem,
+      onServiceCall: config.onServiceCall,
+      onDecision: config.onDecision,
+    };
+    this.serviceVocabulary = config.serviceVocabulary ?? null;
+  }
+
+  /** Get the service vocabulary from init. Handlers can use this to resolve toolId → implementation. */
+  getServiceVocabulary(): Record<string, unknown> | null {
+    return this.serviceVocabulary;
   }
 
   /**
@@ -90,6 +111,69 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Activate a worklist task (OPEN → CLAIMED). Blocks other users from activating.
+   * Local mode: updates HumanTasks. REST: POST /v1/tasks/:taskId/activate.
+   */
+  async activateTask(
+    taskId: string,
+    params: { userId: string }
+  ): Promise<import('../db/collections').HumanTaskDoc | null> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/tasks/${taskId}/activate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commandId: uuidv4(), userId: params.userId }),
+      });
+      if (res.status === 409) throw new Error('Task already activated by another user or not OPEN');
+      if (res.status === 404) throw new Error('Task not found');
+      if (!res.ok) throw new Error(`Activate failed: ${res.status}`);
+      return (await res.json()) as import('../db/collections').HumanTaskDoc;
+    }
+    const { HumanTasks } = (await import('../db/collections')).getCollections(this.config.db);
+    const now = new Date();
+    return HumanTasks.findOneAndUpdate(
+      { _id: taskId, status: 'OPEN' },
+      {
+        $set: { status: 'CLAIMED', assigneeUserId: params.userId, claimedAt: now },
+        $inc: { version: 1 },
+      },
+      { returnDocument: 'after' }
+    );
+  }
+
+  /**
+   * List worklist tasks (human tasks). Local mode: queries HumanTasks. REST: GET /v1/tasks.
+   */
+  async listTasks(
+    params?: { instanceId?: string; status?: string; assigneeUserId?: string; limit?: number; sortOrder?: 'asc' | 'desc' }
+  ): Promise<import('../db/collections').HumanTaskDoc[]> {
+    if (this.config.mode === 'rest') {
+      const q = new URLSearchParams();
+      if (params?.instanceId) q.set('instanceId', params.instanceId);
+      if (params?.status) q.set('status', params.status);
+      if (params?.assigneeUserId) q.set('assigneeUserId', params.assigneeUserId);
+      if (params?.limit) q.set('limit', String(params.limit));
+      const res = await fetch(`${this.config.baseUrl}/v1/tasks?${q}`);
+      if (!res.ok) throw new Error(`List tasks failed: ${res.status}`);
+      const json = (await res.json()) as { items: import('../db/collections').HumanTaskDoc[] };
+      let items = json.items;
+      if (params?.sortOrder === 'asc') {
+        items = [...items].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      }
+      return items;
+    }
+    const { HumanTasks } = (await import('../db/collections')).getCollections(this.config.db);
+    const filter: Record<string, unknown> = {};
+    if (params?.instanceId) filter.instanceId = params.instanceId;
+    if (params?.status) filter.status = params.status;
+    else filter.status = 'OPEN';
+    if (params?.assigneeUserId) filter.assigneeUserId = params.assigneeUserId;
+    const limit = Math.min(params?.limit ?? 100, 100);
+    const sortOrder = params?.sortOrder === 'asc' ? 1 : -1;
+    return HumanTasks.find(filter).sort({ createdAt: sortOrder }).limit(limit).toArray();
+  }
+
+  /**
    * Get full instance state (tokens, work items, decisions).
    */
   async getState(instanceId: string): Promise<InstanceState | null> {
@@ -109,21 +193,56 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Complete a work item (user task or service task).
+   * Human completed a user task. Advances the process.
+   * Pass user for completedBy/completedByDetails on HumanTask.
    */
-  async completeWorkItem(
+  async completeUserTask(
+    instanceId: string,
+    workItemId: string,
+    options?: { commandId?: string; result?: Record<string, unknown>; user?: import('./types').User }
+  ): Promise<void> {
+    return this.completeWorkItem(instanceId, workItemId, options);
+  }
+
+  /**
+   * External system completed (e.g. async message received, long-running call returned).
+   * Advances the process.
+   */
+  async completeExternalTask(
     instanceId: string,
     workItemId: string,
     options?: { commandId?: string; result?: Record<string, unknown> }
   ): Promise<void> {
+    return this.completeWorkItem(instanceId, workItemId, options);
+  }
+
+  /**
+   * Complete a work item (user task or service task).
+   * Prefer completeUserTask or completeExternalTask for clarity.
+   * Pass user for user task completion (sets completedBy, completedByDetails on HumanTask).
+   */
+  async completeWorkItem(
+    instanceId: string,
+    workItemId: string,
+    options?: {
+      commandId?: string;
+      result?: Record<string, unknown>;
+      user?: import('./types').User;
+    }
+  ): Promise<void> {
     const commandId = options?.commandId ?? uuidv4();
+    const payload: Record<string, unknown> = { commandId, result: options?.result };
+    if (options?.user) {
+      payload.completedBy = options.user.email;
+      payload.completedByDetails = options.user;
+    }
     if (this.config.mode === 'rest') {
       const res = await fetch(
         `${this.config.baseUrl}/v1/instances/${instanceId}/work-items/${workItemId}/complete`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ commandId, result: options?.result }),
+          body: JSON.stringify(payload),
         }
       );
       if (!res.ok && res.status !== 202) {
@@ -135,12 +254,18 @@ export class BpmnEngineClient {
     const { getCollections } = await import('../db/collections');
     const { Continuations } = getCollections(this.config.db);
     const now = new Date();
+    const workPayload: Record<string, unknown> = { workItemId, commandId };
+    if (options?.result) workPayload.result = options.result;
+    if (options?.user) {
+      workPayload.completedBy = options.user.email;
+      workPayload.completedByDetails = options.user;
+    }
     await Continuations.insertOne({
       _id: uuidv4(),
       instanceId,
       dueAt: now,
       kind: 'WORK_COMPLETED',
-      payload: { workItemId, commandId, ...(options?.result && { result: options.result }) },
+      payload: workPayload,
       status: 'READY',
       attempts: 0,
       createdAt: now,
@@ -189,17 +314,73 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Process instance until terminal (COMPLETED/TERMINATED/FAILED) or quiescent.
-   * Invokes registered handlers for each callback—no polling.
-   * Local mode only.
+   * Process all pending continuations (e.g. after server restart).
+   * Uses handlers from init() unless overridden. Local mode only.
+   */
+  async recover(options?: { handlers?: CallbackHandlers; maxIterations?: number }): Promise<{ processed: number }> {
+    if (this.config.mode !== 'local') {
+      throw new Error('recover is only available in local mode');
+    }
+    const handlers = options?.handlers ?? this.initHandlers;
+    if (!handlers?.onWorkItem && !handlers?.onServiceCall && !handlers?.onDecision) {
+      throw new Error('recover requires init() handlers or options.handlers');
+    }
+    const { claimContinuation, processContinuation } = await import('../workers/processor');
+    const { broadcastAll } = await import('../ws/broadcast');
+    const maxIter = options?.maxIterations ?? 5000;
+    const db = (this.config as { mode: 'local'; db: Db }).db;
+    let processed = 0;
+    for (let i = 0; i < maxIter; i++) {
+      const cont = await claimContinuation(db);
+      if (!cont) return { processed };
+      const { outbox, events } = await processContinuation(db, cont);
+      broadcastAll(outbox, events);
+      processed++;
+      for (const ob of outbox) {
+        const item = { kind: ob.kind, instanceId: ob.instanceId, payload: ob.payload } as CallbackItem;
+        if (ob.kind === 'CALLBACK_WORK') {
+          const p = ob.payload as import('./types').CallbackWorkPayload;
+          if (p.kind === 'userTask' && handlers.onWorkItem) {
+            await handlers.onWorkItem(item as { kind: 'CALLBACK_WORK'; instanceId: string; payload: import('./types').CallbackWorkPayload });
+          }
+          if (p.kind === 'serviceTask' && handlers.onServiceCall) {
+            await handlers.onServiceCall(item as { kind: 'CALLBACK_WORK'; instanceId: string; payload: import('./types').CallbackWorkPayload });
+          }
+        }
+        if (ob.kind === 'CALLBACK_DECISION' && handlers.onDecision) {
+          await handlers.onDecision(item as { kind: 'CALLBACK_DECISION'; instanceId: string; payload: import('./types').CallbackDecisionPayload });
+        }
+      }
+    }
+    return { processed };
+  }
+
+  /**
+   * Run instance until terminal (COMPLETED/TERMINATED/FAILED) or quiescent.
+   * Uses handlers from init() unless overridden. Local mode only.
+   */
+  async run(
+    instanceId: string,
+    handlers?: CallbackHandlers,
+    options?: { maxIterations?: number }
+  ): Promise<{ status: string }> {
+    return this.processUntilComplete(instanceId, handlers, options);
+  }
+
+  /**
+   * @deprecated Use run() for programmer's view. Same behavior.
    */
   async processUntilComplete(
     instanceId: string,
-    handlers: CallbackHandlers,
+    handlers?: CallbackHandlers,
     options?: { maxIterations?: number }
   ): Promise<{ status: string }> {
     if (this.config.mode !== 'local') {
       throw new Error('processUntilComplete is only available in local mode');
+    }
+    const h = handlers ?? this.initHandlers;
+    if (!h?.onWorkItem && !h?.onServiceCall && !h?.onDecision) {
+      throw new Error('processUntilComplete requires init() handlers or handlers argument');
     }
     const { claimContinuation, processContinuation } = await import('../workers/processor');
     const { getInstance } = await import('../instance/service');
@@ -237,15 +418,25 @@ export class BpmnEngineClient {
           instanceId: ob.instanceId,
           payload: ob.payload,
         } as CallbackItem;
-        if (ob.kind === 'CALLBACK_WORK' && handlers.onWorkItem) {
-          await handlers.onWorkItem(item as {
-            kind: 'CALLBACK_WORK';
-            instanceId: string;
-            payload: import('./types').CallbackWorkPayload;
-          });
+        if (ob.kind === 'CALLBACK_WORK') {
+          const p = ob.payload as import('./types').CallbackWorkPayload;
+          if (p.kind === 'userTask' && h.onWorkItem) {
+            await h.onWorkItem(item as {
+              kind: 'CALLBACK_WORK';
+              instanceId: string;
+              payload: import('./types').CallbackWorkPayload;
+            });
+          }
+          if (p.kind === 'serviceTask' && h.onServiceCall) {
+            await h.onServiceCall(item as {
+              kind: 'CALLBACK_WORK';
+              instanceId: string;
+              payload: import('./types').CallbackWorkPayload;
+            });
+          }
         }
-        if (ob.kind === 'CALLBACK_DECISION' && handlers.onDecision) {
-          await handlers.onDecision(item as {
+        if (ob.kind === 'CALLBACK_DECISION' && h.onDecision) {
+          await h.onDecision(item as {
             kind: 'CALLBACK_DECISION';
             instanceId: string;
             payload: import('./types').CallbackDecisionPayload;

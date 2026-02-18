@@ -41,6 +41,7 @@ export class TriSdk {
     list: (params?: TaskListParams) => Promise<TaskListResult>;
     get: (taskId: string) => Promise<HumanTaskDoc | null>;
     claim: (taskId: string, params: { commandId?: string; userId: string }) => Promise<HumanTaskDoc>;
+    activate: (taskId: string, params: { commandId?: string; userId: string }) => Promise<HumanTaskDoc>;
     unclaim: (taskId: string, params: { commandId?: string; userId: string }) => Promise<HumanTaskDoc>;
     complete: (taskId: string, params: { commandId?: string; userId: string; result?: unknown }) => Promise<void>;
   };
@@ -81,6 +82,20 @@ export class TriSdk {
         if (res.status === 409) throw new Error('Task already claimed or not OPEN');
         if (res.status === 404) throw new Error('Task not found');
         if (!res.ok) throw new Error(`Claim failed: ${res.status}`);
+        return res.json() as Promise<HumanTaskDoc>;
+      },
+
+      activate: async (taskId: string, params: { commandId?: string; userId: string }) => {
+        const { v4: uuidv4 } = await import('uuid');
+        const commandId = params.commandId ?? uuidv4();
+        const res = await fetch(`${base}/v1/tasks/${taskId}/activate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ commandId, userId: params.userId }),
+        });
+        if (res.status === 409) throw new Error('Task already activated by another user or not OPEN');
+        if (res.status === 404) throw new Error('Task not found');
+        if (!res.ok) throw new Error(`Activate failed: ${res.status}`);
         return res.json() as Promise<HumanTaskDoc>;
       },
 

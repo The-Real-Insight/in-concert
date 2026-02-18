@@ -12,8 +12,8 @@ import {
   teardownDb,
   shouldPurgeDb,
   loadBpmn,
-  deployAndStart,
   getWorklistTasks,
+  MOCK_USER,
 } from '../scripts/helpers';
 import { ensureIndexes } from '../../src/db/indexes';
 import { addStreamHandler } from '../../src/ws/broadcast';
@@ -33,11 +33,27 @@ const callbackLog: Array<{
   toolInvocation?: string;
 }> = [];
 
+/** Per-run config: tests set before client.run(). Central handlers read this. */
+let runConfig: { skipTaskNames?: string[] } = {};
+
 beforeAll(async () => {
   db = await setupDb();
   await ensureIndexes(db);
   client = new BpmnEngineClient({ mode: 'local', db });
   unsubscribeProjection = addStreamHandler(createProjectionHandler(db));
+
+  client.init({
+    onWorkItem: async (item) => {
+      onCallback(item);
+      const name = (item.payload as { name?: string }).name;
+      if (runConfig.skipTaskNames?.includes(name ?? '')) return;
+      await client.completeUserTask(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    },
+    onServiceCall: async (item) => {
+      onCallback(item);
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+    },
+  });
 });
 
 afterAll(async () => {
@@ -47,6 +63,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   callbackLog.length = 0;
+  runConfig = {};
   if (shouldPurgeDb()) {
     await db.dropDatabase();
     await ensureIndexes(db);
@@ -59,13 +76,23 @@ function uniqueName(base: string) {
 
 function onCallback(item: CallbackItem) {
   if (item.kind === 'CALLBACK_WORK') {
-    const payload = item.payload as { workItemId: string; name?: string; lane?: string; nodeId?: string };
+    const payload = item.payload as {
+      workItemId: string;
+      name?: string;
+      lane?: string;
+      nodeId?: string;
+      extensions?: Record<string, string>;
+    };
+    const toolId = payload.extensions?.['tri:toolId'];
+    const toolType = payload.extensions?.['tri:toolType'];
+    const toolInvocation =
+      toolId && toolType ? `invoke tool: toolId=${toolId} toolType=${toolType}` : undefined;
     const entry = {
       kind: 'CALLBACK_WORK',
       name: payload.name,
       role: payload.lane,
       workItemId: payload.workItemId,
-      toolInvocation: undefined,
+      toolInvocation,
     };
     callbackLog.push(entry);
     console.log('[Callback]', entry);
@@ -84,14 +111,10 @@ describe('SDK: linear-service-and-user-task', () => {
     const { instanceId } = await client.startInstance({
       commandId: uuidv4(),
       definitionId,
+      user: MOCK_USER,
     });
 
-    const result = await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        onCallback(item);
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
-    });
+    const result = await client.run(instanceId);
 
     expect(result.status).toBe('COMPLETED');
     const expectedOrder = [
@@ -107,18 +130,21 @@ describe('SDK: linear-service-and-user-task', () => {
   });
 
   it('leaves ApproveAssessment uncompleted and retrieves worklist', async () => {
-    const { instanceId } = await deployAndStart(db, 'linear-service-and-user-task.bpmn', {
-      processName: uniqueName('WorklistTest'),
+    const bpmn = loadBpmn('linear-service-and-user-task.bpmn');
+    const { definitionId } = await client.deploy({
+      name: uniqueName('WorklistTest'),
+      version: 1,
+      bpmnXml: bpmn,
+    });
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+      user: MOCK_USER,
     });
 
     // Process with callbacks: complete EnterCaseData and AssessCase, leave ApproveAssessment
-    await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        const name = (item.payload as { name?: string }).name;
-        if (name === 'ApproveAssessment') return; // Leave for worklist
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
-    });
+    runConfig = { skipTaskNames: ['ApproveAssessment'] };
+    await client.run(instanceId);
 
     const openTasks = await getWorklistTasks(db, { status: 'OPEN' });
     const approveTask = openTasks.find((t) => t.name === 'ApproveAssessment' && t.instanceId === instanceId);
@@ -144,25 +170,10 @@ describe('SDK: linear-service-and-user-task', () => {
     const { instanceId } = await client.startInstance({
       commandId: uuidv4(),
       definitionId,
+      user: MOCK_USER,
     });
 
-    const result = await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        onCallback(item);
-        const p = item.payload as { workItemId: string; nodeId?: string; name?: string; extensions?: Record<string, string> };
-        const toolId = p.extensions?.['tri:toolId'];
-        const toolType = p.extensions?.['tri:toolType'];
-        const tri = toolId && toolType ? { toolId, toolType } : undefined;
-        if (tri) {
-          callbackLog[callbackLog.length - 1]!.toolInvocation = `invoke tool: toolId=${tri.toolId} toolType=${tri.toolType}`;
-          console.log(
-            '[onWorkItem] TOOL RESOLUTION PLUG: resolve(toolId, toolType) → invoke',
-            { toolId: tri.toolId, toolType: tri.toolType, nodeId: p.nodeId, task: p.name, workItemId: p.workItemId }
-          );
-        }
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
-    });
+    const result = await client.run(instanceId);
 
     expect(result.status).toBe('COMPLETED');
     expect(callbackLog).toHaveLength(1);
@@ -183,6 +194,7 @@ describe('SDK: linear-service-and-user-task', () => {
     const { instanceId } = await client.startInstance({
       commandId: uuidv4(),
       definitionId,
+      user: MOCK_USER,
     });
 
     let unsub: () => void;
@@ -202,12 +214,7 @@ describe('SDK: linear-service-and-user-task', () => {
     expect(callbackLog[0]!.role).toBe('FrontOffice');
 
     // Complete first work item (subscribe logged but did not complete), then process rest
-    await client.completeWorkItem(instanceId, callbackLog[0]!.workItemId);
-    await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
-        onCallback(item);
-        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
-      },
-    });
+    await client.completeUserTask(instanceId, callbackLog[0]!.workItemId, { user: MOCK_USER });
+    await client.run(instanceId);
   });
 });

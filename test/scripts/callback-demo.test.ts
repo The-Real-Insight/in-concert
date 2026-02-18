@@ -14,6 +14,7 @@ import {
   deployAndStart,
   getState,
   shouldPurgeDb,
+  MOCK_USER,
 } from './helpers';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,6 +48,7 @@ describe('Callback demo - User task', () => {
   it('Linear flow with user task: mock logs work item, waits 10s, completes', async () => {
     const { instanceId } = await deployAndStart(db, 'start-user-task-end.bpmn', {
       processName: uniqueProcessName('UserTaskDemo'),
+      user: MOCK_USER,
     });
 
     const result = await client.processUntilComplete(instanceId, {
@@ -61,7 +63,7 @@ describe('Callback demo - User task', () => {
         console.log('[User task callback] Simulating human review (10 seconds)...');
         await sleep(10000);
         console.log('[User task callback] Completing work item');
-        await client.completeWorkItem(instanceId, payload.workItemId);
+        await client.completeWorkItem(instanceId, payload.workItemId, { user: MOCK_USER });
       },
     });
 
@@ -76,10 +78,11 @@ describe('Callback demo - Service task', () => {
   it('Linear flow with service task: mock logs work item, waits 10s, completes', async () => {
     const { instanceId } = await deployAndStart(db, 'start-service-task-end.bpmn', {
       processName: uniqueProcessName('ServiceTaskDemo'),
+      user: MOCK_USER,
     });
 
     const result = await client.processUntilComplete(instanceId, {
-      onWorkItem: async (item) => {
+      onServiceCall: async (item) => {
         const payload = item.payload as { workItemId: string; nodeId?: string; kind?: string };
         console.log('[Service task callback] Received work item:', {
           workItemId: payload.workItemId,
@@ -90,7 +93,7 @@ describe('Callback demo - Service task', () => {
         console.log('[Service task callback] Simulating application processing (10 seconds)...');
         await sleep(10000);
         console.log('[Service task callback] Completing work item');
-        await client.completeWorkItem(instanceId, payload.workItemId);
+        await client.completeWorkItem(instanceId, payload.workItemId, { user: MOCK_USER });
       },
     });
 

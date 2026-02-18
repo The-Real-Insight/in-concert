@@ -53,6 +53,50 @@ worklistRouter.get('/v1/tasks/:taskId', async (req: Request, res: Response) => {
   }
 });
 
+/** Transition OPEN → CLAIMED with assignee; blocks other users. Used by both claim and activate. */
+async function activateTask(
+  db: ReturnType<typeof getDb>,
+  taskId: string,
+  userId: string
+): Promise<import('../db/collections').HumanTaskDoc | null> {
+  const { HumanTasks } = getCollections(db);
+  const now = new Date();
+  return HumanTasks.findOneAndUpdate(
+    { _id: taskId, status: 'OPEN' },
+    {
+      $set: { status: 'CLAIMED', assigneeUserId: userId, claimedAt: now },
+      $inc: { version: 1 },
+    },
+    { returnDocument: 'after' }
+  );
+}
+
+worklistRouter.post('/v1/tasks/:taskId/activate', async (req: Request, res: Response) => {
+  try {
+    const { taskId } = req.params;
+    const { commandId, userId } = req.body;
+    if (!commandId || !userId) {
+      res.status(400).json({ error: 'commandId and userId are required' });
+      return;
+    }
+    const db = getDb();
+    const result = await activateTask(db, taskId, userId);
+    if (!result) {
+      const { HumanTasks } = getCollections(db);
+      const existing = await HumanTasks.findOne({ _id: taskId });
+      if (!existing) {
+        res.status(404).json({ error: 'Task not found' });
+      } else {
+        res.status(409).json({ error: 'Task already activated by another user or not OPEN' });
+      }
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Activate failed' });
+  }
+});
+
 worklistRouter.post('/v1/tasks/:taskId/claim', async (req: Request, res: Response) => {
   try {
     const { taskId } = req.params;
@@ -62,17 +106,9 @@ worklistRouter.post('/v1/tasks/:taskId/claim', async (req: Request, res: Respons
       return;
     }
     const db = getDb();
-    const { HumanTasks } = getCollections(db);
-    const now = new Date();
-    const result = await HumanTasks.findOneAndUpdate(
-      { _id: taskId, status: 'OPEN' },
-      {
-        $set: { status: 'CLAIMED', assigneeUserId: userId, claimedAt: now },
-        $inc: { version: 1 },
-      },
-      { returnDocument: 'after' }
-    );
+    const result = await activateTask(db, taskId, userId);
     if (!result) {
+      const { HumanTasks } = getCollections(db);
       const existing = await HumanTasks.findOne({ _id: taskId });
       if (!existing) {
         res.status(404).json({ error: 'Task not found' });

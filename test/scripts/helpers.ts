@@ -15,6 +15,15 @@ export const mockCallbacks = {
   reset: () => callbackLog.mockClear(),
 };
 
+/** Mock user for tests (process start, user task completion). */
+export const MOCK_USER = {
+  email: 'test@example.com',
+  firstName: 'Test',
+  lastName: 'User',
+  phone: '+1234567890',
+  photoUrl: 'https://example.com/photo.jpg',
+} as const;
+
 /** Map TEST.md model names to actual BPMN filenames in test/bpmn/ */
 export const BPMN_FILES: Record<string, string> = {
   'linear.bpmn': 'start-service-task-end.bpmn',
@@ -70,7 +79,7 @@ export async function teardownDb(): Promise<void> {
 export async function deployAndStart(
   db: Db,
   bpmnFile: string,
-  options?: { businessKey?: string; processName?: string }
+  options?: { businessKey?: string; processName?: string; user?: typeof MOCK_USER }
 ): Promise<TestContext> {
   const bpmn = loadBpmn(bpmnFile);
   const name = options?.processName ?? 'Test';
@@ -78,7 +87,9 @@ export async function deployAndStart(
   const { instanceId } = await startInstance(db, {
     commandId: uuidv4(),
     definitionId,
-    ...options,
+    businessKey: options?.businessKey,
+    tenantId: undefined,
+    user: options?.user,
   });
   return { db, definitionId, instanceId };
 }
@@ -86,15 +97,22 @@ export async function deployAndStart(
 export async function completeWorkItem(
   db: Db,
   instanceId: string,
-  workItemId: string
+  workItemId: string,
+  options?: { user?: typeof MOCK_USER; result?: Record<string, unknown> }
 ): Promise<void> {
   const { Continuations } = getCollections(db);
+  const payload: Record<string, unknown> = { workItemId, commandId: uuidv4() };
+  if (options?.result) payload.result = options.result;
+  if (options?.user) {
+    payload.completedBy = options.user.email;
+    payload.completedByDetails = options.user;
+  }
   await Continuations.insertOne({
     _id: uuidv4(),
     instanceId,
     dueAt: new Date(),
     kind: 'WORK_COMPLETED',
-    payload: { workItemId, commandId: uuidv4() },
+    payload,
     status: 'READY',
     attempts: 0,
     createdAt: new Date(),
@@ -143,6 +161,24 @@ export async function getWorklistTasks(
   if (filter.instanceId) q.instanceId = filter.instanceId;
   if (filter.assigneeUserId) q.assigneeUserId = filter.assigneeUserId;
   return HumanTasks.find(q).sort({ createdAt: -1 }).toArray();
+}
+
+/** Activate a worklist task (OPEN → CLAIMED). Blocks other users from activating. */
+export async function activateWorklistTask(
+  db: Db,
+  taskId: string,
+  userId: string
+): Promise<import('../../src/db/collections').HumanTaskDoc | null> {
+  const { HumanTasks } = getCollections(db);
+  const now = new Date();
+  return HumanTasks.findOneAndUpdate(
+    { _id: taskId, status: 'OPEN' },
+    {
+      $set: { status: 'CLAIMED', assigneeUserId: userId, claimedAt: now },
+      $inc: { version: 1 },
+    },
+    { returnDocument: 'after' }
+  );
 }
 
 export function assertMonotonicEvents(events: { seq: number }[]): void {

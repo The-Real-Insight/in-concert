@@ -174,9 +174,9 @@ Returns HumanTask or 404.
 
 ---
 
-## Claim Task
+## Activate Task
 
-### POST /v1/tasks/{taskId}/claim
+### POST /v1/tasks/{taskId}/activate
 
 Body:
 
@@ -187,11 +187,12 @@ Body:
 }
 ```
 
+Activates a user task for a user. The state change (OPEN → CLAIMED) prohibits other users from activating the same task.
+
 Rules:
 
 - Task must exist.
 - status must be OPEN.
-- user must belong to candidateRoles (enforced externally or here).
 - Atomic update:
   findOneAndUpdate(
     { _id: taskId, status: 'OPEN' },
@@ -200,9 +201,17 @@ Rules:
 
 Responses:
 
-- 200 → claimed
-- 409 → already claimed or not OPEN
+- 200 → activated (returns updated HumanTask)
+- 409 → already activated by another user or not OPEN
 - 404 → not found
+
+---
+
+## Claim Task
+
+### POST /v1/tasks/{taskId}/claim
+
+Same semantics as activate: OPEN → CLAIMED with assigneeUserId. Use claim or activate per domain preference.
 
 ---
 
@@ -294,6 +303,7 @@ sdk.engine.submitDecision(...)
 sdk.tasks.list(...)
 sdk.tasks.get(taskId)
 sdk.tasks.claim(taskId, { userId })
+sdk.tasks.activate(taskId, { userId })
 sdk.tasks.unclaim(taskId, { userId })
 sdk.tasks.complete(taskId, { userId, result })
 ```

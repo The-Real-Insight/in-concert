@@ -408,7 +408,12 @@ export function applyTransition(
   }
 
   if (continuation.kind === 'WORK_COMPLETED') {
-    const { workItemId } = continuation.payload as { workItemId: string };
+    const pl = continuation.payload as {
+      workItemId: string;
+      completedBy?: string;
+      completedByDetails?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+    };
+    const { workItemId } = pl;
     const workItem = waits.workItems.find((w) => w.workItemId === workItemId && w.status === 'OPEN');
     if (!workItem) {
       return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
@@ -426,7 +431,10 @@ export function applyTransition(
       patchTokens(() => tokens);
     }
     emit('TOKEN_CONSUMED', { tokenId: workItem.tokenId });
-    emit('WORK_ITEM_COMPLETED', { workItemId, nodeId: workItem.nodeId });
+    const workCompletedPayload: Record<string, unknown> = { workItemId, nodeId: workItem.nodeId };
+    if (pl.completedBy != null) workCompletedPayload.completedBy = pl.completedBy;
+    if (pl.completedByDetails != null) workCompletedPayload.completedByDetails = pl.completedByDetails;
+    emit('WORK_ITEM_COMPLETED', workCompletedPayload);
 
     if (toNodeId) {
       const flowId = outgoingFlows[0]?.id;

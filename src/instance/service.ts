@@ -10,7 +10,13 @@ export type StartInstanceResult = {
 
 export async function startInstance(
   db: Db,
-  params: { commandId: string; definitionId: string; businessKey?: string; tenantId?: string }
+  params: {
+    commandId: string;
+    definitionId: string;
+    businessKey?: string;
+    tenantId?: string;
+    user?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+  }
 ): Promise<StartInstanceResult> {
   const cols = getCollections(db);
   const { ProcessDefinitions, ProcessInstances, ProcessInstanceState, Continuations } = cols;
@@ -31,6 +37,10 @@ export async function startInstance(
     status: 'RUNNING',
     createdAt: now,
     businessKey: params.businessKey,
+    ...(params.user != null && {
+      startedBy: params.user.email,
+      startedByDetails: params.user,
+    }),
   });
 
   await ProcessInstanceState.insertOne({
@@ -73,11 +83,25 @@ export async function startInstance(
 export async function getInstance(
   db: Db,
   instanceId: string
-): Promise<{ _id: string; status: string; createdAt: Date; endedAt?: Date } | null> {
+): Promise<{
+  _id: string;
+  status: string;
+  createdAt: Date;
+  endedAt?: Date;
+  startedBy?: string;
+  startedByDetails?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+} | null> {
   const { ProcessInstances } = getCollections(db);
   const doc = await ProcessInstances.findOne(
     { _id: instanceId },
-    { projection: { _id: 1, status: 1, createdAt: 1, endedAt: 1 } }
+    { projection: { _id: 1, status: 1, createdAt: 1, endedAt: 1, startedBy: 1, startedByDetails: 1 } }
   );
-  return doc as { _id: string; status: string; createdAt: Date; endedAt?: Date } | null;
+  return doc as {
+    _id: string;
+    status: string;
+    createdAt: Date;
+    endedAt?: Date;
+    startedBy?: string;
+    startedByDetails?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+  } | null;
 }

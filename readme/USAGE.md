@@ -45,7 +45,9 @@ const { instanceId } = await client.startInstance({
 const state = await client.getState(instanceId);
 const workItem = state?.waits.workItems[0];
 if (workItem) {
-  await client.completeWorkItem(instanceId, workItem.workItemId);
+  await (workItem.kind === 'USER_TASK'
+    ? client.completeUserTask(instanceId, workItem.workItemId)
+    : client.completeExternalTask(instanceId, workItem.workItemId));
 }
 
 const instance = await client.getInstance(instanceId);
@@ -81,16 +83,67 @@ const { instanceId } = await client.startInstance({
   definitionId,
 });
 
-// Local mode: process until terminal state; handlers complete work items
+// Option A: inline handlers
 const result = await client.processUntilComplete(instanceId, {
   onWorkItem: async (item) => {
-    await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+    if (item.payload.kind === 'userTask') {
+      await client.completeUserTask(item.instanceId, item.payload.workItemId);
+    } else {
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+    }
   },
 });
+
+// Option B: init once, then process without passing handlers
+// client.init({ onWorkItem: ..., onDecision: ... });
+// const result = await client.processUntilComplete(instanceId);
+
 console.log('Status:', result.status);
 
 await closeDb();
 ```
+
+---
+
+## Core APIs (Server Programming Model)
+
+A server that embeds the engine and hosts callbacks typically uses **init** once at startup, then the 5 operational APIs:
+
+### init (once at server start)
+
+Register how to process interruptions and your service vocabulary. Call once before using the engine.
+
+```typescript
+client.init({
+  onWorkItem: async (item) => {
+    await presentToUser(item);
+    await client.completeUserTask(item.instanceId, item.payload.workItemId, { result });
+  },
+  onServiceCall: async (item) => {
+    const toolId = item.payload.extensions?.['tri:toolId'];
+    const impl = toolId ? (client.getServiceVocabulary() as Record<string, (i: unknown) => Promise<void>>)?.[toolId] : undefined;
+    await impl?.(item);
+    await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+  },
+  onDecision: async (item) => {
+    const choice = await evaluate(item.payload);
+    await client.submitDecision(item.instanceId, item.payload.decisionId, { selectedFlowIds: [choice] });
+  },
+  serviceVocabulary: { 'approval-mail-tool': sendApprovalMail, '69627240...': promptTool },
+});
+```
+
+### 5 operational APIs
+
+| API | When to use |
+|-----|-------------|
+| **deploy** | Register a process model (BPMN). Find it later by name, id, version. |
+| **startInstance** | Start a new process from a deployed definition. |
+| **completeUserTask** | A human completed a user task. Advances the process. |
+| **completeExternalTask** | An external system completed (e.g. async message, long-running call). Advances the process. |
+| **recover** | Process all pending continuations after server restart. Uses init handlers. Drains the queue. |
+
+`completeUserTask` and `completeExternalTask` are semantic aliases for the same underlying operation. For gateway decisions, your `onDecision` handler calls `submitDecision()`. `recover()` uses the handlers from `init()`; you can override with `recover({ handlers: {...} })`. Local mode only.
 
 ---
 
@@ -115,6 +168,34 @@ new BpmnEngineClient(config: SdkConfig)
 ```
 
 `Db` is MongoDB’s `Db` from `mongodb`. Use `connectDb()` from `tri-bpmn-engine/db` or your own `MongoClient.db()`.
+
+---
+
+### init(config)
+
+Initialize the engine (call once at server start). Registers how to process interruptions and optional service vocabulary.
+
+```typescript
+client.init({
+  onWorkItem: async (item) => { /* user tasks: completeUserTask */ },
+  onServiceCall: async (item) => { /* service tasks: invoke, then completeExternalTask */ },
+  onDecision: async (item) => { /* evaluate, then submitDecision */ },
+  serviceVocabulary: { 'tool-id': async (item) => { /* invoke */ } },
+});
+```
+
+`recover()` and `processUntilComplete()` use these handlers when no override is passed. Use `client.getServiceVocabulary()` inside handlers to resolve tools.
+
+---
+
+### getServiceVocabulary()
+
+Return the service vocabulary from `init()`. Use inside `onServiceCall` to resolve `tri:toolId` (from `item.payload.extensions?.['tri:toolId']`) to an implementation.
+
+```typescript
+const vocab = client.getServiceVocabulary();
+const impl = vocab?.[item.payload.extensions?.['tri:toolId'] ?? ''];
+```
 
 ---
 
@@ -172,9 +253,34 @@ const state = await client.getState(instanceId);
 
 ---
 
+### completeUserTask(instanceId, workItemId, options?)
+
+Human completed a user task. Advances the process.
+
+```typescript
+await client.completeUserTask(instanceId, workItemId, {
+  commandId: uuidv4(),
+  result: { approved: true },
+});
+```
+
+---
+
+### completeExternalTask(instanceId, workItemId, options?)
+
+External system completed (e.g. async message, long-running call). Advances the process.
+
+```typescript
+await client.completeExternalTask(instanceId, workItemId, {
+  result: { response: data },
+});
+```
+
+---
+
 ### completeWorkItem(instanceId, workItemId, options?)
 
-Complete a user or service task.
+Complete a user or service task. Prefer `completeUserTask` or `completeExternalTask` for clarity.
 
 ```typescript
 await client.completeWorkItem(instanceId, workItemId, {
@@ -183,7 +289,24 @@ await client.completeWorkItem(instanceId, workItemId, {
 });
 ```
 
-In REST mode, the server worker will pick it up. In local mode, `processUntilComplete` continues automatically.
+In REST mode, the server worker will pick it up. In local mode, `processUntilComplete` or `recover` continues automatically.
+
+---
+
+### recover(options?)
+
+Process all pending continuations (e.g. after server restart). Uses handlers from `init()` unless overridden. Local mode only.
+
+```typescript
+// Uses init handlers
+const { processed } = await client.recover();
+
+// Override handlers for this call
+const { processed } = await client.recover({
+  handlers: { onWorkItem: ..., onDecision: ... },
+  maxIterations: 5000,
+});
+```
 
 ---
 
@@ -194,10 +317,19 @@ User tasks and service tasks create **work items** that your application must ha
 ### How It Works
 
 1. Execution reaches a user or service task → the engine creates a work item and pauses.
-2. Your application discovers the work item via `getState()`.
+2. Your application discovers the work item via `getState()` or callbacks.
 3. You perform the work (human input or external service call).
-4. You call `completeWorkItem()` to signal completion.
+4. You call `completeUserTask()` or `completeExternalTask()` to signal completion.
 5. The engine resumes execution (via its worker) and moves the token onward.
+
+### Work item payload
+
+`CALLBACK_WORK` payload includes `workItemId`, `nodeId`, `kind` ('userTask' | 'serviceTask'), `name`, `lane`. If the BPMN node has custom extension attributes (e.g. `tri:toolId`, `tri:toolType`), they appear in `payload.extensions`:
+
+```typescript
+const toolId = item.payload.extensions?.['tri:toolId'];
+const toolType = item.payload.extensions?.['tri:toolType'];
+```
 
 ### User Tasks
 
@@ -206,7 +338,7 @@ User tasks represent **human work**. Your application:
 1. Discovers the work item via `subscribeToCallbacks()` or `processUntilComplete()` handlers—same pattern as service tasks.
 2. Presents the task to a user (UI, inbox, etc.).
 3. Waits for the user to act (approve, reject, fill a form, etc.).
-4. Calls `completeWorkItem()` with optional `result` when done.
+4. Calls `completeUserTask()` with optional `result` when done.
 
 ```typescript
 await client.processUntilComplete(instanceId, {
@@ -214,9 +346,11 @@ await client.processUntilComplete(instanceId, {
     if (item.payload.kind === 'userTask') {
       // Show task to user: "Approve order #123"
       const approved = await waitForUserDecision(); // your UI logic
-      await client.completeWorkItem(instanceId, item.payload.workItemId, {
+      await client.completeUserTask(item.instanceId, item.payload.workItemId, {
         result: { approved },
       });
+    } else {
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId);
     }
   },
 });
@@ -255,7 +389,7 @@ async function main() {
       if (kind === 'serviceTask') {
         (async () => {
           const response = await callYourService(instanceId, nodeId);
-          await client.completeWorkItem(instanceId, workItemId, { result: response });
+          await client.completeExternalTask(instanceId, workItemId, { result: response });
           // Subscription's internal loop picks up the continuation automatically
         })().catch(console.error);
       }
@@ -279,7 +413,7 @@ const result = await client.processUntilComplete(instanceId, {
   onWorkItem: async (item) => {
     if (item.payload.kind === 'serviceTask') {
       const response = await callYourService(item.instanceId, item.payload.nodeId);
-      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { result: response });
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId, { result: response });
     }
     // User tasks: forward to worklist; complete when human does the task
   },
@@ -313,7 +447,7 @@ const unsubscribe = client.subscribeToCallbacks((item) => {
     if (kind === 'serviceTask') {
       (async () => {
         const response = await callYourService(instanceId, nodeId);
-        await client.completeWorkItem(instanceId, workItemId, { result: response });
+        await client.completeExternalTask(instanceId, workItemId, { result: response });
       })().catch(console.error);
     }
     // User tasks: forward to your task UI
@@ -334,7 +468,7 @@ const unsubscribe = client.subscribeToCallbacks((item) => {
 
 ### Remote architecture: WebSocket and webhooks
 
-- **WebSocket** (current): Clients connect to `/ws`. The server broadcasts `CALLBACK_WORK` and `CALLBACK_DECISION` when execution reaches tasks or gateways. Clients react by calling `completeWorkItem()` / `submitDecision()` via REST. No polling.
+- **WebSocket** (current): Clients connect to `/ws`. The server broadcasts `CALLBACK_WORK` and `CALLBACK_DECISION` when execution reaches tasks or gateways. Clients react by calling `completeUserTask()` / `completeExternalTask()` / `submitDecision()` via REST. No polling.
 - **Webhooks** (future): For server-to-server integration, the engine could POST callbacks to configured URLs. Same payload shape as WebSocket.
 
 ### Complete Callback Flow
@@ -352,17 +486,17 @@ startInstance → processUntilComplete (local) or server runs worker (REST)
      ↓
   Do work (invoke service or present to user)
      ↓
-  completeWorkItem() → engine loop picks up (local) or server picks up (REST)
+  completeUserTask() / completeExternalTask() → engine loop picks up (local) or server picks up (REST)
      ↓
   Token moves to next node (or instance completes)
 ```
 
 ### Optional `result` Payload
 
-You can pass arbitrary data to `completeWorkItem()` via `result`. Downstream flow conditions or expressions (if supported) can use it.
+You can pass arbitrary data via `result`. Downstream flow conditions or expressions (if supported) can use it.
 
 ```typescript
-await client.completeWorkItem(instanceId, workItemId, {
+await client.completeUserTask(instanceId, workItemId, {
   result: {
     approved: true,
     comments: 'Looks good',
@@ -373,8 +507,8 @@ await client.completeWorkItem(instanceId, workItemId, {
 
 ### REST vs Local Mode
 
-- **REST mode**: The server runs the worker loop. Use `subscribeToCallbacks()` (WebSocket) to receive callbacks; react by calling `completeWorkItem()` / `submitDecision()`. No polling.
-- **Local mode**: Use `processUntilComplete(instanceId, handlers)` to run until terminal—handlers are invoked for each callback. Alternatively, `subscribeToCallbacks()` for background processing (internal loop drives execution).
+- **REST mode**: The server runs the worker loop. Use `subscribeToCallbacks()` (WebSocket) to receive callbacks; react by calling `completeUserTask()` / `completeExternalTask()` / `submitDecision()`. No polling.
+- **Local mode**: Call `init()` once, then `processUntilComplete(instanceId)` or `recover()` to run—handlers from init are invoked. Or pass handlers inline. Use `subscribeToCallbacks()` for background processing.
 
 ---
 
@@ -407,19 +541,34 @@ The `CALLBACK_DECISION` payload is structured for LLM integration. You get direc
 | `transitions[].targetNodeName` | Target task name (e.g. "Send Approval Mail") |
 | `transitions[].targetNodeType` | Target node type (e.g. "serviceTask") |
 
-Example with LLM: pass `instanceId`, `gateway`, and `transitions` to your LLM along with the process data pool; the LLM returns the chosen `flowId`; call `submitDecision(instanceId, decisionId, { selectedFlowIds: [flowId] })`.
+**Evaluating gateway name + transition conditions**
+
+The gateway `name` is the decision question; each transition's `name` is the option label. Together they form a clear yes/no or multi-choice prompt.
+
+Example from xor-with-transition-conditions BPMN:
+
+- **Gateway**: `{ name: "Can be approved?" }`
+- **Transitions**: `[ { flowId: "Flow_Rejection", name: "No", isDefault: true }, { flowId: "Flow_Approval", name: "Yes", conditionExpression: "${approved}" } ]`
+
+To evaluate:
+
+1. **Expression-based**: If you have process data (e.g. `approved: true`), evaluate `conditionExpression` against it. When `${approved}` is truthy, choose the "Yes" flow; otherwise use the default ("No").
+2. **LLM-based**: Prompt with `gateway.name` (e.g. "Can be approved?") and the transition labels (`transitions[].name`: "No", "Yes") plus your context. The LLM returns the chosen option; map back to `flowId` and call `submitDecision(instanceId, decisionId, { selectedFlowIds: [flowId] })`.
 
 ---
 
-### processUntilComplete(instanceId, handlers, options?)
+### processUntilComplete(instanceId, handlers?, options?)
 
-Process until instance reaches a terminal state. **Local mode only.** Invokes registered handlers for each callback—no polling.
+Process until instance reaches a terminal state. **Local mode only.** Uses handlers from `init()` when omitted. Invokes handlers for each callback—no polling.
 
 ```typescript
 const result = await client.processUntilComplete(instanceId, {
   onWorkItem: async (item) => {
-    // React to work item (user/service task)
-    await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+    if (item.payload.kind === 'userTask') {
+      await client.completeUserTask(item.instanceId, item.payload.workItemId);
+    } else {
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+    }
   },
   onDecision: async (item) => {
     // Evaluate transition, submit choice
@@ -438,12 +587,12 @@ const result = await client.processUntilComplete(instanceId, {
 Subscribe to work items and decisions. Returns an unsubscribe function. **REST**: WebSocket at /ws. **Local**: internal engine loop (MongoDB passive).
 
 ```typescript
-const unsubscribe = client.subscribeToCallbacks((item) => {
-  if (item.kind === 'CALLBACK_WORK') {
-    const { workItemId, instanceId, kind } = item.payload;
-    // Handle work item, then completeWorkItem()
-  }
-});
+  const unsubscribe = client.subscribeToCallbacks((item) => {
+    if (item.kind === 'CALLBACK_WORK') {
+      const { workItemId, instanceId, kind } = item.payload;
+      // Handle work item, then completeUserTask/completeExternalTask
+    }
+  });
 
 unsubscribe(); // when done
 ```
@@ -481,7 +630,11 @@ async function main() {
 
   const result = await client.processUntilComplete(instanceId, {
     onWorkItem: async (item) => {
-      await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      if (item.payload.kind === 'userTask') {
+        await client.completeUserTask(item.instanceId, item.payload.workItemId);
+      } else {
+        await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+      }
     },
   });
   console.log('Completed:', result.status === 'COMPLETED');
@@ -581,12 +734,12 @@ async function main() {
 
       if (kind === 'serviceTask') {
         console.log(`  → Invoking service "${name}"`);
-        await client.completeWorkItem(instanceId, item.payload.workItemId, {
+        await client.completeExternalTask(instanceId, item.payload.workItemId, {
           result: { score: 0.85 },
         });
       } else {
         console.log(`  → User in ${lane ?? '—'} completes "${name}"`);
-        await client.completeWorkItem(instanceId, item.payload.workItemId, {
+        await client.completeUserTask(instanceId, item.payload.workItemId, {
           result: { completed: true },
         });
       }
@@ -626,10 +779,10 @@ const unsubscribe = client.subscribeToCallbacks((item) => {
     console.log(`[Callback] ${kind} "${name}" (role: ${lane ?? '—'})`);
 
     if (kind === 'serviceTask') {
-      // Invoke your service; when done: completeWorkItem (loop picks up automatically)
+      // Invoke your service; when done: completeExternalTask (loop picks up automatically)
       invokeService(instanceId, workItemId).catch(console.error);
     } else {
-      // Forward to task UI for users in lane (role); when done: completeWorkItem
+      // Forward to task UI for users in lane (role); when done: completeUserTask
       addToTaskInbox(instanceId, workItemId, { name, role: lane });
     }
   }
@@ -644,12 +797,166 @@ Each `CALLBACK_WORK` item includes:
 
 | Field | Description |
 |-------|-------------|
-| `workItemId` | Pass to `completeWorkItem()` |
+| `workItemId` | Pass to `completeUserTask()` or `completeExternalTask()` |
 | `instanceId` | Process instance |
 | `nodeId` | BPMN node id |
 | `kind` | `'serviceTask'` or `'userTask'` |
 | `name` | Task name from BPMN |
 | `lane` | Lane name (role) from BPMN, if the task is in a lane |
+
+---
+
+## End-to-End Example: Worklist Flow
+
+This example uses the **worklist** instead of inline callbacks. A human (or UI) polls the worklist, activates tasks, and completes them. The engine runs in the background; handlers process only decisions and service tasks. User tasks are handled via the worklist API.
+
+### Sequence
+
+1. **Process start** – Start instance with user (for `startedBy`).
+2. **Run engine** – Process until first user task (handlers skip user tasks, handle decisions and service tasks).
+3. **Wait** – A few seconds for the worklist projection to apply.
+4. **Load worklist** – Query open tasks for the instance.
+5. **Pick task** – Choose a task (e.g. oldest in process order).
+6. **Activate** – Transition task OPEN → CLAIMED, blocking other users.
+7. **Complete** – Submit completion to the engine.
+8. **Run engine** – Process the completion, advance to the next user task or end.
+9. **Repeat** – Loop until instance status is COMPLETED.
+
+### Process overview
+
+Uses **xor-with-transition-conditions**: Claim Entry (Beneficiary) → Claim Assessment (Claims Assessor) → XOR decision → Send Approval/Rejection Mail (service) → End.
+
+BPMN file: `test/bpmn/xor-with-transition-conditions.bpmn`
+
+### Worklist API
+
+| Operation | SDK | REST |
+|-----------|-----|------|
+| List tasks | `client.listTasks({ instanceId, status: 'OPEN', sortOrder: 'asc' })` | `GET /v1/tasks?instanceId=…&status=OPEN` |
+| Activate | `client.activateTask(taskId, { userId })` | `POST /v1/tasks/:taskId/activate` |
+| Complete | `client.completeUserTask(instanceId, taskId, { user })` | `POST /v1/tasks/:taskId/complete` or engine work-items endpoint |
+
+### Example script (local mode)
+
+```typescript
+import { BpmnEngineClient } from 'tri-bpmn-engine/sdk';
+import { connectDb, ensureIndexes, closeDb } from 'tri-bpmn-engine/db';
+import { v4 as uuidv4 } from 'uuid';
+import { readFileSync } from 'fs';
+
+require('dotenv').config();
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function main() {
+  const db = await connectDb();
+  await ensureIndexes(db);
+  const client = new BpmnEngineClient({ mode: 'local', db });
+
+  // ─── 1. Initialize callbacks (once, before any deploy/start) ───
+  client.init({
+    onWorkItem: async (item) => {
+      // Here, we need to decide whether we can push the user activity into the (linear) conversation or into a worklist
+
+      return;
+    },
+    onServiceCall: async (item) => {
+      // Obtain the agentic tool to invoke and resolve parameters
+
+      const toolId = item.payload.extensions?.['tri:toolId'];
+      const toolType = item.payload.extensions?.['tri:toolType'];
+
+      console.log('Service call:', { toolId, toolType });
+
+      // Once tool is completed retrieve data and output, add to conversation and continue process
+      
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+    },
+    onDecision: async (item) => {
+      const { gateway, transitions } = item.payload;
+      // gateway.name = "Can be approved?"; transitions = [{ flowId, name: "No", isDefault: true }, { flowId, name: "Yes", conditionExpression: "${approved}" }]
+
+      // We will create a prompt with the question to evaluated and combine with entries from the data pool
+      // Probably to retrieve an evaluation condition
+      
+      const approved = true; 
+      const selected = approved
+        ? transitions?.find((t) => t.conditionExpression)?.flowId
+        : transitions?.find((t) => t.isDefault)?.flowId;
+      if (selected) {
+        await client.submitDecision(item.instanceId, item.payload.decisionId, {
+          selectedFlowIds: [selected],
+        });
+      }
+    },
+  });
+
+  // ─── 2. Deploy process definition ───
+  const bpmn = readFileSync('./test/bpmn/xor-with-transition-conditions.bpmn', 'utf8');
+  const { definitionId } = await client.deploy({
+    name: 'ClaimProcess',
+    version: 1,
+    bpmnXml: bpmn,
+  });
+
+  // ─── 3. Start process instance ───
+  const user = { email: 'user@example.com' };
+  const { instanceId } = await client.startInstance({
+    commandId: uuidv4(),
+    definitionId,
+    user,
+  });
+  console.log('Started instance:', instanceId);
+
+  // ─── 4. Run engine until quiescent (handlers process decisions and service tasks) ───
+  let result = await client.run(instanceId);
+
+  // ─── 5. Worklist loop: wait → load → activate → complete → run, repeat ───
+  while (result.status === 'RUNNING') {
+    await sleep(5000);
+
+    const openTasks = await client.listTasks({
+      instanceId,
+      status: 'OPEN',
+      sortOrder: 'asc',
+    });
+
+    if (openTasks.length === 0) {
+      result = await client.run(instanceId);
+      continue;
+    }
+
+    const task = openTasks[0];
+    console.log('Activating and completing:', task.name);
+
+    await client.activateTask(task._id, { userId: user.email });
+    await client.completeUserTask(instanceId, task._id, { user });
+
+    result = await client.run(instanceId);
+  }
+
+  console.log('Final status:', result.status);
+  await closeDb();
+}
+
+main().catch(console.error);
+```
+
+### APIs used
+
+| Step | API | Description |
+|------|-----|-------------|
+| 1 | `client.init({ onWorkItem, onServiceCall, onDecision })` | Register callbacks once before use |
+| 2 | `client.deploy({ name, version, bpmnXml })` | Deploy process definition |
+| 3 | `client.startInstance({ commandId, definitionId, user })` | Start new instance |
+| 4–5 | `client.run(instanceId)` | Process continuations; handlers process decisions and service tasks |
+| Loop | `client.listTasks({ instanceId, status: 'OPEN', sortOrder: 'asc' })` | Load worklist (OPEN tasks) |
+| Loop | `client.activateTask(taskId, { userId })` | Activate task (OPEN → CLAIMED) |
+| Loop | `client.completeUserTask(instanceId, taskId, { user })` | Complete task; engine processes on next `run()` |
+
+### Test reference
+
+See `test/sdk/xor-with-transition-conditions.test.ts` for the full test: `worklist flow: start → wait → load → activate → complete, repeat for each user task`. It uses `client.listTasks`, `client.activateTask`, and `client.completeUserTask`.
 
 ---
 

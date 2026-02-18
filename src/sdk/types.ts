@@ -2,6 +2,14 @@
  * SDK types - shared between REST and local modes
  */
 
+export type User = {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  photoUrl?: string;
+};
+
 export type DeployParams = {
   name: string;
   version: number;
@@ -18,6 +26,8 @@ export type StartInstanceParams = {
   definitionId: string;
   businessKey?: string;
   tenantId?: string;
+  /** When provided, startedBy = user.email and startedByDetails = user on ProcessInstance */
+  user?: User;
 };
 
 export type StartInstanceResult = {
@@ -30,7 +40,19 @@ export type InstanceSummary = {
   status: 'RUNNING' | 'COMPLETED' | 'TERMINATED' | 'FAILED';
   createdAt: Date;
   endedAt?: Date;
+  startedBy?: string;
+  startedByDetails?: User;
 };
+
+export type ListTasksParams = {
+  instanceId?: string;
+  status?: string;
+  assigneeUserId?: string;
+  limit?: number;
+  sortOrder?: 'asc' | 'desc'; // createdAt: asc = oldest first (process order), desc = newest first
+};
+
+export type WorklistTask = import('../db/collections').HumanTaskDoc;
 
 export type WorkItemRef = {
   workItemId: string;
@@ -105,16 +127,36 @@ export type CallbackDecisionPayload = {
  * Callbacks receive state changes (work items, decisions) and react—no polling.
  */
 export type CallbackHandlers = {
+  /** Called for user tasks. Skip for worklist flow; otherwise complete via completeUserTask(). */
   onWorkItem?: (item: {
     kind: 'CALLBACK_WORK';
     instanceId: string;
     payload: CallbackWorkPayload;
   }) => void | Promise<void>;
+  /** Called for service tasks. Invoke service, then completeExternalTask(). */
+  onServiceCall?: (item: {
+    kind: 'CALLBACK_WORK';
+    instanceId: string;
+    payload: CallbackWorkPayload;
+  }) => void | Promise<void>;
+  /** Called for XOR gateway decisions. Choose flow, then submitDecision(). */
   onDecision?: (item: {
     kind: 'CALLBACK_DECISION';
     instanceId: string;
     payload: CallbackDecisionPayload;
   }) => void | Promise<void>;
+};
+
+/**
+ * Engine init config. Register once at server start.
+ * Defines how to process interruptions (work items, decisions) and optional service vocabulary.
+ */
+export type EngineInitConfig = {
+  onWorkItem?: CallbackHandlers['onWorkItem'];
+  onServiceCall?: CallbackHandlers['onServiceCall'];
+  onDecision?: CallbackHandlers['onDecision'];
+  /** Service/tool registry (e.g. tri:toolId → implementation). Handlers use this to resolve and invoke. */
+  serviceVocabulary?: Record<string, unknown>;
 };
 
 export type CallbackItem =

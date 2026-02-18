@@ -31,7 +31,7 @@ apiRouter.post('/v1/definitions', async (req: Request, res: Response) => {
 
 apiRouter.post('/v1/instances', async (req: Request, res: Response) => {
   try {
-    const { commandId, definitionId, businessKey, tenantId } = req.body;
+    const { commandId, definitionId, businessKey, tenantId, user } = req.body;
     if (!commandId || !definitionId) {
       res.status(400).json({ error: 'commandId and definitionId are required' });
       return;
@@ -42,6 +42,7 @@ apiRouter.post('/v1/instances', async (req: Request, res: Response) => {
       definitionId,
       businessKey,
       tenantId,
+      user,
     });
     res.status(201).json(result);
   } catch (err) {
@@ -135,7 +136,7 @@ apiRouter.post(
   async (req: Request, res: Response) => {
     try {
       const { instanceId, workItemId } = req.params;
-      const { commandId, result } = req.body;
+      const { commandId, result, completedBy, completedByDetails, user } = req.body;
       if (!commandId) {
         res.status(400).json({ error: 'commandId is required' });
         return;
@@ -144,13 +145,20 @@ apiRouter.post(
       const cols = getCollections(db);
       const { Continuations } = cols;
       const now = new Date();
-      const continuationId = uuidv4();
+      const payload: Record<string, unknown> = { workItemId, commandId, result };
+      if (user) {
+        payload.completedBy = user.email;
+        payload.completedByDetails = user;
+      } else if (completedBy != null) {
+        payload.completedBy = completedBy;
+        if (completedByDetails != null) payload.completedByDetails = completedByDetails;
+      }
       await Continuations.insertOne({
-        _id: continuationId,
+        _id: uuidv4(),
         instanceId,
         dueAt: now,
         kind: 'WORK_COMPLETED',
-        payload: { workItemId, commandId, result },
+        payload,
         status: 'READY',
         attempts: 0,
         createdAt: now,

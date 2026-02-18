@@ -26,6 +26,7 @@ export type {
 export type { SdkConfig, SdkConfigRest, SdkConfigLocal } from './client';
 export type {
   CallbackHandlers,
+  EngineInitConfig,
   DeployParams,
   DeployResult,
   StartInstanceParams,
