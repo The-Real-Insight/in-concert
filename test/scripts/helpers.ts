@@ -7,8 +7,6 @@ import { ensureIndexes } from '../../src/db/indexes';
 import { getCollections } from '../../src/db/collections';
 import { deployDefinition } from '../../src/model/service';
 import { startInstance } from '../../src/instance/service';
-import { claimContinuation, processContinuation } from '../../src/workers/processor';
-import { broadcastAll } from '../../src/ws/broadcast';
 
 const callbackLog = jest.fn();
 
@@ -32,6 +30,8 @@ export const BPMN_FILES: Record<string, string> = {
   'message-throw.bpmn': 'message-throw-to-callback.bpmn',
   'subprocess.bpmn': 'embedded-subprocess-minimal.bpmn',
   'linear-service-and-user-task.bpmn': 'linear-service-and-user-task.bpmn',
+  'xor-with-transition-conditions.bpmn': 'xor-with-transition-conditions.bpmn',
+  'tri-tool-linear.bpmn': 'tri-tool-linear.bpmn',
 };
 
 export function loadBpmn(modelFile: string): string {
@@ -53,7 +53,8 @@ export function shouldPurgeDb(): boolean {
 
 export async function setupDb(): Promise<Db> {
   require('dotenv').config();
-  process.env.MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017/Test?serverSelectionTimeoutMS=5000';
+  process.env.MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017?serverSelectionTimeoutMS=5000';
+  process.env.MONGO_DB = process.env.MONGO_DB ?? 'BPM';
   const db = await connectDb();
   if (shouldPurgeDb()) {
     await db.dropDatabase();
@@ -80,26 +81,6 @@ export async function deployAndStart(
     ...options,
   });
   return { db, definitionId, instanceId };
-}
-
-export async function runWorker(db: Db, maxIterations = 50): Promise<void> {
-  for (let i = 0; i < maxIterations; i++) {
-    const cont = await claimContinuation(db);
-    if (!cont) break;
-    callbackLog(`continuation:${cont.kind}`, cont.payload);
-    await processContinuation(db, cont);
-  }
-}
-
-/** Like runWorker but also broadcasts to in-process handlers (e.g. worklist projection). */
-export async function runWorkerWithProjection(db: Db, maxIterations = 50): Promise<void> {
-  for (let i = 0; i < maxIterations; i++) {
-    const cont = await claimContinuation(db);
-    if (!cont) break;
-    callbackLog(`continuation:${cont.kind}`, cont.payload);
-    const { outbox, events } = await processContinuation(db, cont);
-    broadcastAll(outbox, events);
-  }
 }
 
 export async function completeWorkItem(

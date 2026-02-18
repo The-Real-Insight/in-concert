@@ -220,6 +220,7 @@ export function applyTransition(
           kind: node.type,
           ...(node.name != null && { name: node.name }),
           ...(node.laneRef != null && { lane: node.laneRef }),
+          ...(node.extensions && Object.keys(node.extensions).length > 0 && { extensions: node.extensions }),
         },
         status: 'READY',
         attempts: 0,
@@ -252,6 +253,20 @@ export function applyTransition(
         ];
         statePatch.waits = waits;
         emit('DECISION_REQUESTED', { decisionId, nodeId, tokenId, kind: 'XOR_SPLIT' });
+        const defaultFlowId = (node as NodeDef & { defaultFlowId?: string }).defaultFlowId;
+        const transitions = outgoing.map((f) => {
+          const toNodeId = getTargetNode(graph, f.id);
+          const targetNode = toNodeId ? graph.nodes[toNodeId] : undefined;
+          return {
+            flowId: f.id,
+            name: f.name,
+            conditionExpression: f.conditionExpression,
+            isDefault: f.id === defaultFlowId,
+            toNodeId,
+            targetNodeName: targetNode?.name,
+            targetNodeType: targetNode?.type,
+          };
+        });
         outbox.push({
           instanceId: state._id,
           rootInstanceId: state._id,
@@ -266,13 +281,25 @@ export function applyTransition(
             tokenId,
             scopeId,
             expectedStateVersion: state.version,
+            gateway: {
+              id: nodeId,
+              name: node.name,
+              type: node.type,
+            },
+            transitions,
             evaluation: {
               kind: 'XOR_SPLIT',
-              outgoing: outgoing.map((f) => ({
-                flowId: f.id,
-                toNodeId: getTargetNode(graph, f.id),
-                isDefault: false,
-              })),
+              outgoing: outgoing.map((f) => {
+                const tn = getTargetNode(graph, f.id);
+                return {
+                  flowId: f.id,
+                  toNodeId: tn,
+                  isDefault: f.id === defaultFlowId,
+                  name: f.name,
+                  conditionExpression: f.conditionExpression,
+                  targetNodeName: tn ? graph.nodes[tn]?.name : undefined,
+                };
+              }),
             },
           },
           status: 'READY',

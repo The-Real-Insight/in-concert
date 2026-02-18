@@ -12,11 +12,18 @@ import type {
 
 const LEASE_MS = 30_000;
 
-export async function claimContinuation(db: Db): Promise<ContinuationDoc | null> {
+export async function claimContinuation(
+  db: Db,
+  options?: { instanceId?: string }
+): Promise<ContinuationDoc | null> {
   const { Continuations } = getCollections(db);
   const now = new Date();
+  const filter: Record<string, unknown> = { status: 'READY', dueAt: { $lte: now } };
+  if (options?.instanceId) {
+    filter.instanceId = options.instanceId;
+  }
   const result = await Continuations.findOneAndUpdate(
-    { status: 'READY', dueAt: { $lte: now } },
+    filter,
     {
       $set: {
         status: 'IN_PROGRESS',

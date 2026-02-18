@@ -21,7 +21,7 @@
     "test:callback:user": "jest --testPathPattern=test/scripts/callback-demo --testNamePattern=\"User task\" --testTimeout=30000 --silent=false",
     "test:callback:service": "jest --testPathPattern=test/scripts/callback-demo --testNamePattern=\"Service task\" --testTimeout=30000 --silent=false",
     "test:integration": "ts-node scripts/test-integration.ts",
-    "test:sdk": "jest --testPathPattern=test/sdk --testTimeout=20000"
+    "test:sdk": "jest --testPathPattern=test/sdk --testTimeout=20000 --runInBand"
   },
   "keywords": [
     "bpmn",

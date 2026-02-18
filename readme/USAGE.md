@@ -81,18 +81,13 @@ const { instanceId } = await client.startInstance({
   definitionId,
 });
 
-// Local mode: run the worker to advance the process
-await client.runWorker();
-
-const state = await client.getState(instanceId);
-const workItem = state?.waits.workItems[0];
-if (workItem) {
-  await client.completeWorkItem(instanceId, workItem.workItemId);
-  await client.runWorker();
-}
-
-const instance = await client.getInstance(instanceId);
-console.log('Status:', instance?.status);
+// Local mode: process until terminal state; handlers complete work items
+const result = await client.processUntilComplete(instanceId, {
+  onWorkItem: async (item) => {
+    await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+  },
+});
+console.log('Status:', result.status);
 
 await closeDb();
 ```
@@ -188,7 +183,7 @@ await client.completeWorkItem(instanceId, workItemId, {
 });
 ```
 
-In REST mode, the server worker will pick it up. In local mode, call `runWorker()` after.
+In REST mode, the server worker will pick it up. In local mode, `processUntilComplete` continues automatically.
 
 ---
 
@@ -208,25 +203,23 @@ User tasks and service tasks create **work items** that your application must ha
 
 User tasks represent **human work**. Your application:
 
-1. Discovers the work item (e.g. poll `getState()`, or `subscribeToCallbacks()`—same pattern as service tasks).
+1. Discovers the work item via `subscribeToCallbacks()` or `processUntilComplete()` handlers—same pattern as service tasks.
 2. Presents the task to a user (UI, inbox, etc.).
 3. Waits for the user to act (approve, reject, fill a form, etc.).
 4. Calls `completeWorkItem()` with optional `result` when done.
 
 ```typescript
-// After runWorker(), a user task creates a work item
-const state = await client.getState(instanceId);
-const workItem = state?.waits.workItems.find((w) => w.kind === 'USER_TASK');
-
-if (workItem) {
-  // Show task to user: "Approve order #123"
-  const approved = await waitForUserDecision(); // your UI logic
-
-  await client.completeWorkItem(instanceId, workItem.workItemId, {
-    result: { approved },
-  });
-  await client.runWorker(); // local mode: advance execution
-}
+await client.processUntilComplete(instanceId, {
+  onWorkItem: async (item) => {
+    if (item.payload.kind === 'userTask') {
+      // Show task to user: "Approve order #123"
+      const approved = await waitForUserDecision(); // your UI logic
+      await client.completeWorkItem(instanceId, item.payload.workItemId, {
+        result: { approved },
+      });
+    }
+  },
+});
 ```
 
 ### Service Tasks (Push-Based: No Polling)
@@ -239,7 +232,7 @@ When execution reaches a service task, the engine:
 
 1. Creates a work item in instance state
 2. Persists to the Outbox (for audit/replay)
-3. Streams the callback to your app (local: via runWorker; REST: via WebSocket)
+3. Streams the callback to your app (local: via subscribeToCallbacks internal loop; REST: via WebSocket)
 
 Your app receives callbacks from the engine. MongoDB is not watched or polled for notifications.
 
@@ -263,7 +256,7 @@ async function main() {
         (async () => {
           const response = await callYourService(instanceId, nodeId);
           await client.completeWorkItem(instanceId, workItemId, { result: response });
-          await client.runWorker();
+          // Subscription's internal loop picks up the continuation automatically
         })().catch(console.error);
       }
     }
@@ -277,19 +270,25 @@ async function callYourService(instanceId: string, nodeId: string) {
 }
 ```
 
-**Alternative: explicit runWorker + onCallbacks**
+**Event-driven (recommended): processUntilComplete**
+
+Register callbacks up front. No polling—the engine invokes handlers when work items or decisions appear.
 
 ```typescript
-while (true) {
-  const n = await client.runWorker(20, (items) => {
-    for (const item of items) {
-      if (item.kind === 'CALLBACK_WORK' && item.payload.kind === 'serviceTask') {
-        handleServiceTask(client, item);
-      }
+const result = await client.processUntilComplete(instanceId, {
+  onWorkItem: async (item) => {
+    if (item.payload.kind === 'serviceTask') {
+      const response = await callYourService(item.instanceId, item.payload.nodeId);
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { result: response });
     }
-  });
-  if (n === 0) await sleep(100);
-}
+    // User tasks: forward to worklist; complete when human does the task
+  },
+  onDecision: async (item) => {
+    const selectedFlowIds = evaluateTransitionCondition(item.payload);
+    await client.submitDecision(item.instanceId, item.payload.decisionId, { selectedFlowIds });
+  },
+});
+// result.status === 'COMPLETED' | 'TERMINATED' | 'FAILED'
 ```
 
 #### REST mode: WebSocket
@@ -326,17 +325,22 @@ const unsubscribe = client.subscribeToCallbacks((item) => {
 // unsubscribe();
 ```
 
-**REST vs Local symmetry**
+**REST vs Local—event-driven, no polling**
 
-| Mode   | Push mechanism                          |
-|--------|-----------------------------------------|
-| REST   | WebSocket at `{baseUrl}/ws`             |
-| Local  | Engine-driven via `subscribeToCallbacks` (runWorker loop) |
+| Mode   | Push mechanism                         |
+|--------|----------------------------------------|
+| REST   | WebSocket at `{baseUrl}/ws`            |
+| Local  | `processUntilComplete()` or `subscribeToCallbacks()` |
+
+### Remote architecture: WebSocket and webhooks
+
+- **WebSocket** (current): Clients connect to `/ws`. The server broadcasts `CALLBACK_WORK` and `CALLBACK_DECISION` when execution reaches tasks or gateways. Clients react by calling `completeWorkItem()` / `submitDecision()` via REST. No polling.
+- **Webhooks** (future): For server-to-server integration, the engine could POST callbacks to configured URLs. Same payload shape as WebSocket.
 
 ### Complete Callback Flow
 
 ```
-startInstance → runWorker (local) or server runs worker (REST)
+startInstance → processUntilComplete (local) or server runs worker (REST)
      ↓
   Token reaches user/service task
      ↓
@@ -344,11 +348,11 @@ startInstance → runWorker (local) or server runs worker (REST)
      ↓
   Your app receives callback (push, no polling):
      - REST:  subscribeToCallbacks() → WebSocket at /ws
-     - Local: subscribeToCallbacks() → engine runWorker loop
+     - Local: subscribeToCallbacks() → internal engine loop
      ↓
   Do work (invoke service or present to user)
      ↓
-  completeWorkItem() → runWorker (local) or server picks up (REST)
+  completeWorkItem() → engine loop picks up (local) or server picks up (REST)
      ↓
   Token moves to next node (or instance completes)
 ```
@@ -369,8 +373,8 @@ await client.completeWorkItem(instanceId, workItemId, {
 
 ### REST vs Local Mode
 
-- **REST mode**: The server runs the worker loop. Your app only needs to poll `getState()` and call `completeWorkItem()` via the client; the server advances execution.
-- **Local mode**: You must call `runWorker()` after `completeWorkItem()` (and after `startInstance()`) so continuations are processed.
+- **REST mode**: The server runs the worker loop. Use `subscribeToCallbacks()` (WebSocket) to receive callbacks; react by calling `completeWorkItem()` / `submitDecision()`. No polling.
+- **Local mode**: Use `processUntilComplete(instanceId, handlers)` to run until terminal—handlers are invoked for each callback. Alternatively, `subscribeToCallbacks()` for background processing (internal loop drives execution).
 
 ---
 
@@ -385,30 +389,53 @@ await client.submitDecision(instanceId, decisionId, {
 });
 ```
 
-In REST mode, the server worker will pick it up. In local mode, call `runWorker()` after.
+In REST mode, the server worker will pick it up. In local mode, `processUntilComplete` continues automatically.
+
+#### Decision callback payload (LLM-friendly)
+
+The `CALLBACK_DECISION` payload is structured for LLM integration. You get direct access to BPMN strings and model metadata:
+
+| Field | Description |
+|-------|-------------|
+| `instanceId` | Process instance ID (data pool context) |
+| `gateway` | `{ id, name, type }` — the decision point |
+| `transitions` | Array of alternatives, each with: |
+| `transitions[].flowId` | Flow identifier (pass to `selectedFlowIds`) |
+| `transitions[].name` | Transition label from BPMN (e.g. "Claim approved?", "default") |
+| `transitions[].conditionExpression` | Expression from BPMN (e.g. `${approved}`) |
+| `transitions[].isDefault` | `true` when no condition matches |
+| `transitions[].targetNodeName` | Target task name (e.g. "Send Approval Mail") |
+| `transitions[].targetNodeType` | Target node type (e.g. "serviceTask") |
+
+Example with LLM: pass `instanceId`, `gateway`, and `transitions` to your LLM along with the process data pool; the LLM returns the chosen `flowId`; call `submitDecision(instanceId, decisionId, { selectedFlowIds: [flowId] })`.
 
 ---
 
-### runWorker(maxIterations?, onCallbacks?)
+### processUntilComplete(instanceId, handlers, options?)
 
-Process continuations. **Local mode only.** In REST mode the server runs its own worker.
+Process until instance reaches a terminal state. **Local mode only.** Invokes registered handlers for each callback—no polling.
 
 ```typescript
-const processed = await client.runWorker(50);
-
-// Or with callback streaming (engine-driven, MongoDB passive):
-const n = await client.runWorker(20, (items) => {
-  for (const item of items) { /* handle CALLBACK_WORK, CALLBACK_DECISION */ }
-});
+const result = await client.processUntilComplete(instanceId, {
+  onWorkItem: async (item) => {
+    // React to work item (user/service task)
+    await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+  },
+  onDecision: async (item) => {
+    // Evaluate transition, submit choice
+    await client.submitDecision(item.instanceId, item.payload.decisionId, {
+      selectedFlowIds: [chosenFlowId],
+    });
+  },
+}, { maxIterations: 500 });
+// result.status === 'COMPLETED' | 'TERMINATED' | 'FAILED'
 ```
-
-Returns the number of continuations processed.
 
 ---
 
 ### subscribeToCallbacks(callback)
 
-Subscribe to work items and decisions. Returns an unsubscribe function. **REST**: WebSocket at /ws. **Local**: engine-driven runWorker loop (MongoDB passive).
+Subscribe to work items and decisions. Returns an unsubscribe function. **REST**: WebSocket at /ws. **Local**: internal engine loop (MongoDB passive).
 
 ```typescript
 const unsubscribe = client.subscribeToCallbacks((item) => {
@@ -452,17 +479,12 @@ async function main() {
     definitionId,
   });
 
-  await client.runWorker();
-
-  const state = await client.getState(instanceId);
-  const workItem = state?.waits.workItems[0];
-  if (workItem) {
-    await client.completeWorkItem(instanceId, workItem.workItemId);
-    await client.runWorker();
-  }
-
-  const instance = await client.getInstance(instanceId);
-  console.log('Completed:', instance?.status === 'COMPLETED');
+  const result = await client.processUntilComplete(instanceId, {
+    onWorkItem: async (item) => {
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+    },
+  });
+  console.log('Completed:', result.status === 'COMPLETED');
 
   await closeDb();
 }
@@ -488,16 +510,13 @@ const { instanceId } = await client.startInstance({
   definitionId,
 });
 
-await client.runWorker();
-
-const state = await client.getState(instanceId);
-const decision = state?.waits.decisions[0];
-if (decision) {
-  await client.submitDecision(instanceId, decision.decisionId, {
-    selectedFlowIds: ['Flow_A'],
-  });
-  await client.runWorker();
-}
+const result = await client.processUntilComplete(instanceId, {
+  onDecision: async (item) => {
+    await client.submitDecision(item.instanceId, item.payload.decisionId, {
+      selectedFlowIds: ['Flow_A'],
+    });
+  },
+});
 ```
 
 ---
@@ -554,40 +573,26 @@ async function main() {
 
   console.log('Started instance:', instanceId);
 
-  // Process all 4 tasks; callbacks include name and role (lane)
-  let lastTask: { name?: string; lane?: string; kind?: string } = {};
-  for (let step = 0; step < 4; step++) {
-    await client.runWorker(20, (items) => {
-      for (const item of items) {
-        if (item.kind === 'CALLBACK_WORK') {
-          const { name, lane, kind } = item.payload;
-          lastTask = { name, lane, kind };
-          console.log(`[Callback] ${kind} "${name}" (role: ${lane ?? '—'})`);
-        }
+  // Process until complete; handlers receive callbacks with name and role (lane)
+  const result = await client.processUntilComplete(instanceId, {
+    onWorkItem: async (item) => {
+      const { name, lane, kind } = item.payload;
+      console.log(`[Callback] ${kind} "${name}" (role: ${lane ?? '—'})`);
+
+      if (kind === 'serviceTask') {
+        console.log(`  → Invoking service "${name}"`);
+        await client.completeWorkItem(instanceId, item.payload.workItemId, {
+          result: { score: 0.85 },
+        });
+      } else {
+        console.log(`  → User in ${lane ?? '—'} completes "${name}"`);
+        await client.completeWorkItem(instanceId, item.payload.workItemId, {
+          result: { completed: true },
+        });
       }
-    });
-
-    const state = await client.getState(instanceId);
-    const workItem = state?.waits?.workItems?.[0];
-    if (!workItem) break;
-
-    const { name, lane, kind } = lastTask;
-    if (kind === 'serviceTask') {
-      console.log(`  → Invoking service "${name}"`);
-      await client.completeWorkItem(instanceId, workItem.workItemId, {
-        result: { score: 0.85 },
-      });
-    } else {
-      console.log(`  → User in ${lane ?? '—'} completes "${name}"`);
-      await client.completeWorkItem(instanceId, workItem.workItemId, {
-        result: { completed: true },
-      });
-    }
-  }
-
-  await client.runWorker();
-  const instance = await client.getInstance(instanceId);
-  console.log('Final status:', instance?.status);
+    },
+  });
+  console.log('Final status:', result.status);
 
   await closeDb();
 }
@@ -621,10 +626,10 @@ const unsubscribe = client.subscribeToCallbacks((item) => {
     console.log(`[Callback] ${kind} "${name}" (role: ${lane ?? '—'})`);
 
     if (kind === 'serviceTask') {
-      // Invoke your service; when done: completeWorkItem + runWorker
+      // Invoke your service; when done: completeWorkItem (loop picks up automatically)
       invokeService(instanceId, workItemId).catch(console.error);
     } else {
-      // Forward to task UI for users in lane (role); when done: completeWorkItem + runWorker
+      // Forward to task UI for users in lane (role); when done: completeWorkItem
       addToTaskInbox(instanceId, workItemId, { name, role: lane });
     }
   }

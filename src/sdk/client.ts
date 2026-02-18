@@ -12,6 +12,7 @@ import type {
   InstanceSummary,
   InstanceState,
   CallbackItem,
+  CallbackHandlers,
 } from './types';
 
 export type SdkConfigRest = {
@@ -188,40 +189,78 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Run the worker (process continuations). Local mode only.
-   * In REST mode, the server runs its own worker loop.
-   * When outbox entries are produced (work items, decisions), onCallbacks is invoked.
-   * Callbacks stream from the engine—MongoDB is purely passive persistence.
+   * Process instance until terminal (COMPLETED/TERMINATED/FAILED) or quiescent.
+   * Invokes registered handlers for each callback—no polling.
+   * Local mode only.
    */
-  async runWorker(
-    maxIterations = 50,
-    onCallbacks?: (items: CallbackItem[]) => void
-  ): Promise<number> {
-    if (this.config.mode === 'rest') {
-      throw new Error('runWorker is only available in local mode');
+  async processUntilComplete(
+    instanceId: string,
+    handlers: CallbackHandlers,
+    options?: { maxIterations?: number }
+  ): Promise<{ status: string }> {
+    if (this.config.mode !== 'local') {
+      throw new Error('processUntilComplete is only available in local mode');
     }
     const { claimContinuation, processContinuation } = await import('../workers/processor');
-    let count = 0;
-    for (let i = 0; i < maxIterations; i++) {
-      const cont = await claimContinuation(this.config.db);
-      if (!cont) break;
-      const { outbox } = await processContinuation(this.config.db, cont);
-      count++;
-      if (outbox.length > 0 && onCallbacks) {
-        const items: CallbackItem[] = outbox.map((ob) => ({
+    const { getInstance } = await import('../instance/service');
+    const { broadcastAll } = await import('../ws/broadcast');
+    const maxIter = options?.maxIterations ?? 500;
+
+    const db = (this.config as { mode: 'local'; db: Db }).db;
+    for (let i = 0; i < maxIter; i++) {
+      const cont = await claimContinuation(db, { instanceId });
+      if (!cont) {
+        const instance = await getInstance(db, instanceId);
+        return { status: instance?.status ?? 'UNKNOWN' };
+      }
+
+      const { outbox, events } = await processContinuation(db, cont);
+      broadcastAll(outbox, events);
+
+      for (const ev of events) {
+        const payloadInstanceId = (ev.payload as { instanceId?: string }).instanceId;
+        if (
+          payloadInstanceId === instanceId &&
+          (ev.type === 'INSTANCE_COMPLETED' ||
+            ev.type === 'INSTANCE_TERMINATED' ||
+            ev.type === 'INSTANCE_FAILED')
+        ) {
+          const instance = await getInstance(db, instanceId);
+          return { status: instance?.status ?? ev.type };
+        }
+      }
+
+      for (const ob of outbox) {
+        if (ob.instanceId !== instanceId) continue;
+        const item = {
           kind: ob.kind,
           instanceId: ob.instanceId,
           payload: ob.payload,
-        })) as CallbackItem[];
-        onCallbacks(items);
+        } as CallbackItem;
+        if (ob.kind === 'CALLBACK_WORK' && handlers.onWorkItem) {
+          await handlers.onWorkItem(item as {
+            kind: 'CALLBACK_WORK';
+            instanceId: string;
+            payload: import('./types').CallbackWorkPayload;
+          });
+        }
+        if (ob.kind === 'CALLBACK_DECISION' && handlers.onDecision) {
+          await handlers.onDecision(item as {
+            kind: 'CALLBACK_DECISION';
+            instanceId: string;
+            payload: import('./types').CallbackDecisionPayload;
+          });
+        }
       }
     }
-    return count;
+
+    const instance = await getInstance(db, instanceId);
+    return { status: instance?.status ?? 'RUNNING' };
   }
 
   /**
    * Subscribe to callback events (work items, decisions).
-   * REST: WebSocket at /ws. Local: engine-driven via runWorker loop (MongoDB passive).
+   * REST: WebSocket at /ws. Local: internal engine loop (MongoDB passive).
    * Returns unsubscribe function.
    */
   subscribeToCallbacks(callback: (item: CallbackItem) => void): () => void {
@@ -232,27 +271,32 @@ export class BpmnEngineClient {
   }
 
   private _subscribeLocal(callback: (item: CallbackItem) => void): () => void {
+    if (this.config.mode !== 'local') throw new Error('Expected local config');
+    const db = this.config.db;
     let stopped = false;
     const POLL_MS = 100;
     void (async () => {
+      const { claimContinuation, processContinuation } = await import('../workers/processor');
+      const { broadcastAll } = await import('../ws/broadcast');
       while (!stopped) {
         try {
-          await this.runWorker(20, (items) => {
-            for (const item of items) {
-              if (!stopped) callback(item);
+          const cont = await claimContinuation(db);
+          if (cont) {
+            const { outbox, events } = await processContinuation(db, cont);
+            broadcastAll(outbox, events);
+            for (const ob of outbox) {
+              if (!stopped) {
+                callback({ kind: ob.kind, instanceId: ob.instanceId, payload: ob.payload } as CallbackItem);
+              }
             }
-          });
+          }
         } catch (_err) {
           // Ignore; loop continues
         }
-        if (!stopped) {
-          await new Promise((r) => setTimeout(r, POLL_MS));
-        }
+        if (!stopped) await new Promise((r) => setTimeout(r, POLL_MS));
       }
     })();
-    return () => {
-      stopped = true;
-    };
+    return () => { stopped = true; };
   }
 
   private _subscribeRest(callback: (item: CallbackItem) => void): () => void {

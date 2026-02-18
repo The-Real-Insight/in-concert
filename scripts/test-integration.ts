@@ -1,4 +1,6 @@
-process.env.MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017/tri-bpmn-engine-test';
+require('dotenv').config();
+process.env.MONGO_URL = process.env.MONGO_URL ?? 'mongodb://localhost:27017';
+process.env.MONGO_DB = process.env.MONGO_DB ?? 'BPM';
 
 import { v4 as uuidv4 } from 'uuid';
 import { readFileSync } from 'fs';

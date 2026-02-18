@@ -25,6 +25,7 @@ export type {
 } from './facade';
 export type { SdkConfig, SdkConfigRest, SdkConfigLocal } from './client';
 export type {
+  CallbackHandlers,
   DeployParams,
   DeployResult,
   StartInstanceParams,

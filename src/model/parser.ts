@@ -74,6 +74,39 @@ function getEventDefinition(el: { eventDefinitions?: { $type?: string }[] }): st
   return defs[0]?.$type ?? undefined;
 }
 
+/** Extract conditionExpression per flow id from BPMN XML (bpmn-moddle may not expose it). */
+function parseConditionExpressionsByFlow(xml: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const condRe =
+    /<bpmn:sequenceFlow\s+id="([^"]+)"[^>]*>\s*<bpmn:conditionExpression[^>]*>\s*(?:<!\[CDATA\[([^\]]*)\]\]>|([^<]+))/gi;
+  let m;
+  while ((m = condRe.exec(xml))) {
+    const flowId = m[1];
+    const body = (m[2] ?? m[3] ?? '').trim();
+    if (body) result[flowId] = body;
+  }
+  return result;
+}
+
+/** Extract custom extension attributes (ns:attr) from task nodes. Generic—no tri-specific logic. */
+function parseExtensionAttributesByNode(xml: string): Record<string, Record<string, string>> {
+  const result: Record<string, Record<string, string>> = {};
+  const tagRe = /<(?:bpmn:serviceTask|bpmn:userTask)\s+id="([^"]+)"([^>]*)>/gi;
+  let m;
+  while ((m = tagRe.exec(xml))) {
+    const nodeId = m[1];
+    const attrs = m[2] ?? '';
+    const ext: Record<string, string> = {};
+    const attrRe = /(\w+:\w+)="([^"]*)"/g;
+    let am;
+    while ((am = attrRe.exec(attrs))) {
+      ext[am[1]!] = am[2]!.trim();
+    }
+    if (Object.keys(ext).length) result[nodeId] = ext;
+  }
+  return result;
+}
+
 export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   const moddle = new BpmnModdle();
   const { rootElement: definitions } = await moddle.fromXML(xml);
@@ -110,9 +143,18 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   const nodes: Record<string, NodeDef> = {};
   const flows: Record<string, FlowDef> = {};
   const startNodeIds: string[] = [];
+  const conditionByFlow = parseConditionExpressionsByFlow(xml);
+  const extensionByNode = parseExtensionAttributesByNode(xml);
 
   for (const el of flowElements) {
-    const flowEl = el as { $type?: string; id: string; name?: string; sourceRef?: string; targetRef?: string };
+    const flowEl = el as {
+      $type?: string;
+      id: string;
+      name?: string;
+      sourceRef?: string | { id?: string };
+      targetRef?: string | { id?: string };
+      default?: { id?: string } | string;
+    };
     const type = flowEl.$type ?? '';
 
     if (type === 'bpmn:SequenceFlow') {
@@ -123,6 +165,7 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
         sourceRef: (typeof src === 'object' ? src?.id : src) ?? '',
         targetRef: (typeof tgt === 'object' ? tgt?.id : tgt) ?? '',
         name: flowEl.name,
+        conditionExpression: conditionByFlow[flowEl.id],
       };
       continue;
     }
@@ -147,6 +190,12 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       startNodeIds.push(flowEl.id);
     }
 
+    if (type === 'bpmn:ExclusiveGateway') {
+      const def = flowEl.default;
+      node.defaultFlowId =
+        typeof def === 'object' && def != null ? (def as { id?: string }).id : (def as string | undefined);
+    }
+
     if (type === 'bpmn:IntermediateCatchEvent') {
       node.timerDefinition = getTimerDefinition(el as { eventDefinitions?: unknown[] });
       node.messageRef = getMessageRef(el as { messageRef?: { name?: string }; eventDefinitions?: unknown[] });
@@ -166,6 +215,9 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       const isInterrupting = boundaryEl.cancelActivity !== false;
       (node as NodeDef & { interrupting?: boolean }).interrupting = isInterrupting;
     }
+
+    const nodeExtensions = extensionByNode[flowEl.id];
+    if (nodeExtensions) node.extensions = nodeExtensions;
 
     nodes[flowEl.id] = node;
   }

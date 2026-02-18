@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  id="Defs_Claim"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_Claim" isExecutable="true">
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_Beneficiary" name="Beneficiary">
+        <bpmn:flowNodeRef>Task_ClaimEntry</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_ClaimsAssessor" name="Claims Assessor">
+        <bpmn:flowNodeRef>Task_ClaimAssessment</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:userTask id="Task_ClaimEntry" name="Claim Entry"/>
+    <bpmn:userTask id="Task_ClaimAssessment" name="Claim Assessment"/>
+    <bpmn:exclusiveGateway id="Gateway_Approval" name="Can be approved?" default="Flow_Rejection"/>
+    <bpmn:serviceTask id="Task_SendRejectionMail" name="Send Rejection Mail" tri:toolId="rejection-mail-tool" tri:toolType="mailTool"/>
+    <bpmn:serviceTask id="Task_SendApprovalMail" name="Send Approval Mail" tri:toolId="approval-mail-tool" tri:toolType="mailTool"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_ClaimEntry"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_ClaimEntry" targetRef="Task_ClaimAssessment"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_ClaimAssessment" targetRef="Gateway_Approval"/>
+    <bpmn:sequenceFlow id="Flow_Rejection" sourceRef="Gateway_Approval" targetRef="Task_SendRejectionMail" name="No"/>
+    <bpmn:sequenceFlow id="Flow_Approval" sourceRef="Gateway_Approval" targetRef="Task_SendApprovalMail" name="Yes">
+      <bpmn:conditionExpression xsi:type="tFormalExpression"><![CDATA[${approved}]]></bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Task_SendRejectionMail" targetRef="EndEvent_1"/>
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Task_SendApprovalMail" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

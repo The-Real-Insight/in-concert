@@ -8,7 +8,7 @@ export async function connectDb(): Promise<Db> {
   if (db) return db;
   client = new MongoClient(config.mongoUrl);
   await client.connect();
-  db = client.db();
+  db = client.db(config.mongoDb);
   return db;
 }
 

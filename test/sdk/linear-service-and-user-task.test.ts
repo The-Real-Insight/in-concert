@@ -13,10 +13,7 @@ import {
   shouldPurgeDb,
   loadBpmn,
   deployAndStart,
-  runWorkerWithProjection,
-  completeWorkItem,
   getWorklistTasks,
-  getState,
 } from '../scripts/helpers';
 import { ensureIndexes } from '../../src/db/indexes';
 import { addStreamHandler } from '../../src/ws/broadcast';
@@ -28,7 +25,13 @@ let db: Db;
 let client: BpmnEngineClient;
 let unsubscribeProjection: (() => void) | null = null;
 
-const callbackLog: Array<{ kind: string; name?: string; role?: string; workItemId: string }> = [];
+const callbackLog: Array<{
+  kind: string;
+  name?: string;
+  role?: string;
+  workItemId: string;
+  toolInvocation?: string;
+}> = [];
 
 beforeAll(async () => {
   db = await setupDb();
@@ -56,12 +59,13 @@ function uniqueName(base: string) {
 
 function onCallback(item: CallbackItem) {
   if (item.kind === 'CALLBACK_WORK') {
-    const payload = item.payload as { workItemId: string; name?: string; lane?: string };
+    const payload = item.payload as { workItemId: string; name?: string; lane?: string; nodeId?: string };
     const entry = {
       kind: 'CALLBACK_WORK',
       name: payload.name,
       role: payload.lane,
       workItemId: payload.workItemId,
+      toolInvocation: undefined,
     };
     callbackLog.push(entry);
     console.log('[Callback]', entry);
@@ -82,35 +86,20 @@ describe('SDK: linear-service-and-user-task', () => {
       definitionId,
     });
 
-    // Process all 4 tasks in sequence
+    const result = await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        onCallback(item);
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+    });
+
+    expect(result.status).toBe('COMPLETED');
     const expectedOrder = [
       { name: 'EnterCaseData', role: 'FrontOffice' },
       { name: 'AssessCase', role: undefined },
       { name: 'ApproveAssessment', role: 'BackOffice' },
       { name: 'InitiatePayment', role: 'Accounting' },
     ];
-
-    for (let i = 0; i < expectedOrder.length; i++) {
-      const n = await client.runWorker(10, (items) => {
-        for (const item of items) onCallback(item);
-      });
-      expect(n).toBeGreaterThanOrEqual(0);
-
-      const state = await client.getState(instanceId);
-      const workItem = state?.waits?.workItems?.[0];
-      expect(workItem).toBeDefined();
-      expect(callbackLog.length).toBe(i + 1);
-      expect(callbackLog[i]!.name).toBe(expectedOrder[i]!.name);
-      expect(callbackLog[i]!.role).toBe(expectedOrder[i]!.role);
-
-      await client.completeWorkItem(instanceId, workItem!.workItemId);
-    }
-
-    await client.runWorker(10);
-
-    const instance = await client.getInstance(instanceId);
-    expect(instance?.status).toBe('COMPLETED');
-
     expect(callbackLog).toHaveLength(4);
     expect(callbackLog.map((c) => ({ name: c.name, role: c.role }))).toEqual(
       expectedOrder.map((e) => ({ name: e.name, role: e.role }))
@@ -122,27 +111,15 @@ describe('SDK: linear-service-and-user-task', () => {
       processName: uniqueName('WorklistTest'),
     });
 
-    // Run until EnterCaseData (user task) is created and projected
-    await runWorkerWithProjection(db);
-    const afterEnter = await getWorklistTasks(db, { instanceId });
-    expect(afterEnter.length).toBeGreaterThanOrEqual(1);
-    const enterTask = afterEnter.find((t) => t.name === 'EnterCaseData');
-    expect(enterTask).toBeDefined();
-    expect(enterTask!.status).toBe('OPEN');
+    // Process with callbacks: complete EnterCaseData and AssessCase, leave ApproveAssessment
+    await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        const name = (item.payload as { name?: string }).name;
+        if (name === 'ApproveAssessment') return; // Leave for worklist
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+    });
 
-    // Complete EnterCaseData, run worker to reach AssessCase (service task)
-    await completeWorkItem(db, instanceId, enterTask!._id);
-    await runWorkerWithProjection(db);
-
-    // Complete AssessCase (service task) - only work item at this point
-    const stateAfterAssess = await getState(db, instanceId);
-    const assessWorkItem = stateAfterAssess?.waits?.workItems?.[0];
-    if (assessWorkItem) {
-      await completeWorkItem(db, instanceId, assessWorkItem.workItemId);
-      await runWorkerWithProjection(db);
-    }
-
-    // ApproveAssessment (user task) is now active; intentionally leave it uncompleted
     const openTasks = await getWorklistTasks(db, { status: 'OPEN' });
     const approveTask = openTasks.find((t) => t.name === 'ApproveAssessment' && t.instanceId === instanceId);
     expect(approveTask).toBeDefined();
@@ -154,6 +131,45 @@ describe('SDK: linear-service-and-user-task', () => {
     const completedTasks = await getWorklistTasks(db, { instanceId });
     const completedEnter = completedTasks.find((t) => t.name === 'EnterCaseData');
     expect(completedEnter?.status).toBe('COMPLETED');
+  });
+
+  it('tri-tool model: extensions in payload, callback looks up tri: and indicates tool invocation', async () => {
+    const bpmn = loadBpmn('tri-tool-linear.bpmn');
+    const { definitionId } = await client.deploy({
+      name: uniqueName('TriTool'),
+      version: 1,
+      bpmnXml: bpmn,
+    });
+
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+    });
+
+    const result = await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        onCallback(item);
+        const p = item.payload as { workItemId: string; nodeId?: string; name?: string; extensions?: Record<string, string> };
+        const toolId = p.extensions?.['tri:toolId'];
+        const toolType = p.extensions?.['tri:toolType'];
+        const tri = toolId && toolType ? { toolId, toolType } : undefined;
+        if (tri) {
+          callbackLog[callbackLog.length - 1]!.toolInvocation = `invoke tool: toolId=${tri.toolId} toolType=${tri.toolType}`;
+          console.log(
+            '[onWorkItem] TOOL RESOLUTION PLUG: resolve(toolId, toolType) → invoke',
+            { toolId: tri.toolId, toolType: tri.toolType, nodeId: p.nodeId, task: p.name, workItemId: p.workItemId }
+          );
+        }
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+    });
+
+    expect(result.status).toBe('COMPLETED');
+    expect(callbackLog).toHaveLength(1);
+    expect(callbackLog[0]!.name).toBe('Test - BPMN');
+    expect(callbackLog[0]!.toolInvocation).toBe(
+      'invoke tool: toolId=696272408e106ae502e3d791 toolType=promptTool'
+    );
   });
 
   it('subscribeToCallbacks receives and logs task properties', async () => {
@@ -169,33 +185,29 @@ describe('SDK: linear-service-and-user-task', () => {
       definitionId,
     });
 
-    const unsubscribe = client.subscribeToCallbacks(onCallback);
-
-    // Wait for first callback (EnterCaseData)
+    let unsub: () => void;
     await new Promise<void>((resolve) => {
-      const check = () => {
-        if (callbackLog.length >= 1) {
+      unsub = client.subscribeToCallbacks((item) => {
+        if (item.instanceId !== instanceId) return;
+        onCallback(item);
+        if (callbackLog.some((c) => c.name === 'EnterCaseData')) {
+          unsub!();
           resolve();
-          return;
         }
-        setTimeout(check, 50);
-      };
-      check();
+      });
     });
-
-    unsubscribe();
 
     expect(callbackLog.length).toBeGreaterThanOrEqual(1);
     expect(callbackLog[0]!.name).toBe('EnterCaseData');
     expect(callbackLog[0]!.role).toBe('FrontOffice');
 
-    // Complete remaining work items to finish the process
-    for (let i = 0; i < 4; i++) {
-      const state = await client.getState(instanceId);
-      const workItem = state?.waits?.workItems?.[0];
-      if (!workItem) break;
-      await client.completeWorkItem(instanceId, workItem.workItemId);
-      await client.runWorker(10);
-    }
+    // Complete first work item (subscribe logged but did not complete), then process rest
+    await client.completeWorkItem(instanceId, callbackLog[0]!.workItemId);
+    await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        onCallback(item);
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+    });
   });
 });

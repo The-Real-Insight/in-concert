@@ -3,17 +3,16 @@
  * Uses mock callbacks with log output per spec.
  * Requires MongoDB (MONGO_URL).
  * Each test deploys with a unique process name so runs don't require purging.
+ * Uses BpmnEngineClient.processUntilComplete (event-driven, no polling).
  */
 import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
+import { BpmnEngineClient } from '../../src/sdk/client';
 import { ensureIndexes } from '../../src/db/indexes';
 import {
   setupDb,
   teardownDb,
   deployAndStart,
-  runWorker,
-  completeWorkItem,
-  submitDecision,
   getEvents,
   getState,
   mockCallbacks,
@@ -32,12 +31,14 @@ function bpmnFile(key: string): string {
 }
 
 let db: Db;
+let client: BpmnEngineClient;
 let runId: string;
 
 beforeAll(async () => {
   jest.setTimeout(10000);
   runId = uuidv4().slice(0, 8);
   db = await setupDb();
+  client = new BpmnEngineClient({ mode: 'local', db });
 }, 10000);
 
 afterAll(async () => {
@@ -58,18 +59,17 @@ describe('T01 - Simple linear flow', () => {
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T01_Linear_${runId}`,
     });
-    await runWorker(db);
 
-    const state = await getState(db, instanceId);
-    expect(state?.waits?.workItems).toHaveLength(1);
-    mockCallbacks.log('workItem', state?.waits?.workItems?.[0]);
+    const result = await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        const state = await getState(db, instanceId);
+        mockCallbacks.log('workItem', state?.waits?.workItems?.[0]);
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+    });
 
-    await completeWorkItem(db, instanceId, state!.waits!.workItems![0].workItemId);
-    await runWorker(db);
-
+    expect(result.status).toBe('COMPLETED');
     const finalState = await getState(db, instanceId);
-    expect(finalState?.status).toBe('COMPLETED');
-
     const events = await getEvents(db, instanceId);
     const tokenCreated = events.filter((e) => e.type === 'TOKEN_CREATED');
     expect(tokenCreated.length).toBeGreaterThanOrEqual(1);
@@ -85,28 +85,33 @@ describe('T02 - XOR branch selected', () => {
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T02_XOR_${runId}`,
     });
-    await runWorker(db);
 
-    const state = await getState(db, instanceId);
-    const decision = state?.waits?.decisions?.[0];
-    expect(decision).toBeDefined();
-    mockCallbacks.log('decision', decision);
+    const result = await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+      onDecision: async (item) => {
+        const p = item.payload as { decisionId?: string; evaluation?: { outgoing?: { flowId: string }[] } };
+        const decisionId = p.decisionId;
+        const flowIds = p.evaluation?.outgoing?.map((o) => o.flowId) ?? [];
+        mockCallbacks.log('decision', { decisionId, flowIds });
+        if (decisionId && flowIds.includes('Flow_A')) {
+          await client.submitDecision(item.instanceId, decisionId, { selectedFlowIds: ['Flow_A'] });
+        }
+      },
+    });
 
-    const events = await getEvents(db, instanceId);
-    expect(events.some((e) => e.type === 'DECISION_REQUESTED')).toBe(true);
-    expect(events.some((e) => e.type === 'INSTANCE_FAILED')).toBe(false);
-
-    await submitDecision(db, instanceId, decision!.decisionId, ['Flow_A']);
-    await runWorker(db);
-
+    expect(result.status).toBe('COMPLETED');
     const afterEvents = await getEvents(db, instanceId);
     const afterState = await getState(db, instanceId);
+    expect(afterEvents.some((e) => e.type === 'DECISION_REQUESTED')).toBe(true);
+    expect(afterEvents.some((e) => e.type === 'INSTANCE_FAILED')).toBe(false);
     const tokenCreatedAfter = afterEvents.filter(
       (e) => e.type === 'TOKEN_CREATED' && (e.payload as { nodeId?: string }).nodeId === 'Task_A'
     );
     expect(tokenCreatedAfter.length).toBe(1);
     expect(afterEvents.some((e) => e.type === 'DECISION_RECORDED')).toBe(true);
-    assertMonotonicEvents(await getEvents(db, instanceId));
+    assertMonotonicEvents(afterEvents);
     assertNoDuplicateTokens(afterState!);
   });
 });
@@ -123,14 +128,15 @@ describe('T04 - Parallel split/join', () => {
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T04_AND_${runId}`,
     });
-    await runWorker(db);
 
-    const state = await getState(db, instanceId);
-    const workItems = state?.waits?.workItems ?? [];
-    expect(workItems).toHaveLength(2);
-    const taskA = workItems.find((w) => w.nodeId === 'Task_A');
-    await completeWorkItem(db, instanceId, taskA!.workItemId);
-    await runWorker(db);
+    await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        const nodeId = (item.payload as { nodeId?: string }).nodeId;
+        if (nodeId === 'Task_A') {
+          await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+        }
+      },
+    });
 
     const afterState = await getState(db, instanceId);
     expect(afterState?.status).toBe('RUNNING');
@@ -145,17 +151,15 @@ describe('T05 - Parallel join fires', () => {
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T05_AND_${runId}`,
     });
-    await runWorker(db);
 
-    const state = await getState(db, instanceId);
-    const items = state?.waits?.workItems ?? [];
-    for (const w of items) {
-      await completeWorkItem(db, instanceId, w.workItemId);
-      await runWorker(db);
-    }
+    const result = await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+    });
 
+    expect(result.status).toBe('COMPLETED');
     const finalState = await getState(db, instanceId);
-    expect(finalState?.status).toBe('COMPLETED');
     assertMonotonicEvents(await getEvents(db, instanceId));
     assertNoDuplicateTokens(finalState!);
   });
@@ -199,14 +203,13 @@ describe('T17 - Duplicate work completion', () => {
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T17_Linear_${runId}`,
     });
-    await runWorker(db);
 
-    const state = await getState(db, instanceId);
-    const workItemId = state!.waits!.workItems![0].workItemId;
-
-    await completeWorkItem(db, instanceId, workItemId);
-    await completeWorkItem(db, instanceId, workItemId);
-    await runWorker(db);
+    await client.processUntilComplete(instanceId, {
+      onWorkItem: async (item) => {
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+        await client.completeWorkItem(item.instanceId, item.payload.workItemId);
+      },
+    });
 
     const finalState = await getState(db, instanceId);
     const events = await getEvents(db, instanceId);
@@ -222,14 +225,15 @@ describe('T18 - Duplicate decision', () => {
     const { instanceId } = await deployAndStart(db, modelFile, {
       processName: `T18_XOR_${runId}`,
     });
-    await runWorker(db);
 
-    const state = await getState(db, instanceId);
-    const decisionId = state!.waits!.decisions![0].decisionId;
-
-    await submitDecision(db, instanceId, decisionId, ['Flow_A']);
-    await submitDecision(db, instanceId, decisionId, ['Flow_A']);
-    await runWorker(db);
+    await client.processUntilComplete(instanceId, {
+      onDecision: async (item) => {
+        const p = item.payload as { decisionId?: string };
+        const decisionId = p.decisionId!;
+        await client.submitDecision(item.instanceId, decisionId, { selectedFlowIds: ['Flow_A'] });
+        await client.submitDecision(item.instanceId, decisionId, { selectedFlowIds: ['Flow_A'] });
+      },
+    });
 
     const finalState = await getState(db, instanceId);
     assertNoDuplicateTokens(finalState!);
