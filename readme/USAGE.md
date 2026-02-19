@@ -978,6 +978,14 @@ The **interactive CLI** (`npm run cli`) demonstrates a full worklist-driven flow
 
 5. **Audit trail** – Before exiting, the CLI fetches `client.getProcessHistory(instanceId)` and renders a table of all process task executions (instance start, task started, task completed) with started/completed user details.
 
+### Process model 4: input-parallel-with-subprocess
+
+This model uses an AND gateway to split into three parallel branches, then joins before invoking a subprocess:
+
+![input-parallel-with-subprocess flowchart](input-parallel-with-subprocess.svg)
+
+*The subprocess runs after all three parallel branches (a, b, c) complete. Inside the subprocess: input-d → assess-d → input-e → assess-e, then return to the parent and run calculate-results.*
+
 ### Client code (local mode)
 
 ```typescript

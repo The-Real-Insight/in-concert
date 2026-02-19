@@ -1,0 +1,21 @@
+flowchart TB
+    Start([Start]) --> AND_Split{{"AND split"}}
+    AND_Split --> InputA["Input the data for a"]
+    AND_Split --> InputB["Input the data for b"]
+    AND_Split --> InputC["Input the data for c"]
+    InputA --> AssessA["assess-a"]
+    InputB --> AssessB["assess-b"]
+    InputC --> AssessC["assess-c"]
+    AssessA --> AND_Join{{"AND join"}}
+    AssessB --> AND_Join
+    AssessC --> AND_Join
+    AND_Join --> SubProc["Subprocess: further-assessments"]
+    SubProc --> Calc["calculate-results"]
+    Calc --> End([End])
+
+    subgraph SubProc_Inner["further-assessments (subprocess)"]
+        direction TB
+        InputD["Input the data for d"] --> AssessD["assess-d"]
+        AssessD --> InputE["Input the data for e"]
+        InputE --> AssessE["assess-e"]
+    end

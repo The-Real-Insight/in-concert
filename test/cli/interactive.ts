@@ -79,6 +79,11 @@ const MODELS: ProcessModel[] = [
     label: 'input-sequence-with-subprocess — input/assess a,b,c → subprocess (input-d, assess-d, input-e, assess-e) → calculate-results',
     bpmnFile: 'input-sequence-with-subprocess.bpmn',
   },
+  {
+    id: 'input-parallel-with-subprocess',
+    label: 'input-parallel-with-subprocess — AND split: input/assess a,b,c in parallel → AND join → subprocess → calculate-results',
+    bpmnFile: 'input-parallel-with-subprocess.bpmn',
+  },
 ];
 
 function prompt(question: string): Promise<string> {
@@ -92,10 +97,11 @@ function prompt(question: string): Promise<string> {
 }
 
 async function main() {
-  console.log('Available process models:');
+  console.log('Available process models:\n');
   MODELS.forEach((m, i) => {
     console.log(`  ${i + 1}. ${m.label}`);
   });
+  console.log('');
   const raw = await prompt('Select model (1): ');
   const idx = raw ? parseInt(raw, 10) - 1 : 0;
   const model = MODELS[idx >= 0 && idx < MODELS.length ? idx : 0]!;

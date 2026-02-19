@@ -44,6 +44,7 @@ export const BPMN_FILES: Record<string, string> = {
   'input-sequence.bpmn': 'input-sequence.bpmn',
   'input-sequence-with-assess.bpmn': 'input-sequence-with-assess.bpmn',
   'input-sequence-with-subprocess.bpmn': 'input-sequence-with-subprocess.bpmn',
+  'input-parallel-with-subprocess.bpmn': 'input-parallel-with-subprocess.bpmn',
 };
 
 export function loadBpmn(modelFile: string): string {
