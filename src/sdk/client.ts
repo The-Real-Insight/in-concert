@@ -11,6 +11,7 @@ import type {
   StartInstanceResult,
   InstanceSummary,
   InstanceState,
+  ProcessHistoryEntry,
   CallbackItem,
   CallbackHandlers,
   EngineInitConfig,
@@ -108,6 +109,22 @@ export class BpmnEngineClient {
     const { getInstance } = await import('../instance/service');
     const result = await getInstance(this.config.db, instanceId);
     return result as InstanceSummary | null;
+  }
+
+  /**
+   * Get process history / audit trail for an instance.
+   * Returns entries ordered by seq (execution order).
+   */
+  async getProcessHistory(instanceId: string): Promise<ProcessHistoryEntry[]> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/instances/${instanceId}/history`);
+      if (res.status === 404) return [];
+      if (!res.ok) throw new Error(`Get history failed: ${res.status}`);
+      const data = (await res.json()) as ProcessHistoryEntry[] | { entries?: ProcessHistoryEntry[] };
+      return (Array.isArray(data) ? data : data.entries ?? []) as ProcessHistoryEntry[];
+    }
+    const { getProcessHistory } = await import('../history/service');
+    return getProcessHistory(this.config.db, instanceId);
   }
 
   /**

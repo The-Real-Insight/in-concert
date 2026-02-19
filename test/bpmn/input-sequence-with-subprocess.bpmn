@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_InputSequenceSubprocess"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_InputSequenceSubprocess" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:userTask id="Task_InputA" name="Input the data for a"/>
+    <bpmn:serviceTask id="Task_AssessA" name="assess-a"/>
+    <bpmn:userTask id="Task_InputB" name="Input the data for b"/>
+    <bpmn:serviceTask id="Task_AssessB" name="assess-b"/>
+    <bpmn:userTask id="Task_InputC" name="Input the data for c"/>
+    <bpmn:serviceTask id="Task_AssessC" name="assess-c"/>
+
+    <bpmn:subProcess id="Sub_FurtherAssessments" name="further-assessments">
+      <bpmn:startEvent id="Sub_Start"/>
+      <bpmn:userTask id="Task_InputD" name="Input the data for d"/>
+      <bpmn:serviceTask id="Task_AssessD" name="assess-d"/>
+      <bpmn:userTask id="Task_InputE" name="Input the data for e"/>
+      <bpmn:serviceTask id="Task_AssessE" name="assess-e"/>
+      <bpmn:endEvent id="Sub_End"/>
+      <bpmn:sequenceFlow id="Sub_F1" sourceRef="Sub_Start" targetRef="Task_InputD"/>
+      <bpmn:sequenceFlow id="Sub_F2" sourceRef="Task_InputD" targetRef="Task_AssessD"/>
+      <bpmn:sequenceFlow id="Sub_F3" sourceRef="Task_AssessD" targetRef="Task_InputE"/>
+      <bpmn:sequenceFlow id="Sub_F4" sourceRef="Task_InputE" targetRef="Task_AssessE"/>
+      <bpmn:sequenceFlow id="Sub_F5" sourceRef="Task_AssessE" targetRef="Sub_End"/>
+    </bpmn:subProcess>
+
+    <bpmn:serviceTask id="Task_CalculateResults" name="calculate-results"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_InputA"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_InputA" targetRef="Task_AssessA"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_AssessA" targetRef="Task_InputB"/>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Task_InputB" targetRef="Task_AssessB"/>
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Task_AssessB" targetRef="Task_InputC"/>
+    <bpmn:sequenceFlow id="Flow_5b" sourceRef="Task_InputC" targetRef="Task_AssessC"/>
+    <bpmn:sequenceFlow id="Flow_6" sourceRef="Task_AssessC" targetRef="Sub_FurtherAssessments"/>
+    <bpmn:sequenceFlow id="Flow_7" sourceRef="Sub_FurtherAssessments" targetRef="Task_CalculateResults"/>
+    <bpmn:sequenceFlow id="Flow_8" sourceRef="Task_CalculateResults" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

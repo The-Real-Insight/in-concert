@@ -206,7 +206,25 @@ describe('T15 - Message throw', () => {
 });
 
 describe('T16 - Embedded subprocess', () => {
-  it.skip('Subprocess - requires subprocess support', async () => {});
+  it('Subprocess: complete inner task, scope ends, process completes', async () => {
+    const modelFile = bpmnFile('subprocess.bpmn');
+    const { instanceId } = await deployAndStart(db, modelFile, {
+      processName: `T16_Subprocess_${runId}`,
+      user: MOCK_USER,
+    });
+
+    const completeWork = async (item: { instanceId: string; payload: { workItemId: string } }) => {
+      await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+    };
+    const result = await client.processUntilComplete(instanceId, {
+      onServiceCall: completeWork,
+    });
+
+    expect(result.status).toBe('COMPLETED');
+    const events = await getEvents(db, instanceId);
+    expect(events.some((e) => e.type === 'SCOPE_CREATED' && (e.payload as { kind?: string }).kind === 'SUBPROCESS')).toBe(true);
+    expect(events.some((e) => e.type === 'SCOPE_ENDED' && (e.payload as { kind?: string }).kind === 'SUBPROCESS')).toBe(true);
+  });
 });
 
 describe('T17 - Duplicate work completion', () => {

@@ -6,7 +6,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./sdk": "./dist/sdk/index.js",
-    "./db": "./dist/db/index.js"
+    "./db": "./dist/db/index.js",
+    "./local": "./dist/local.js"
   },
   "scripts": {
     "build": "tsc",
@@ -21,6 +22,7 @@
     "test:callback:user": "jest --testPathPattern=test/scripts/callback-demo --testNamePattern=\"User task\" --testTimeout=30000 --silent=false",
     "test:callback:service": "jest --testPathPattern=test/scripts/callback-demo --testNamePattern=\"Service task\" --testTimeout=30000 --silent=false",
     "test:integration": "ts-node scripts/test-integration.ts",
+    "cli": "ts-node -r dotenv/config test/cli/interactive.ts",
     "test:sdk": "jest --testPathPattern=test/sdk --testTimeout=20000 --runInBand"
   },
   "keywords": [

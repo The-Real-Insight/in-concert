@@ -878,7 +878,7 @@ async function main() {
 
       // We will create a prompt with the question to evaluated and combine with entries from the data pool
       // Probably to retrieve an evaluation condition
-      
+
       const approved = true; 
       const selected = approved
         ? transitions?.find((t) => t.conditionExpression)?.flowId
@@ -957,6 +957,153 @@ main().catch(console.error);
 ### Test reference
 
 See `test/sdk/xor-with-transition-conditions.test.ts` for the full test: `worklist flow: start → wait → load → activate → complete, repeat for each user task`. It uses `client.listTasks`, `client.activateTask`, and `client.completeUserTask`.
+
+---
+
+## Interactive CLI Example
+
+The **interactive CLI** (`npm run cli`) demonstrates a full worklist-driven flow: model selection, process start, and step-by-step user input for each task. Use it as a reference for building UIs or agentic flows.
+
+### Flow
+
+1. **Model selection** – User picks a process from a list (e.g. input-sequence).
+2. **Deploy or reuse** – If the definition already exists, reuse it; otherwise deploy.
+3. **Start instance** – Start a new process instance with a user.
+4. **Engine + worklist loop**:
+   - Run the engine until it quiesces.
+   - If status is COMPLETED (and a service task ran), print the result, render the audit trail table, and exit.
+   - Otherwise poll the worklist every 500ms until an OPEN task appears.
+   - Pick the top task, activate it, print its description, prompt for input.
+   - Complete the task with the user’s input, then repeat.
+
+5. **Audit trail** – Before exiting, the CLI fetches `client.getProcessHistory(instanceId)` and renders a table of all process task executions (instance start, task started, task completed) with started/completed user details.
+
+### Client code (local mode)
+
+```typescript
+import { createInterface } from 'readline';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import { connectDb, closeDb, ensureIndexes, getCollections } from 'tri-bpmn-engine/db';
+import { BpmnEngineClient } from 'tri-bpmn-engine/sdk';
+import { addStreamHandler, createProjectionHandler } from 'tri-bpmn-engine/local';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function main() {
+  const db = await connectDb();
+  await ensureIndexes(db);
+  addStreamHandler(createProjectionHandler(db));
+
+  const client = new BpmnEngineClient({ mode: 'local', db });
+
+  let serviceTaskResult: string | null = null;
+
+  client.init({
+    onWorkItem: async () => {
+      // Skip – user tasks handled via worklist
+    },
+    onServiceCall: async (item) => {
+      const result = Math.floor(Math.random() * 1000);
+      serviceTaskResult = `The result is ${result}`;
+      await client.completeExternalTask(item.instanceId, item.payload.workItemId);
+    },
+  });
+
+  const model = { id: 'input-sequence', bpmnFile: 'input-sequence.bpmn' };
+  const bpmnXml = readFileSync(join(__dirname, 'test/bpmn', model.bpmnFile), 'utf8');
+
+  const { ProcessDefinitions } = getCollections(db);
+  let definitionId = (await ProcessDefinitions.findOne(
+    { name: model.id, version: 1 },
+    { projection: { _id: 1 } }
+  ))?._id;
+  if (!definitionId) {
+    const deployed = await client.deploy({
+      name: model.id,
+      version: 1,
+      bpmnXml,
+    });
+    definitionId = deployed.definitionId;
+  }
+
+  const user = { email: 'cli-user@example.com' };
+  const { instanceId } = await client.startInstance({
+    commandId: uuidv4(),
+    definitionId,
+    user,
+  });
+
+  const userId = user.email;
+
+  while (true) {
+    const result = await client.run(instanceId);
+
+    if (result.status === 'COMPLETED') {
+      if (serviceTaskResult) console.log(serviceTaskResult);
+      await closeDb();
+      process.exit(0);
+    }
+
+    let openTasks = await client.listTasks({
+      instanceId,
+      status: 'OPEN',
+      sortOrder: 'asc',
+    });
+    while (openTasks.length === 0) {
+      await sleep(500);
+      openTasks = await client.listTasks({
+        instanceId,
+        status: 'OPEN',
+        sortOrder: 'asc',
+      });
+    }
+
+    const task = openTasks[0]!;
+    await client.activateTask(task._id, { userId });
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const input = await new Promise<string>((resolve) => {
+      rl.question(`\n${task.name}\n> `, (answer) => {
+        rl.close();
+        resolve(answer.trim());
+      });
+    });
+
+    await client.completeUserTask(instanceId, task._id, {
+      user: { email: userId },
+      result: { value: input },
+    });
+  }
+}
+
+main().catch(async (err) => {
+  console.error(err);
+  await closeDb();
+  process.exit(1);
+});
+```
+
+### Explanation
+
+| Step | What happens |
+|------|--------------|
+| `addStreamHandler(createProjectionHandler(db))` | Projects engine callbacks to the worklist. Needed so `listTasks()` returns user tasks. |
+| `onWorkItem` | No-op; user tasks are handled via the worklist, not inline. |
+| `onServiceCall` | Completes the service task and stores a result (e.g. random number) for later display. |
+| Reuse `definitionId` | If the definition exists, avoids duplicate deploy and reuses it. |
+| `while (openTasks.length === 0)` | Poll every 500ms until a task appears; stops as soon as one is found. |
+| `activateTask` | Claim the task (OPEN → CLAIMED) so the current user can complete it. |
+| `completeUserTask` | Submit the user’s input; engine processes on the next `run()`. |
+
+### Run it
+
+```bash
+npm run cli
+```
+
+Models: `input-sequence` (input-a → input-b → input-c → calculate-results), `input-sequence-with-assess` (adds assess-a, assess-b, assess-c after each input; service tasks log "Assessing X" with the last user input). Source: `test/cli/interactive.ts`.
 
 ---
 

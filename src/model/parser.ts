@@ -143,84 +143,107 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   const nodes: Record<string, NodeDef> = {};
   const flows: Record<string, FlowDef> = {};
   const startNodeIds: string[] = [];
+  const subprocessStartNodeIds: Record<string, string[]> = {};
   const conditionByFlow = parseConditionExpressionsByFlow(xml);
   const extensionByNode = parseExtensionAttributesByNode(xml);
 
-  for (const el of flowElements) {
-    const flowEl = el as {
-      $type?: string;
-      id: string;
-      name?: string;
-      sourceRef?: string | { id?: string };
-      targetRef?: string | { id?: string };
-      default?: { id?: string } | string;
-    };
-    const type = flowEl.$type ?? '';
-
-    if (type === 'bpmn:SequenceFlow') {
-      const src = flowEl.sourceRef as { id?: string } | string | undefined;
-      const tgt = flowEl.targetRef as { id?: string } | string | undefined;
-      flows[flowEl.id] = {
-        id: flowEl.id,
-        sourceRef: (typeof src === 'object' ? src?.id : src) ?? '',
-        targetRef: (typeof tgt === 'object' ? tgt?.id : tgt) ?? '',
-        name: flowEl.name,
-        conditionExpression: conditionByFlow[flowEl.id],
+  function processFlowElements(
+    elements: unknown[],
+    parentSubprocessId?: string
+  ): void {
+    for (const el of elements) {
+      const flowEl = el as {
+        $type?: string;
+        id: string;
+        name?: string;
+        flowElements?: unknown[];
+        sourceRef?: string | { id?: string };
+        targetRef?: string | { id?: string };
+        default?: { id?: string } | string;
       };
-      continue;
+      const type = flowEl.$type ?? '';
+
+      if (type === 'bpmn:SequenceFlow') {
+        const src = flowEl.sourceRef as { id?: string } | string | undefined;
+        const tgt = flowEl.targetRef as { id?: string } | string | undefined;
+        flows[flowEl.id] = {
+          id: flowEl.id,
+          sourceRef: (typeof src === 'object' ? src?.id : src) ?? '',
+          targetRef: (typeof tgt === 'object' ? tgt?.id : tgt) ?? '',
+          name: flowEl.name,
+          conditionExpression: conditionByFlow[flowEl.id],
+        };
+        continue;
+      }
+
+      if (!SUPPORTED_NODE_TYPES.has(type)) {
+        continue;
+      }
+
+      const incoming = resolveIncoming(el as { incoming?: { id: string }[] });
+      const outgoing = resolveOutgoing(el as { outgoing?: { id: string }[] });
+
+      const node: NodeDef = {
+        id: flowEl.id,
+        type: getNodeType(type),
+        name: flowEl.name,
+        laneRef: nodeIdToLane[flowEl.id],
+        incoming,
+        outgoing,
+      };
+      if (parentSubprocessId) {
+        node.parentNodeId = parentSubprocessId;
+      }
+
+      if (type === 'bpmn:StartEvent') {
+        if (parentSubprocessId) {
+          if (!subprocessStartNodeIds[parentSubprocessId])
+            subprocessStartNodeIds[parentSubprocessId] = [];
+          subprocessStartNodeIds[parentSubprocessId].push(flowEl.id);
+        } else {
+          startNodeIds.push(flowEl.id);
+        }
+      }
+
+      if (type === 'bpmn:ExclusiveGateway') {
+        const def = flowEl.default;
+        node.defaultFlowId =
+          typeof def === 'object' && def != null ? (def as { id?: string }).id : (def as string | undefined);
+      }
+
+      if (type === 'bpmn:IntermediateCatchEvent') {
+        node.timerDefinition = getTimerDefinition(el as { eventDefinitions?: unknown[] });
+        node.messageRef = getMessageRef(el as { messageRef?: { name?: string }; eventDefinitions?: unknown[] });
+        node.eventDefinition = getEventDefinition(el as { eventDefinitions?: { $type?: string }[] });
+      }
+
+      if (type === 'bpmn:IntermediateThrowEvent') {
+        node.messageRef = getMessageRef(el as { messageRef?: { name?: string }; eventDefinitions?: unknown[] });
+      }
+
+      if (type === 'bpmn:BoundaryEvent') {
+        const boundaryEl = el as { attachedToRef?: { id: string } | string; eventDefinitions?: unknown[]; cancelActivity?: boolean };
+        const attachedTo = boundaryEl.attachedToRef;
+        node.attachedToRef = typeof attachedTo === 'string' ? attachedTo : attachedTo?.id;
+        node.timerDefinition = getTimerDefinition(boundaryEl);
+        node.eventDefinition = getEventDefinition(boundaryEl as { eventDefinitions?: { $type?: string }[] });
+        const isInterrupting = boundaryEl.cancelActivity !== false;
+        (node as NodeDef & { interrupting?: boolean }).interrupting = isInterrupting;
+      }
+
+      const nodeExtensions = extensionByNode[flowEl.id];
+      if (nodeExtensions) node.extensions = nodeExtensions;
+
+      nodes[flowEl.id] = node;
+
+      if (type === 'bpmn:SubProcess') {
+        const inner = flowEl.flowElements ?? [];
+        processFlowElements(inner, flowEl.id);
+      }
     }
-
-    if (!SUPPORTED_NODE_TYPES.has(type)) {
-      continue;
-    }
-
-    const incoming = resolveIncoming(el as { incoming?: { id: string }[] });
-    const outgoing = resolveOutgoing(el as { outgoing?: { id: string }[] });
-
-    const node: NodeDef = {
-      id: flowEl.id,
-      type: getNodeType(type),
-      name: flowEl.name,
-      laneRef: nodeIdToLane[flowEl.id],
-      incoming,
-      outgoing,
-    };
-
-    if (type === 'bpmn:StartEvent') {
-      startNodeIds.push(flowEl.id);
-    }
-
-    if (type === 'bpmn:ExclusiveGateway') {
-      const def = flowEl.default;
-      node.defaultFlowId =
-        typeof def === 'object' && def != null ? (def as { id?: string }).id : (def as string | undefined);
-    }
-
-    if (type === 'bpmn:IntermediateCatchEvent') {
-      node.timerDefinition = getTimerDefinition(el as { eventDefinitions?: unknown[] });
-      node.messageRef = getMessageRef(el as { messageRef?: { name?: string }; eventDefinitions?: unknown[] });
-      node.eventDefinition = getEventDefinition(el as { eventDefinitions?: { $type?: string }[] });
-    }
-
-    if (type === 'bpmn:IntermediateThrowEvent') {
-      node.messageRef = getMessageRef(el as { messageRef?: { name?: string }; eventDefinitions?: unknown[] });
-    }
-
-    if (type === 'bpmn:BoundaryEvent') {
-      const boundaryEl = el as { attachedToRef?: { id: string } | string; eventDefinitions?: unknown[]; cancelActivity?: boolean };
-      const attachedTo = boundaryEl.attachedToRef;
-      node.attachedToRef = typeof attachedTo === 'string' ? attachedTo : attachedTo?.id;
-      node.timerDefinition = getTimerDefinition(boundaryEl);
-      node.eventDefinition = getEventDefinition(boundaryEl as { eventDefinitions?: { $type?: string }[] });
-      const isInterrupting = boundaryEl.cancelActivity !== false;
-      (node as NodeDef & { interrupting?: boolean }).interrupting = isInterrupting;
-    }
-
-    const nodeExtensions = extensionByNode[flowEl.id];
-    if (nodeExtensions) node.extensions = nodeExtensions;
-
-    nodes[flowEl.id] = node;
   }
+
+  processFlowElements(flowElements);
 
   const incomingByNode: Record<string, string[]> = {};
   const outgoingByNode: Record<string, string[]> = {};
@@ -237,6 +260,7 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
     nodes,
     flows,
     startNodeIds,
+    subprocessStartNodeIds: Object.keys(subprocessStartNodeIds).length ? subprocessStartNodeIds : undefined,
     metadata: {
       incomingByNode,
       outgoingByNode,

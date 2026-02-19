@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_InputSequence"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_InputSequence" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:userTask id="Task_InputA" name="Input the data for a"/>
+    <bpmn:userTask id="Task_InputB" name="Input the data for b"/>
+    <bpmn:userTask id="Task_InputC" name="Input the data for c"/>
+    <bpmn:serviceTask id="Task_CalculateResults" name="calculate-results"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_InputA"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_InputA" targetRef="Task_InputB"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_InputB" targetRef="Task_InputC"/>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Task_InputC" targetRef="Task_CalculateResults"/>
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Task_CalculateResults" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>

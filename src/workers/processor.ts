@@ -4,6 +4,7 @@ import { getClient } from '../db/client';
 import { getCollections } from '../db/collections';
 import { getDefinition } from '../model/service';
 import { applyTransition } from '../engine/transition';
+import { buildHistoryRecords } from '../history/service';
 import type {
   ProcessInstanceStateDoc,
   ContinuationDoc,
@@ -48,7 +49,7 @@ export async function processContinuation(
   continuation: ContinuationDoc
 ): Promise<ProcessContinuationResult> {
   const cols = getCollections(db);
-  const { ProcessInstanceState, ProcessInstanceEvents, Continuations, Outbox } = cols;
+  const { ProcessInstanceState, ProcessInstanceEvents, Continuations, Outbox, ProcessInstanceHistory } = cols;
 
   const stateDoc = await ProcessInstanceState.findOne({ _id: continuation.instanceId });
   if (!stateDoc) return { outbox: [], events: [] };
@@ -56,7 +57,7 @@ export async function processContinuation(
   const { ProcessInstances } = cols;
   const instanceDoc = await ProcessInstances.findOne(
     { _id: continuation.instanceId },
-    { projection: { definitionId: 1 } }
+    { projection: { definitionId: 1, startedBy: 1, startedByDetails: 1 } }
   );
   const definitionId = instanceDoc?.definitionId as string | undefined;
   if (!definitionId) return { outbox: [], events: [] };
@@ -119,6 +120,28 @@ export async function processContinuation(
 
       for (const ob of result.outbox) {
         await Outbox.insertOne({ ...ob, _id: uuidv4() }, opts);
+      }
+
+      const continuationPayload =
+        continuation.kind === 'WORK_COMPLETED'
+          ? (continuation.payload as {
+              completedBy?: string;
+              completedByDetails?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+              result?: unknown;
+            })
+          : null;
+      const historyRecords = buildHistoryRecords(
+        continuation.instanceId,
+        result.events,
+        instanceDoc,
+        continuationPayload,
+        def.graph
+      );
+      for (const rec of historyRecords) {
+        await ProcessInstanceHistory.insertOne(
+          { ...rec, _id: uuidv4() },
+          opts
+        );
       }
 
       await Continuations.updateOne(

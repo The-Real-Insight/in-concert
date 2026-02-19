@@ -5,10 +5,34 @@ export const COLLECTION_NAMES = {
   ProcessInstances: 'ProcessInstances',
   ProcessInstanceState: 'ProcessInstanceState',
   ProcessInstanceEvents: 'ProcessInstanceEvents',
+  ProcessInstanceHistory: 'ProcessInstanceHistory',
   Continuations: 'Continuations',
   Outbox: 'Outbox',
   HumanTasks: 'HumanTasks',
 } as const;
+
+/** Audit trail: one row per task/instance lifecycle event. */
+export type ProcessInstanceHistoryDoc = {
+  _id: string;
+  instanceId: string;
+  seq: number;
+  eventType: 'INSTANCE_STARTED' | 'TASK_STARTED' | 'TASK_COMPLETED';
+  at: Date;
+  /** For INSTANCE_STARTED */
+  startedBy?: string;
+  startedByDetails?: UserDetails;
+  /** For TASK_* */
+  nodeId?: string;
+  nodeName?: string;
+  nodeType?: 'userTask' | 'serviceTask';
+  workItemId?: string;
+  scopeId?: string;
+  /** For TASK_COMPLETED (user tasks) */
+  completedBy?: string;
+  completedByDetails?: UserDetails;
+  result?: unknown;
+  createdAt: Date;
+};
 
 export type HumanTaskStatus = 'OPEN' | 'CLAIMED' | 'COMPLETED' | 'CANCELED';
 
@@ -262,5 +286,8 @@ export function getCollections(database: Db) {
     ),
     Outbox: database.collection<OutboxDoc>(COLLECTION_NAMES.Outbox),
     HumanTasks: database.collection<HumanTaskDoc>(COLLECTION_NAMES.HumanTasks),
+    ProcessInstanceHistory: database.collection<ProcessInstanceHistoryDoc>(
+      COLLECTION_NAMES.ProcessInstanceHistory
+    ),
   };
 }

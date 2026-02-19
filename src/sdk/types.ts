@@ -44,6 +44,26 @@ export type InstanceSummary = {
   startedByDetails?: User;
 };
 
+/** Audit trail entry for a process instance. */
+export type ProcessHistoryEntry = {
+  instanceId: string;
+  seq: number;
+  eventType: 'INSTANCE_STARTED' | 'TASK_STARTED' | 'TASK_COMPLETED';
+  at: Date;
+  startedBy?: string;
+  startedByDetails?: User;
+  nodeId?: string;
+  nodeName?: string;
+  nodeType?: 'userTask' | 'serviceTask';
+  workItemId?: string;
+  scopeId?: string;
+  completedBy?: string;
+  completedByDetails?: User;
+  result?: unknown;
+  createdAt: Date;
+  _id?: string;
+};
+
 export type ListTasksParams = {
   instanceId?: string;
   status?: string;

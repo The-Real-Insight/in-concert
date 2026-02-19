@@ -3,6 +3,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { deployDefinition } from '../model/service';
 import { startInstance, getInstance } from '../instance/service';
+import { getProcessHistory } from '../history/service';
 import { getCollections } from '../db/collections';
 import { claimContinuation, processContinuation } from '../workers/processor';
 
@@ -60,6 +61,21 @@ apiRouter.get('/v1/instances/:instanceId', async (req: Request, res: Response) =
       return;
     }
     res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: 'Query failed' });
+  }
+});
+
+apiRouter.get('/v1/instances/:instanceId/history', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const instance = await getInstance(db, req.params.instanceId);
+    if (!instance) {
+      res.status(404).json({ error: 'Instance not found' });
+      return;
+    }
+    const entries = await getProcessHistory(db, req.params.instanceId);
+    res.json(entries);
   } catch (err) {
     res.status(500).json({ error: 'Query failed' });
   }

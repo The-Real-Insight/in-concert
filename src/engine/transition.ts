@@ -176,12 +176,66 @@ export function applyTransition(
       }
       emit('TOKEN_CONSUMED', { tokenId });
 
-      const activeOrWaiting = tokens.filter(
-        (t) => t.tokenId !== tokenId && (t.status === 'ACTIVE' || t.status === 'WAITING')
+      const scope = scopes.find((s) => s.scopeId === scopeId);
+      const isSubprocessScope = scope?.kind === 'SUBPROCESS';
+      const activeOrWaitingInScope = tokens.filter(
+        (t) => t.scopeId === scopeId && t.tokenId !== tokenId && (t.status === 'ACTIVE' || t.status === 'WAITING')
       );
-      if (activeOrWaiting.length === 0) {
-        emit('INSTANCE_COMPLETED', { instanceId: state._id });
-        statePatch.status = 'COMPLETED';
+
+      const subprocessNodeId = scope?.nodeId;
+      if (isSubprocessScope && subprocessNodeId && activeOrWaitingInScope.length === 0) {
+        emit('SCOPE_ENDED', { scopeId, kind: 'SUBPROCESS', nodeId: subprocessNodeId });
+        patchScopes(() => scopes.filter((s) => s.scopeId !== scopeId));
+        const parentScopeId = scope!.parentScopeId ?? rootScopeId;
+        const outgoingFlows = getOutgoingFlows(graph, subprocessNodeId);
+        const outFlow = outgoingFlows[0];
+        const toNodeId = outFlow ? getTargetNode(graph, outFlow.id) : undefined;
+        if (toNodeId && parentScopeId) {
+          const newTokenId = uuidv4();
+          emit('TOKEN_CREATED', { tokenId: newTokenId, nodeId: toNodeId, scopeId: parentScopeId, status: 'ACTIVE' });
+          patchTokens((t) => [
+            ...t,
+            { tokenId: newTokenId, nodeId: toNodeId, scopeId: parentScopeId, status: 'ACTIVE', createdAt: now },
+          ]);
+          newContinuations.push(
+            createTokenAtNodeCont(state._id, newTokenId, toNodeId, parentScopeId, outFlow?.id, now)
+          );
+        }
+      } else if (!isSubprocessScope) {
+        const activeOrWaiting = tokens.filter(
+          (t) => t.tokenId !== tokenId && (t.status === 'ACTIVE' || t.status === 'WAITING')
+        );
+        if (activeOrWaiting.length === 0) {
+          emit('INSTANCE_COMPLETED', { instanceId: state._id });
+          statePatch.status = 'COMPLETED';
+        }
+      }
+    } else if (node.type === 'subProcess') {
+      const startIds = graph.subprocessStartNodeIds?.[nodeId];
+      if (!startIds?.length) {
+        return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
+      }
+      const newScopeId = uuidv4();
+      emit('SCOPE_CREATED', { scopeId: newScopeId, kind: 'SUBPROCESS', nodeId, parentScopeId: scopeId });
+      patchScopes(() => [...scopes, { scopeId: newScopeId, kind: 'SUBPROCESS' as const, nodeId, parentScopeId: scopeId }]);
+      const idx = tokens.findIndex((t) => t.tokenId === tokenId);
+      if (idx >= 0) {
+        tokens[idx] = { ...tokens[idx], status: 'CONSUMED' };
+        patchTokens(() => tokens);
+      }
+      emit('TOKEN_CONSUMED', { tokenId });
+      for (const startNodeId of startIds) {
+        const flowIds = getIncomingFlows(graph, startNodeId);
+        const flowId = flowIds[0]?.id;
+        const newTokenId = uuidv4();
+        emit('TOKEN_CREATED', { tokenId: newTokenId, nodeId: startNodeId, scopeId: newScopeId, status: 'ACTIVE' });
+        patchTokens((t) => [
+          ...t,
+          { tokenId: newTokenId, nodeId: startNodeId, scopeId: newScopeId, status: 'ACTIVE', createdAt: now },
+        ]);
+        newContinuations.push(
+          createTokenAtNodeCont(state._id, newTokenId, startNodeId, newScopeId, flowId, now)
+        );
       }
     } else if (node.type === 'serviceTask' || node.type === 'userTask') {
       const workItemId = uuidv4();

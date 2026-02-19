@@ -41,6 +41,9 @@ export const BPMN_FILES: Record<string, string> = {
   'linear-service-and-user-task.bpmn': 'linear-service-and-user-task.bpmn',
   'xor-with-transition-conditions.bpmn': 'xor-with-transition-conditions.bpmn',
   'tri-tool-linear.bpmn': 'tri-tool-linear.bpmn',
+  'input-sequence.bpmn': 'input-sequence.bpmn',
+  'input-sequence-with-assess.bpmn': 'input-sequence-with-assess.bpmn',
+  'input-sequence-with-subprocess.bpmn': 'input-sequence-with-subprocess.bpmn',
 };
 
 export function loadBpmn(modelFile: string): string {

@@ -3,6 +3,8 @@ export type NodeDef = {
   type: string;
   name?: string;
   laneRef?: string; // lane name (role) from BPMN laneSet
+  /** For nodes inside an embedded subprocess: the subprocess node id. */
+  parentNodeId?: string;
   incoming: string[];
   outgoing: string[];
   /** For exclusiveGateway: the flow id used when no condition matches. */
@@ -29,6 +31,8 @@ export type NormalizedGraph = {
   nodes: Record<string, NodeDef>;
   flows: Record<string, FlowDef>;
   startNodeIds: string[];
+  /** Subprocess node id -> start event id(s) inside it. */
+  subprocessStartNodeIds?: Record<string, string[]>;
   metadata: {
     incomingByNode: Record<string, string[]>;
     outgoingByNode: Record<string, string[]>;
