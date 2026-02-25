@@ -54,7 +54,13 @@ jobs:
         run: |
           # Remove token so npm uses OIDC for publish (Trusted Publishing)
           sed -i '/_authToken/d' .npmrc 2>/dev/null || true
-          npm publish --access public
+          # Retry: 409 often means npm is still processing a previous publish
+          for i in 1 2 3 4 5; do
+            npm publish --access public && break
+            [ $i -eq 5 ] && exit 1
+            echo "Publish failed, retrying in 15s (attempt $i/5)..."
+            sleep 15
+          done
 
       - name: Commit and push version bump
         run: |
