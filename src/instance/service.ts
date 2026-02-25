@@ -13,6 +13,7 @@ export async function startInstance(
   params: {
     commandId: string;
     definitionId: string;
+    conversationId?: string;
     businessKey?: string;
     tenantId?: string;
     user?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
@@ -32,6 +33,7 @@ export async function startInstance(
   await ProcessInstances.insertOne({
     _id: instanceId,
     definitionId: params.definitionId,
+    conversationId: params.conversationId,
     tenantId: params.tenantId,
     rootInstanceId: instanceId,
     status: 'RUNNING',
@@ -85,6 +87,8 @@ export async function getInstance(
   instanceId: string
 ): Promise<{
   _id: string;
+  definitionId: string;
+  conversationId?: string;
   status: string;
   createdAt: Date;
   endedAt?: Date;
@@ -94,10 +98,12 @@ export async function getInstance(
   const { ProcessInstances } = getCollections(db);
   const doc = await ProcessInstances.findOne(
     { _id: instanceId },
-    { projection: { _id: 1, status: 1, createdAt: 1, endedAt: 1, startedBy: 1, startedByDetails: 1 } }
+    { projection: { _id: 1, definitionId: 1, conversationId: 1, status: 1, createdAt: 1, endedAt: 1, startedBy: 1, startedByDetails: 1 } }
   );
   return doc as {
     _id: string;
+    definitionId: string;
+    conversationId?: string;
     status: string;
     createdAt: Date;
     endedAt?: Date;

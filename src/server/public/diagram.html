@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Process Diagram</title>
+  <script src="https://unpkg.com/bpmn-js@17.4.0/dist/bpmn-viewer.development.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #1a2129; color: #e6edf3; }
+    #toolbar { padding: 0.5rem 1rem; background: #0f1419; border-bottom: 1px solid #2d3748; font-size: 13px; }
+    #toolbar a { color: #58a6ff; }
+    #canvas { height: calc(100vh - 40px); width: 100%; }
+    .bjs-container { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <a href="/">← Back to Demo</a>
+    <span id="instanceInfo"></span>
+  </div>
+  <div id="canvas"></div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const instanceId = params.get('instanceId');
+    if (!instanceId) {
+      document.body.innerHTML = '<div id="toolbar"><a href="/">← Back</a></div><p style="padding:1rem">Missing instanceId</p>';
+    } else {
+      document.getElementById('instanceInfo').textContent = ' Instance: ' + instanceId;
+      const viewer = new BpmnJS({ container: '#canvas' });
+      fetch('/v1/instances/' + encodeURIComponent(instanceId) + '/bpmn')
+        .then(r => {
+          if (!r.ok) throw new Error(r.statusText);
+          return r.text();
+        })
+        .then(xml => viewer.importXML(xml))
+        .then(({ warnings }) => {
+          if (warnings.length) console.warn(warnings);
+          viewer.get('canvas').zoom('fit-viewport');
+        })
+        .catch(err => {
+          document.getElementById('canvas').innerHTML = '<p style="padding:1rem;color:#f85149">' + err.message + '</p>';
+        });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tri-bpmn-engine Demo</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>tri-bpmn-engine Demo</h1>
+      <div class="user-bar">
+        <label>User</label>
+        <input id="userId" type="text" value="ui-user@example.com" />
+        <button id="purgeBtn" type="button" title="Delete all process instances, definitions, tasks, history">Purge DB</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel panel-top">
+        <h2>Start Process</h2>
+        <div class="source-switch">
+          <label class="switch-label">Model source</label>
+          <div class="switch-options">
+            <label class="switch-option">
+              <input type="radio" name="modelSource" value="local" />
+              Local
+            </label>
+            <label class="switch-option">
+              <input type="radio" name="modelSource" value="insight" checked />
+              The Real Insight
+            </label>
+          </div>
+        </div>
+        <div id="providerFilterWrap" class="provider-filter">
+          <label for="providerFilter">Provider</label>
+          <input id="providerFilter" type="text" value="ZAW3-Y4D4-I2NY" placeholder="Provider ID" />
+        </div>
+        <div class="model-select">
+          <select id="modelSelect"></select>
+        </div>
+        <div id="startUploadArea" class="upload-area">
+          <p class="upload-hint">Drag & drop files here or click to browse</p>
+          <input type="file" id="startFileInput" multiple hidden />
+        </div>
+        <div id="startFileList" class="file-list"></div>
+        <button id="startBtn">Start process</button>
+        <p id="startStatus" class="status"></p>
+      </section>
+
+      <div class="main-grid">
+        <section class="panel panel-left">
+          <h2>Worklist</h2>
+          <div class="toolbar">
+            <button id="refreshWorklistBtn">Refresh</button>
+            <label class="auto-toggle">
+              <input type="checkbox" id="autoMode" />
+              Auto (pop next, enter & submit)
+            </label>
+          </div>
+          <div id="worklist" class="worklist"></div>
+        </section>
+
+        <section class="panel panel-center">
+          <h2>Active Task</h2>
+          <div id="claimForm" class="claim-form hidden">
+            <h3>Complete Task</h3>
+            <p id="claimTaskName"></p>
+            <div id="claimContextDocs" class="context-docs"></div>
+            <div id="claimUploadArea" class="upload-area small">
+              <p class="upload-hint">Add files (drag & drop)</p>
+              <input type="file" id="claimFileInput" multiple hidden />
+            </div>
+            <div id="claimFileList" class="file-list"></div>
+            <input id="claimResponse" type="text" placeholder="Enter response..." />
+            <div class="btn-row">
+              <button id="submitClaimBtn">Submit</button>
+              <button id="cancelClaimBtn">Cancel</button>
+            </div>
+          </div>
+          <p id="claimFormEmpty" class="status">No task claimed. Select one from the worklist.</p>
+        </section>
+
+        <section class="panel panel-right">
+          <h2>Process History</h2>
+        <div class="toolbar">
+          <button id="refreshInstancesBtn">Refresh</button>
+        </div>
+        <div class="instance-list">
+          <select id="instanceSelect">
+            <option value="">-- Select process --</option>
+          </select>
+          <button id="viewDiagramBtn" type="button" disabled title="View BPMN diagram">View diagram</button>
+          <button id="viewConversationBtn" type="button" disabled title="View conversation (messages & documents)">View conversation</button>
+        </div>
+        <div id="historyTable" class="history-table"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="conversationModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Conversation</h3>
+        <button id="closeConversationBtn" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="conversationMessages" class="conversation-messages"></div>
+        <div id="conversationDocs" class="conversation-docs"></div>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

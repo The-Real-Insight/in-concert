@@ -77,6 +77,7 @@ export type UserDetails = {
 export type ProcessInstanceDoc = {
   _id: string;
   definitionId: string;
+  conversationId?: string;
   tenantId?: string;
   rootInstanceId: string;
   parentInstanceId?: string;

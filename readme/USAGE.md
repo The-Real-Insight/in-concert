@@ -58,6 +58,25 @@ Start the server first: `npm run dev` (default port 3000).
 
 ---
 
+### Demo server (browser UI)
+
+Run the demo server with browser UI for interactive testing:
+
+```bash
+npm run server
+```
+
+Then open http://localhost:3000/. The UI supports:
+
+- **Start process** — Select a model from the list and start a new instance
+- **Worklist** — See open tasks, claim and complete with a response
+- **Auto mode** — Toggle to automatically claim the next task, enter a response, and submit
+- **Process history** — Select a completed process to view its audit trail
+
+Same interaction model as `npm run cli` (interactive CLI).
+
+---
+
 ### Local mode (no server)
 
 ```typescript

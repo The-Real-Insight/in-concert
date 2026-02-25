@@ -10,7 +10,7 @@ export const worklistRouter = Router();
 
 worklistRouter.get('/v1/tasks', async (req: Request, res: Response) => {
   try {
-    const { assigneeUserId, candidateRole, status, instanceId, limit, cursor } = req.query;
+    const { assigneeUserId, candidateRole, status, instanceId, limit, cursor, sortOrder } = req.query;
     const db = getDb();
     const { HumanTasks } = getCollections(db);
 
@@ -22,9 +22,10 @@ worklistRouter.get('/v1/tasks', async (req: Request, res: Response) => {
     if (instanceId) filter.instanceId = instanceId;
 
     const limitNum = Math.min(parseInt(String(limit || '50'), 10) || 50, 100);
+    const sortAsc = sortOrder === 'asc';
     const opts: { limit: number; skip?: number; sort?: Record<string, 1 | -1> } = {
       limit: limitNum,
-      sort: { createdAt: -1 },
+      sort: { createdAt: sortAsc ? 1 : -1 },
     };
     if (cursor) opts.skip = parseInt(String(cursor), 10) || 0;
 

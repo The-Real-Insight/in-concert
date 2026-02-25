@@ -89,6 +89,19 @@ curl http://localhost:3000/v1/instances/<instanceId>
 curl http://localhost:3000/v1/instances/<instanceId>/state
 ```
 
+## Publishing
+
+On every push to `main`, a GitHub Action:
+
+1. Runs tests (`npm run test:sdk`)
+2. Bumps the patch version (`0.1.0` → `0.1.1`)
+3. Publishes to npm
+4. Commits the version bump back to the repo (with `[skip ci]` to avoid loops)
+
+**Setup**: Add `NPM_TOKEN` as a repository secret in GitHub. Create a token at [npmjs.com/access-tokens](https://www.npmjs.com/access-tokens) with "Automation" type (or "Publish" for granular access).
+
+---
+
 ## Test
 
 ```bash

@@ -28,6 +28,8 @@ export type StartInstanceParams = {
   tenantId?: string;
   /** When provided, startedBy = user.email and startedByDetails = user on ProcessInstance */
   user?: User;
+  /** Conversation _id for document/data management (outside engine) */
+  conversationId?: string;
 };
 
 export type StartInstanceResult = {
@@ -37,6 +39,7 @@ export type StartInstanceResult = {
 
 export type InstanceSummary = {
   _id: string;
+  conversationId?: string;
   status: 'RUNNING' | 'COMPLETED' | 'TERMINATED' | 'FAILED';
   createdAt: Date;
   endedAt?: Date;

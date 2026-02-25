@@ -4,10 +4,45 @@ import { getDb } from '../db/client';
 import { deployDefinition } from '../model/service';
 import { startInstance, getInstance } from '../instance/service';
 import { getProcessHistory } from '../history/service';
-import { getCollections } from '../db/collections';
+import { getCollections, COLLECTION_NAMES } from '../db/collections';
 import { claimContinuation, processContinuation } from '../workers/processor';
 
 export const apiRouter = Router();
+
+apiRouter.post('/v1/purge', async (req: Request, res: Response) => {
+  const cols = [
+    COLLECTION_NAMES.ProcessDefinitions,
+    COLLECTION_NAMES.ProcessInstances,
+    COLLECTION_NAMES.ProcessInstanceState,
+    COLLECTION_NAMES.ProcessInstanceEvents,
+    COLLECTION_NAMES.ProcessInstanceHistory,
+    COLLECTION_NAMES.Continuations,
+    COLLECTION_NAMES.Outbox,
+    COLLECTION_NAMES.HumanTasks,
+    'Conversations',
+  ];
+  const errors: string[] = [];
+  try {
+    const db = getDb();
+    for (const name of cols) {
+      try {
+        await db.collection(name).deleteMany({});
+      } catch (colErr) {
+        const m = colErr instanceof Error ? colErr.message : String(colErr);
+        errors.push(`${name}: ${m}`);
+      }
+    }
+    if (errors.length > 0) {
+      res.status(500).json({ error: errors.join('; '), purged: cols });
+      return;
+    }
+    res.json({ purged: cols });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[purge]', msg);
+    res.status(500).json({ error: msg || 'Purge failed' });
+  }
+});
 
 apiRouter.post('/v1/definitions', async (req: Request, res: Response) => {
   try {
@@ -32,7 +67,7 @@ apiRouter.post('/v1/definitions', async (req: Request, res: Response) => {
 
 apiRouter.post('/v1/instances', async (req: Request, res: Response) => {
   try {
-    const { commandId, definitionId, businessKey, tenantId, user } = req.body;
+    const { commandId, definitionId, conversationId, businessKey, tenantId, user } = req.body;
     if (!commandId || !definitionId) {
       res.status(400).json({ error: 'commandId and definitionId are required' });
       return;
@@ -41,6 +76,7 @@ apiRouter.post('/v1/instances', async (req: Request, res: Response) => {
     const result = await startInstance(db, {
       commandId,
       definitionId,
+      conversationId,
       businessKey,
       tenantId,
       user,
@@ -49,6 +85,24 @@ apiRouter.post('/v1/instances', async (req: Request, res: Response) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Start failed';
     res.status(400).json({ error: message });
+  }
+});
+
+apiRouter.get('/v1/instances', async (req: Request, res: Response) => {
+  try {
+    const { status, limit } = req.query;
+    const db = getDb();
+    const { ProcessInstances } = getCollections(db);
+    const filter: Record<string, unknown> = {};
+    if (status && typeof status === 'string') filter.status = status;
+    const limitNum = Math.min(parseInt(String(limit || '50'), 10) || 50, 200);
+    const list = await ProcessInstances.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limitNum)
+      .toArray();
+    res.json({ items: list });
+  } catch (err) {
+    res.status(500).json({ error: 'List failed' });
   }
 });
 
@@ -61,6 +115,30 @@ apiRouter.get('/v1/instances/:instanceId', async (req: Request, res: Response) =
       return;
     }
     res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: 'Query failed' });
+  }
+});
+
+apiRouter.get('/v1/instances/:instanceId/bpmn', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const instance = await getInstance(db, req.params.instanceId);
+    if (!instance) {
+      res.status(404).json({ error: 'Instance not found' });
+      return;
+    }
+    const { ProcessDefinitions } = getCollections(db);
+    const def = await ProcessDefinitions.findOne(
+      { _id: instance.definitionId },
+      { projection: { bpmnXml: 1 } }
+    );
+    if (!def?.bpmnXml) {
+      res.status(404).json({ error: 'BPMN not found for this definition' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/xml');
+    res.send(def.bpmnXml);
   } catch (err) {
     res.status(500).json({ error: 'Query failed' });
   }
