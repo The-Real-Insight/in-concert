@@ -33,9 +33,11 @@
     "engine"
   ],
   "license": "UNLICENSED",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
-    "@the-real-insight/tri-model": "^0.0.743",
+    "@the-real-insight/tri-model": "^0.0.747",
     "bpmn-moddle": "^9.0.4",
     "express": "^4.21.0",
     "mongodb": "^6.10.0",

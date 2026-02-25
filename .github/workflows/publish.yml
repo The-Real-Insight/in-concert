@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # required to push version bump commit
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,6 +25,15 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Verify npm auth
+        run: |
+          echo "NODE_AUTH_TOKEN length: ${#NODE_AUTH_TOKEN}"
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NODE_AUTH_TOKEN is empty. Add NPM_TOKEN as a repository secret (Settings → Secrets → Actions)."
+            exit 1
+          fi
+          npm whoami || (echo "::error::npm whoami failed - token may be expired or lack read access to @the-real-insight" && exit 1)
+
       - run: npm ci
       - run: npm run build
       - run: npm run test:sdk
@@ -32,8 +43,6 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Commit and push version bump
         run: |
