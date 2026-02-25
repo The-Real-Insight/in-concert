@@ -25,7 +25,7 @@
     "cli": "ts-node -r dotenv/config test/cli/interactive.ts",
     "server": "PORT=9100 ts-node -r ./src/server/load-env src/server/index.ts",
     "diagram:parallel": "mmdc -i readme/input-parallel-with-subprocess.mmd -o readme/input-parallel-with-subprocess.svg",
-    "test:sdk": "jest --testPathPattern=test/sdk --testTimeout:20000 --runInBand"
+    "test:sdk": "jest --testPathPattern=test/sdk --testTimeout=20000 --runInBand"
   },
   "keywords": [
     "bpmn",
