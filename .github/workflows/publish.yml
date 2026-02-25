@@ -25,6 +25,9 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Configure npm auth
+        run: echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN" >> .npmrc
+
       - name: Verify npm auth
         run: |
           echo "NODE_AUTH_TOKEN length: ${#NODE_AUTH_TOKEN}"
