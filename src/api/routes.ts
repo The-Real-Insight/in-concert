@@ -46,16 +46,18 @@ apiRouter.post('/v1/purge', async (req: Request, res: Response) => {
 
 apiRouter.post('/v1/definitions', async (req: Request, res: Response) => {
   try {
-    const { name, version, bpmnXml, tenantId } = req.body;
-    if (!name || version === undefined || !bpmnXml) {
-      res.status(400).json({ error: 'name, version, and bpmnXml are required' });
+    const { id, name, version, bpmnXml, overwrite, tenantId } = req.body;
+    if (!id || !name || version == null || version === '' || !bpmnXml) {
+      res.status(400).json({ error: 'id, name, version, and bpmnXml are required' });
       return;
     }
     const db = getDb();
     const result = await deployDefinition(db, {
+      id,
       name,
-      version: Number(version),
+      version: String(version),
       bpmnXml,
+      overwrite: Boolean(overwrite),
       tenantId,
     });
     res.status(201).json(result);

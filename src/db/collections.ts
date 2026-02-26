@@ -58,12 +58,17 @@ export type HumanTaskDoc = {
 
 export type ProcessDefinitionDoc = {
   _id: string;
+  /** Business id (e.g. AgenticWorkflow._id). Unique per (id, version). */
+  id: string;
   tenantId?: string;
   name: string;
-  version: number;
+  /** Version as string to support semantic versions (e.g. "1", "1.1", "2.0"). */
+  version: string;
   bpmnXml?: string;
   graph: NormalizedGraph;
   createdAt: Date;
+  /** When this version was deployed. Used to resolve "latest" = most recently deployed. */
+  deployedAt: Date;
 };
 
 export type UserDetails = {

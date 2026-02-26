@@ -63,9 +63,11 @@ beforeEach(async () => {
 describe('SDK: input-parallel-with-subprocess', () => {
   it('executes: AND split (3 parallel branches), join, subprocess, calculate-results', async () => {
     const bpmn = loadBpmn('input-parallel-with-subprocess.bpmn');
+    const name = uniqueName('ParallelSubprocess');
     const { definitionId } = await client.deploy({
-      name: uniqueName('ParallelSubprocess'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({

@@ -22,7 +22,7 @@ async function run() {
     'utf-8'
   );
 
-  const { definitionId } = await deployDefinition(db, { name: 'Test', version: 1, bpmnXml: bpmn });
+  const { definitionId } = await deployDefinition(db, { id: 'test-integration', name: 'Test', version: '1', bpmnXml: bpmn });
   console.log('Deployed:', definitionId);
 
   const { instanceId } = await startInstance(db, {

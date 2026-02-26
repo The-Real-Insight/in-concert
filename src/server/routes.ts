@@ -122,6 +122,7 @@ serverRouter.post('/demo/deploy', async (req: Request, res: Response) => {
     const effectiveSource = source ?? 'local';
     let bpmnXml: string;
     let deployName: string;
+    let deployId: string;
 
     if (effectiveSource === 'insight') {
       const db = getDb();
@@ -134,6 +135,7 @@ serverRouter.post('/demo/deploy', async (req: Request, res: Response) => {
       }
       bpmnXml = doc.bpmnXML as string;
       deployName = (doc as { name?: string }).name ?? String(doc._id);
+      deployId = String(doc._id);
     } else {
       const model = LOCAL_MODELS.find((m) => m.id === modelId);
       if (!model) {
@@ -142,26 +144,18 @@ serverRouter.post('/demo/deploy', async (req: Request, res: Response) => {
       }
       bpmnXml = readFileSync(getBpmnPath(model.bpmnFile), 'utf8');
       deployName = model.id;
+      deployId = modelId;
     }
 
     const db = getDb();
-    const { ProcessDefinitions } = getCollections(db);
-    const existing = await ProcessDefinitions.findOne(
-      { name: deployName, version: 1 },
-      { projection: { _id: 1 } }
-    );
-    let definitionId: string;
-    if (existing) {
-      definitionId = existing._id;
-    } else {
-      const deployed = await deployDefinition(db, {
-        name: deployName,
-        version: 1,
-        bpmnXml,
-      });
-      definitionId = deployed.definitionId;
-    }
-    res.json({ definitionId });
+    const deployed = await deployDefinition(db, {
+      id: deployId,
+      name: deployName,
+      version: '1',
+      bpmnXml,
+      overwrite: true,
+    });
+    res.json({ definitionId: deployed.definitionId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Deploy failed';
     res.status(400).json({ error: msg });

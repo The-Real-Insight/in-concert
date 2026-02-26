@@ -20,7 +20,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   await db
     .collection(COLLECTION_NAMES.ProcessDefinitions)
-    .createIndex({ name: 1, version: 1 }, { unique: true });
+    .createIndex({ id: 1, version: 1 }, { unique: true });
 
   await db
     .collection(COLLECTION_NAMES.HumanTasks)

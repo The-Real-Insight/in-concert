@@ -20,4 +20,4 @@ Indexes are created at startup via `ensureIndexes()` in `src/db/indexes.ts`:
 - **ProcessInstanceEvents**: `(instanceId, seq)` unique
 - **Continuations**: `(status, dueAt)`, `(instanceId)`
 - **Outbox**: `(status, nextAttemptAt)`
-- **ProcessDefinitions**: `(name, version)` unique
+- **ProcessDefinitions**: `(id, version)` unique

@@ -32,8 +32,9 @@ const client = new BpmnEngineClient({
 });
 
 const { definitionId } = await client.deploy({
+  id: 'order-process',
   name: 'OrderProcess',
-  version: 1,
+  version: '1',
   bpmnXml: '<bpmn:definitions>...</bpmn:definitions>',
 });
 
@@ -92,8 +93,9 @@ await ensureIndexes(db);
 const client = new BpmnEngineClient({ mode: 'local', db });
 
 const { definitionId } = await client.deploy({
+  id: 'order-process',
   name: 'OrderProcess',
-  version: 1,
+  version: '1',
   bpmnXml: '<bpmn:definitions>...</bpmn:definitions>',
 });
 
@@ -224,9 +226,11 @@ Deploy a BPMN process definition.
 
 ```typescript
 const { definitionId } = await client.deploy({
+  id: 'my-process',
   name: 'MyProcess',
-  version: 1,
+  version: '1',
   bpmnXml: '<?xml version="1.0"?><bpmn:definitions>...</bpmn:definitions>',
+  overwrite: true, // optional; if (id, version) exists, update instead of error
   tenantId: 'optional',
 });
 ```
@@ -637,8 +641,9 @@ async function main() {
 
   const bpmn = readFileSync('./test/bpmn/start-service-task-end.bpmn', 'utf8');
   const { definitionId } = await client.deploy({
+    id: 'linear-demo',
     name: 'LinearDemo',
-    version: 1,
+    version: '1',
     bpmnXml: bpmn,
   });
 
@@ -672,8 +677,9 @@ main().catch(console.error);
 const client = new BpmnEngineClient({ mode: 'local', db });
 
 const { definitionId } = await client.deploy({
+  id: 'xor-demo',
   name: 'XorDemo',
-  version: 1,
+  version: '1',
   bpmnXml: xorBpmnXml,
 });
 
@@ -913,8 +919,9 @@ async function main() {
   // ─── 2. Deploy process definition ───
   const bpmn = readFileSync('./test/bpmn/xor-with-transition-conditions.bpmn', 'utf8');
   const { definitionId } = await client.deploy({
+    id: 'claim-process',
     name: 'ClaimProcess',
-    version: 1,
+    version: '1',
     bpmnXml: bpmn,
   });
 
@@ -966,7 +973,7 @@ main().catch(console.error);
 | Step | API | Description |
 |------|-----|-------------|
 | 1 | `client.init({ onWorkItem, onServiceCall, onDecision })` | Register callbacks once before use |
-| 2 | `client.deploy({ name, version, bpmnXml })` | Deploy process definition |
+| 2 | `client.deploy({ id, name, version, bpmnXml })` | Deploy process definition |
 | 3 | `client.startInstance({ commandId, definitionId, user })` | Start new instance |
 | 4–5 | `client.run(instanceId)` | Process continuations; handlers process decisions and service tasks |
 | Loop | `client.listTasks({ instanceId, status: 'OPEN', sortOrder: 'asc' })` | Load worklist (OPEN tasks) |
@@ -1012,7 +1019,7 @@ import { createInterface } from 'readline';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { connectDb, closeDb, ensureIndexes, getCollections } from 'tri-bpmn-engine/db';
+import { connectDb, closeDb, ensureIndexes } from 'tri-bpmn-engine/db';
 import { BpmnEngineClient } from 'tri-bpmn-engine/sdk';
 import { addStreamHandler, createProjectionHandler } from 'tri-bpmn-engine/local';
 
@@ -1041,19 +1048,14 @@ async function main() {
   const model = { id: 'input-sequence', bpmnFile: 'input-sequence.bpmn' };
   const bpmnXml = readFileSync(join(__dirname, 'test/bpmn', model.bpmnFile), 'utf8');
 
-  const { ProcessDefinitions } = getCollections(db);
-  let definitionId = (await ProcessDefinitions.findOne(
-    { name: model.id, version: 1 },
-    { projection: { _id: 1 } }
-  ))?._id;
-  if (!definitionId) {
-    const deployed = await client.deploy({
-      name: model.id,
-      version: 1,
-      bpmnXml,
-    });
-    definitionId = deployed.definitionId;
-  }
+  const deployed = await client.deploy({
+    id: model.id,
+    name: model.id,
+    version: '1',
+    bpmnXml,
+    overwrite: true,
+  });
+  const definitionId = deployed.definitionId;
 
   const user = { email: 'cli-user@example.com' };
   const { instanceId } = await client.startInstance({
@@ -1119,7 +1121,7 @@ main().catch(async (err) => {
 | `addStreamHandler(createProjectionHandler(db))` | Projects engine callbacks to the worklist. Needed so `listTasks()` returns user tasks. |
 | `onWorkItem` | No-op; user tasks are handled via the worklist, not inline. |
 | `onServiceCall` | Completes the service task and stores a result (e.g. random number) for later display. |
-| Reuse `definitionId` | If the definition exists, avoids duplicate deploy and reuses it. |
+| `deploy({ ..., overwrite: true })` | Deploys (or updates if same id+version); idempotent for same XML. |
 | `while (openTasks.length === 0)` | Poll every 500ms until a task appears; stops as soon as one is found. |
 | `activateTask` | Claim the task (OPEN → CLAIMED) so the current user can complete it. |
 | `completeUserTask` | Submit the user’s input; engine processes on the next `run()`. |

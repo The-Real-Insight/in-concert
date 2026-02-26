@@ -11,9 +11,14 @@ export type User = {
 };
 
 export type DeployParams = {
+  /** Business id (e.g. AgenticWorkflow._id). Unique per (id, version). */
+  id: string;
   name: string;
-  version: number;
+  /** Version as string (e.g. "1", "1.1", "2.0"). */
+  version: string;
   bpmnXml: string;
+  /** If true and (id, version) exists, update the definition. Default: false. */
+  overwrite?: boolean;
   tenantId?: string;
 };
 

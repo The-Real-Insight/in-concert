@@ -136,9 +136,11 @@ describe('SDK: xor-with-transition-conditions', () => {
 
   it('worklist flow: start → wait → load → activate → complete, repeat for each user task', async () => {
     const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const name = uniqueName('ClaimProcess');
     const { definitionId } = await client.deploy({
-      name: uniqueName('ClaimProcess'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
 
@@ -187,9 +189,11 @@ describe('SDK: xor-with-transition-conditions', () => {
 
   it('stores startedBy/startedByDetails on instance and completedBy/completedByDetails on human tasks', async () => {
     const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const name = uniqueName('UserAudit');
     const { definitionId } = await client.deploy({
-      name: uniqueName('UserAudit'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({
@@ -215,9 +219,11 @@ describe('SDK: xor-with-transition-conditions', () => {
 
   it('run projects user tasks to worklist', async () => {
     const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const name = uniqueName('ClaimWorklist');
     const { definitionId } = await client.deploy({
-      name: uniqueName('ClaimWorklist'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({
@@ -239,9 +245,11 @@ describe('SDK: xor-with-transition-conditions', () => {
 
   it('init + recover uses registered handlers when recover gets no handlers', async () => {
     const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const name = uniqueName('InitRecover');
     const { definitionId } = await client.deploy({
-      name: uniqueName('InitRecover'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({
@@ -260,9 +268,11 @@ describe('SDK: xor-with-transition-conditions', () => {
 
   it('recover processes all pending continuations after start', async () => {
     const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
+    const name = uniqueName('RecoverTest');
     const { definitionId } = await client.deploy({
-      name: uniqueName('RecoverTest'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({

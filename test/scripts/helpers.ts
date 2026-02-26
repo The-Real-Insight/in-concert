@@ -83,11 +83,12 @@ export async function teardownDb(): Promise<void> {
 export async function deployAndStart(
   db: Db,
   bpmnFile: string,
-  options?: { businessKey?: string; processName?: string; user?: typeof MOCK_USER }
+  options?: { businessKey?: string; processName?: string; user?: typeof MOCK_USER; deployId?: string }
 ): Promise<TestContext> {
   const bpmn = loadBpmn(bpmnFile);
   const name = options?.processName ?? 'Test';
-  const { definitionId } = await deployDefinition(db, { name, version: 1, bpmnXml: bpmn });
+  const id = options?.deployId ?? `test-${name}`;
+  const { definitionId } = await deployDefinition(db, { id, name, version: '1', bpmnXml: bpmn });
   const { instanceId } = await startInstance(db, {
     commandId: uuidv4(),
     definitionId,

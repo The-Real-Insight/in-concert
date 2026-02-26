@@ -102,9 +102,11 @@ function onCallback(item: CallbackItem) {
 describe('SDK: linear-service-and-user-task', () => {
   it('executes full process and logs callbacks with name and role', async () => {
     const bpmn = loadBpmn('linear-service-and-user-task.bpmn');
+    const name = uniqueName('CaseProcess');
     const { definitionId } = await client.deploy({
-      name: uniqueName('CaseProcess'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
 
@@ -131,9 +133,11 @@ describe('SDK: linear-service-and-user-task', () => {
 
   it('leaves ApproveAssessment uncompleted and retrieves worklist', async () => {
     const bpmn = loadBpmn('linear-service-and-user-task.bpmn');
+    const name = uniqueName('WorklistTest');
     const { definitionId } = await client.deploy({
-      name: uniqueName('WorklistTest'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({
@@ -161,9 +165,11 @@ describe('SDK: linear-service-and-user-task', () => {
 
   it('tri-tool model: extensions in payload, callback looks up tri: and indicates tool invocation', async () => {
     const bpmn = loadBpmn('tri-tool-linear.bpmn');
+    const name = uniqueName('TriTool');
     const { definitionId } = await client.deploy({
-      name: uniqueName('TriTool'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
 
@@ -185,9 +191,11 @@ describe('SDK: linear-service-and-user-task', () => {
 
   it('subscribeToCallbacks receives and logs task properties', async () => {
     const bpmn = loadBpmn('linear-service-and-user-task.bpmn');
+    const name = uniqueName('CaseProcess_Subscribe');
     const { definitionId } = await client.deploy({
-      name: uniqueName('CaseProcess_Subscribe'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
 

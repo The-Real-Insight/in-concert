@@ -12,7 +12,6 @@ import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { connectDb, closeDb } from '../../src/db/client';
 import { ensureIndexes } from '../../src/db/indexes';
-import { getCollections } from '../../src/db/collections';
 import { BpmnEngineClient } from '../../src/sdk/client';
 import { addStreamHandler } from '../../src/ws/broadcast';
 import { createProjectionHandler } from '../../src/worklist/projection';
@@ -135,19 +134,14 @@ async function main() {
 
   const bpmnPath = join(__dirname, '../bpmn', model.bpmnFile);
   const bpmnXml = readFileSync(bpmnPath, 'utf8');
-  const { ProcessDefinitions } = getCollections(db);
-  let definitionId = (await ProcessDefinitions.findOne(
-    { name: model.id, version: 1 },
-    { projection: { _id: 1 } }
-  ))?._id;
-  if (!definitionId) {
-    const deployed = await client.deploy({
-      name: model.id,
-      version: 1,
-      bpmnXml,
-    });
-    definitionId = deployed.definitionId;
-  }
+  const deployed = await client.deploy({
+    id: model.id,
+    name: model.id,
+    version: '1',
+    bpmnXml,
+    overwrite: true,
+  });
+  const definitionId = deployed.definitionId;
 
   const user = { email: 'cli-user@example.com' };
   const { instanceId } = await client.startInstance({

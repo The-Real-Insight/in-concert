@@ -64,9 +64,11 @@ function uniqueName(base: string) {
 describe('SDK: input-sequence-with-subprocess', () => {
   it('input-sequence-with-assess (no subprocess) completes as baseline', async () => {
     const bpmn = loadBpmn('input-sequence-with-assess.bpmn');
+    const name = uniqueName('AssessBaseline');
     const { definitionId } = await client.deploy({
-      name: uniqueName('AssessBaseline'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({
@@ -80,9 +82,11 @@ describe('SDK: input-sequence-with-subprocess', () => {
 
   it('executes full process: root sequence, subprocess, then calculate-results', async () => {
     const bpmn = loadBpmn('input-sequence-with-subprocess.bpmn');
+    const name = uniqueName('SubprocessTest');
     const { definitionId } = await client.deploy({
-      name: uniqueName('SubprocessTest'),
-      version: 1,
+      id: name,
+      name,
+      version: '1',
       bpmnXml: bpmn,
     });
     const { instanceId } = await client.startInstance({
