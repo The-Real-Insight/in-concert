@@ -1,6 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
-import { getClient } from '../db/client';
 import { getCollections } from '../db/collections';
 import { getDefinition } from '../model/service';
 import { applyTransition } from '../engine/transition';
@@ -81,7 +80,7 @@ export async function processContinuation(
 
   const now = new Date();
 
-  const session = getClient().startSession();
+  const session = db.client.startSession();
   try {
     await session.withTransaction(async () => {
       const opts = { session };
