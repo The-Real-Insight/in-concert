@@ -19,14 +19,14 @@ apiRouter.post('/v1/purge', async (req: Request, res: Response) => {
     return;
   }
   const cols = [
-    COLLECTION_NAMES.ProcessDefinitions,
-    COLLECTION_NAMES.ProcessInstances,
+    COLLECTION_NAMES.ProcessDefinition,
+    COLLECTION_NAMES.ProcessInstance,
     COLLECTION_NAMES.ProcessInstanceState,
-    COLLECTION_NAMES.ProcessInstanceEvents,
+    COLLECTION_NAMES.ProcessInstanceEvent,
     COLLECTION_NAMES.ProcessInstanceHistory,
-    COLLECTION_NAMES.Continuations,
+    COLLECTION_NAMES.Continuation,
     COLLECTION_NAMES.Outbox,
-    COLLECTION_NAMES.HumanTasks,
+    COLLECTION_NAMES.HumanTask,
   ];
   const errors: string[] = [];
   try {

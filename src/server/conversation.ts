@@ -1,8 +1,10 @@
 /**
  * Conversation management for document/data context.
- * Uses tri-model Conversation shape; stored in Conversations collection.
+ * Uses tri-model Conversation shape; stored in Conversation collection.
+ * Conversation _id uses MongoDB ObjectId for consistency with tri-server.
  */
 import type { Db } from 'mongodb';
+import { ObjectId } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import {
   type Conversation as TriConversation,
@@ -13,7 +15,16 @@ import {
 /** tri-model Conversation shape for MongoDB storage. */
 export type ConversationDoc = TriConversation;
 
-const CONVERSATIONS_COLLECTION = 'Conversations';
+const CONVERSATION_COLLECTION = 'Conversation';
+
+/** Normalize conversationId for query: ObjectId if 24 hex chars, else string (legacy UUID). */
+function toConversationIdFilter(conversationId: string): ObjectId | string {
+  return /^[a-fA-F0-9]{24}$/.test(conversationId) ? new ObjectId(conversationId) : conversationId;
+}
+
+function byConversationId(conversationId: string): { _id: ObjectId | string } {
+  return { _id: toConversationIdFilter(conversationId) };
+}
 
 /** Map our path-based docs to tri-model ContextDocument (markdown optional for file refs). */
 function toContextDocument(d: { filename: string; path: string; summary?: string; _id?: string }) {
@@ -30,8 +41,8 @@ export async function createConversation(
   db: Db,
   params: { user: string; contextDocuments?: Array<{ filename: string; path: string; summary?: string }> }
 ): Promise<string> {
-  const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
-  const id = uuidv4();
+  const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
+  const id = new ObjectId();
   const doc = {
     _id: id,
     user: params.user,
@@ -41,12 +52,12 @@ export async function createConversation(
     processInstance: '',
   };
   await col.insertOne(doc as unknown as ConversationDoc);
-  return id;
+  return id.toString();
 }
 
 export async function getConversation(db: Db, conversationId: string): Promise<ConversationDoc | null> {
-  const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
-  return col.findOne({ _id: conversationId });
+  const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
+  return col.findOne(byConversationId(conversationId) as any);
 }
 
 export async function addContextDocuments(
@@ -55,12 +66,11 @@ export async function addContextDocuments(
   documents: Array<{ filename: string; path: string; summary?: string }>
 ): Promise<void> {
   if (documents.length === 0) return;
-  const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
+  const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
   const docsWithId = documents.map(toContextDocument);
-  await col.updateOne(
-    { _id: conversationId },
-    { $push: { contextDocuments: { $each: docsWithId } } }
-  );
+  await col.updateOne(byConversationId(conversationId) as any, {
+    $push: { contextDocuments: { $each: docsWithId } },
+  });
 }
 
 export async function addUserMessage(
@@ -68,12 +78,11 @@ export async function addUserMessage(
   conversationId: string,
   content: string
 ): Promise<void> {
-  const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
+  const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
   const msg = { type: MessageType.userMessage, content, date: new Date(), confirmation: false, resources: [], sourceResources: [] };
-  await col.updateOne(
-    { _id: conversationId },
-    { $push: { messages: msg as any } }
-  );
+  await col.updateOne(byConversationId(conversationId) as any, {
+    $push: { messages: msg as any },
+  });
 }
 
 export async function addBotMessage(
@@ -81,12 +90,11 @@ export async function addBotMessage(
   conversationId: string,
   content: string
 ): Promise<void> {
-  const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
+  const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
   const msg = { type: MessageType.botMessage, content, date: new Date(), confirmation: false, resources: [], sourceResources: [] };
-  await col.updateOne(
-    { _id: conversationId },
-    { $push: { messages: msg as any } }
-  );
+  await col.updateOne(byConversationId(conversationId) as any, {
+    $push: { messages: msg as any },
+  });
 }
 
 /** Ingest process instance ID into Conversation (tri-model processInstance: string). */
@@ -95,9 +103,8 @@ export async function ingestProcessInstance(
   conversationId: string,
   instanceId: string
 ): Promise<void> {
-  const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
-  await col.updateOne(
-    { _id: conversationId },
-    { $set: { processInstance: instanceId } }
-  );
+  const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
+  await col.updateOne(byConversationId(conversationId) as any, {
+    $set: { processInstance: instanceId },
+  });
 }

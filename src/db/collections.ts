@@ -1,14 +1,14 @@
 import { Db, Collection } from 'mongodb';
 
 export const COLLECTION_NAMES = {
-  ProcessDefinitions: 'ProcessDefinitions',
-  ProcessInstances: 'ProcessInstances',
+  ProcessDefinition: 'ProcessDefinition',
+  ProcessInstance: 'ProcessInstance',
   ProcessInstanceState: 'ProcessInstanceState',
-  ProcessInstanceEvents: 'ProcessInstanceEvents',
+  ProcessInstanceEvent: 'ProcessInstanceEvent',
   ProcessInstanceHistory: 'ProcessInstanceHistory',
-  Continuations: 'Continuations',
+  Continuation: 'Continuation',
   Outbox: 'Outbox',
-  HumanTasks: 'HumanTasks',
+  HumanTask: 'HumanTask',
 } as const;
 
 /** Audit trail: one row per task/instance lifecycle event. */
@@ -277,22 +277,22 @@ export type NormalizedGraph = {
 export function getCollections(database: Db) {
   return {
     ProcessDefinitions: database.collection<ProcessDefinitionDoc>(
-      COLLECTION_NAMES.ProcessDefinitions
+      COLLECTION_NAMES.ProcessDefinition
     ),
     ProcessInstances: database.collection<ProcessInstanceDoc>(
-      COLLECTION_NAMES.ProcessInstances
+      COLLECTION_NAMES.ProcessInstance
     ),
     ProcessInstanceState: database.collection<ProcessInstanceStateDoc>(
       COLLECTION_NAMES.ProcessInstanceState
     ),
     ProcessInstanceEvents: database.collection<ProcessInstanceEventDoc>(
-      COLLECTION_NAMES.ProcessInstanceEvents
+      COLLECTION_NAMES.ProcessInstanceEvent
     ),
     Continuations: database.collection<ContinuationDoc>(
-      COLLECTION_NAMES.Continuations
+      COLLECTION_NAMES.Continuation
     ),
     Outbox: database.collection<OutboxDoc>(COLLECTION_NAMES.Outbox),
-    HumanTasks: database.collection<HumanTaskDoc>(COLLECTION_NAMES.HumanTasks),
+    HumanTasks: database.collection<HumanTaskDoc>(COLLECTION_NAMES.HumanTask),
     ProcessInstanceHistory: database.collection<ProcessInstanceHistoryDoc>(
       COLLECTION_NAMES.ProcessInstanceHistory
     ),
