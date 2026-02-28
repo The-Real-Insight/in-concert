@@ -6,6 +6,6 @@
  * await ensureIndexes(db);
  * const client = new BpmnEngineClient({ mode: 'local', db });
  */
-export { connectDb, closeDb, getDb } from './client';
+export { connectDb, closeDb, getDb, getConversationsDb } from './client';
 export { ensureIndexes } from './indexes';
 export { COLLECTION_NAMES, getCollections } from './collections';

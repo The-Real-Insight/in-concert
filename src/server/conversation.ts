@@ -4,40 +4,43 @@
  */
 import type { Db } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  type Conversation as TriConversation,
+  type ContextDocument,
+  MessageType,
+} from '@the-real-insight/tri-model';
 
-export type ContextDocument = {
-  _id?: string;
-  filename: string;
-  /** Relative path under data/ (e.g. "abc123-report.pdf"). Later: S3 key. */
-  path: string;
-  summary?: string;
-};
-
-export type ConversationDoc = {
-  _id: string;
-  user: string;
-  messages: unknown[];
-  contextDocuments: ContextDocument[];
-  created: Date;
-  topic?: string;
-};
+/** tri-model Conversation shape for MongoDB storage. */
+export type ConversationDoc = TriConversation;
 
 const CONVERSATIONS_COLLECTION = 'Conversations';
 
+/** Map our path-based docs to tri-model ContextDocument (markdown optional for file refs). */
+function toContextDocument(d: { filename: string; path: string; summary?: string; _id?: string }) {
+  return {
+    _id: d._id ?? uuidv4(),
+    filename: d.filename,
+    markdown: '',
+    path: d.path,
+    summary: d.summary,
+  } satisfies ContextDocument;
+}
+
 export async function createConversation(
   db: Db,
-  params: { user: string; contextDocuments?: ContextDocument[] }
+  params: { user: string; contextDocuments?: Array<{ filename: string; path: string; summary?: string }> }
 ): Promise<string> {
   const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
   const id = uuidv4();
-  const doc: ConversationDoc = {
+  const doc = {
     _id: id,
     user: params.user,
     messages: [],
-    contextDocuments: params.contextDocuments ?? [],
+    contextDocuments: (params.contextDocuments ?? []).map(toContextDocument),
     created: new Date(),
+    processInstance: '',
   };
-  await col.insertOne(doc);
+  await col.insertOne(doc as unknown as ConversationDoc);
   return id;
 }
 
@@ -49,22 +52,16 @@ export async function getConversation(db: Db, conversationId: string): Promise<C
 export async function addContextDocuments(
   db: Db,
   conversationId: string,
-  documents: ContextDocument[]
+  documents: Array<{ filename: string; path: string; summary?: string }>
 ): Promise<void> {
   if (documents.length === 0) return;
   const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
-  const docsWithId = documents.map((d) => ({ ...d, _id: d._id ?? uuidv4() }));
+  const docsWithId = documents.map(toContextDocument);
   await col.updateOne(
     { _id: conversationId },
     { $push: { contextDocuments: { $each: docsWithId } } }
   );
 }
-
-export type ConversationMessage = {
-  role: 'user' | 'assistant';
-  content: string;
-  at?: Date;
-};
 
 export async function addUserMessage(
   db: Db,
@@ -72,8 +69,11 @@ export async function addUserMessage(
   content: string
 ): Promise<void> {
   const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
-  const msg: ConversationMessage = { role: 'user', content, at: new Date() };
-  await col.updateOne({ _id: conversationId }, { $push: { messages: msg } });
+  const msg = { type: MessageType.userMessage, content, date: new Date(), confirmation: false, resources: [], sourceResources: [] };
+  await col.updateOne(
+    { _id: conversationId },
+    { $push: { messages: msg as any } }
+  );
 }
 
 export async function addBotMessage(
@@ -82,6 +82,22 @@ export async function addBotMessage(
   content: string
 ): Promise<void> {
   const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
-  const msg: ConversationMessage = { role: 'assistant', content, at: new Date() };
-  await col.updateOne({ _id: conversationId }, { $push: { messages: msg } });
+  const msg = { type: MessageType.botMessage, content, date: new Date(), confirmation: false, resources: [], sourceResources: [] };
+  await col.updateOne(
+    { _id: conversationId },
+    { $push: { messages: msg as any } }
+  );
+}
+
+/** Ingest process instance ID into Conversation (tri-model processInstance: string). */
+export async function ingestProcessInstance(
+  db: Db,
+  conversationId: string,
+  instanceId: string
+): Promise<void> {
+  const col = db.collection<ConversationDoc>(CONVERSATIONS_COLLECTION);
+  await col.updateOne(
+    { _id: conversationId },
+    { $set: { processInstance: instanceId } }
+  );
 }

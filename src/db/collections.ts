@@ -39,6 +39,7 @@ export type HumanTaskStatus = 'OPEN' | 'CLAIMED' | 'COMPLETED' | 'CANCELED';
 export type HumanTaskDoc = {
   _id: string;
   instanceId: string;
+  conversationId?: string;
   definitionId?: string;
   nodeId: string;
   name: string;

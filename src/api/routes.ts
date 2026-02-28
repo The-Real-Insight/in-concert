@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
+import { config } from '../config';
 import { deployDefinition } from '../model/service';
 import { startInstance, getInstance } from '../instance/service';
 import { getProcessHistory } from '../history/service';
@@ -9,7 +10,14 @@ import { claimContinuation, processContinuation } from '../workers/processor';
 
 export const apiRouter = Router();
 
+/** Purge BPM collections in MONGO_BPM_DB only. NEVER purges MONGO_DB (Conversations). */
 apiRouter.post('/v1/purge', async (req: Request, res: Response) => {
+  const db = getDb();
+  if (db.databaseName !== config.mongoBpmDb) {
+    console.error('[purge] SAFETY: Refusing to purge non-BPM database', { databaseName: db.databaseName, expected: config.mongoBpmDb });
+    res.status(500).json({ error: 'Purge must only run against MONGO_BPM_DB, never MONGO_DB' });
+    return;
+  }
   const cols = [
     COLLECTION_NAMES.ProcessDefinitions,
     COLLECTION_NAMES.ProcessInstances,
@@ -19,11 +27,9 @@ apiRouter.post('/v1/purge', async (req: Request, res: Response) => {
     COLLECTION_NAMES.Continuations,
     COLLECTION_NAMES.Outbox,
     COLLECTION_NAMES.HumanTasks,
-    'Conversations',
   ];
   const errors: string[] = [];
   try {
-    const db = getDb();
     for (const name of cols) {
       try {
         await db.collection(name).deleteMany({});

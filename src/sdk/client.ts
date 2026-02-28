@@ -159,6 +159,41 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Get a single task by id (OPEN or CLAIMED status).
+   */
+  async getTask(
+    taskId: string
+  ): Promise<import('../db/collections').HumanTaskDoc | null> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/tasks/${taskId}`);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Get task failed: ${res.status}`);
+      return (await res.json()) as import('../db/collections').HumanTaskDoc;
+    }
+    const { HumanTasks } = (await import('../db/collections')).getCollections(this.config.db);
+    const task = await HumanTasks.findOne({
+      _id: taskId,
+      status: { $in: ['OPEN', 'CLAIMED'] },
+    });
+    return task;
+  }
+
+  /**
+   * Get worklist for a user: OPEN tasks + CLAIMED by that user.
+   * Convenience method combining listTasks(OPEN) and listTasks(CLAIMED, assigneeUserId).
+   */
+  async getWorklistForUser(
+    userId?: string
+  ): Promise<import('../db/collections').HumanTaskDoc[]> {
+    const params = { limit: 100, sortOrder: 'asc' as const };
+    const [open, claimed] = await Promise.all([
+      this.listTasks({ ...params, status: 'OPEN' }),
+      userId ? this.listTasks({ ...params, status: 'CLAIMED', assigneeUserId: String(userId) }) : [],
+    ]);
+    return [...open, ...claimed];
+  }
+
+  /**
    * List worklist tasks (human tasks). Local mode: queries HumanTasks. REST: GET /v1/tasks.
    */
   async listTasks(

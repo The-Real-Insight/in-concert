@@ -409,9 +409,9 @@
       conversationMessages.innerHTML = msgs.length === 0
         ? '<p class="status">No messages</p>'
         : msgs.map((m) => {
-          const role = m.role || 'user';
+          const role = m.type === 'botMessage' ? 'assistant' : (m.role || 'user');
           const content = escapeHtml(String(m.content || ''));
-          const at = m.at ? new Date(m.at).toLocaleString() : '';
+          const at = (m.date || m.at) ? new Date(m.date || m.at).toLocaleString() : '';
           return `<div class="conversation-message ${role}"><span class="role">${escapeHtml(role)}${at ? ' · ' + at : ''}</span><div>${content}</div></div>`;
         }).join('');
       const docs = conv.contextDocuments || [];

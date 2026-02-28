@@ -1,6 +1,6 @@
 /**
  * Demo server routes: list models, deploy from built-in BPMN files or AgenticWorkflow collection.
- * DB connection uses MONGO_URL and MONGO_DB from src/server/.env.
+ * AgenticWorkflow lives in MONGO_DB; BPM definitions/instances in MONGO_BPM_DB.
  */
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
@@ -8,11 +8,11 @@ import { ObjectId } from 'mongodb';
 import path from 'path';
 import { readFileSync, mkdirSync, existsSync, createReadStream } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../db/client';
+import { getDb, getConversationsDb } from '../db/client';
 import { deployDefinition } from '../model/service';
 import { startInstance, getInstance } from '../instance/service';
 import { getCollections } from '../db/collections';
-import { createConversation, addContextDocuments, addUserMessage } from './conversation';
+import { createConversation, addContextDocuments, addUserMessage, ingestProcessInstance } from './conversation';
 
 export const LOCAL_MODELS = [
   { id: 'input-sequence', label: 'input-sequence — linear: input-a, input-b, input-c → calculate-results', bpmnFile: 'input-sequence.bpmn' },
@@ -94,8 +94,8 @@ serverRouter.get('/demo/models', async (req: Request, res: Response) => {
     const source = (req.query.source as string) || 'insight';
     const provider = (req.query.provider as string) ?? '';
     if (source === 'insight') {
-      const db = getDb();
-      const col = db.collection(AGENTIC_WORKFLOW_COLLECTION);
+      const insightDb = getConversationsDb();
+      const col = insightDb.collection(AGENTIC_WORKFLOW_COLLECTION);
       const filter: Record<string, unknown> = {};
       const p = provider.trim();
       if (p) filter.provider = p;
@@ -125,8 +125,8 @@ serverRouter.post('/demo/deploy', async (req: Request, res: Response) => {
     let deployId: string;
 
     if (effectiveSource === 'insight') {
-      const db = getDb();
-      const col = db.collection(AGENTIC_WORKFLOW_COLLECTION);
+      const insightDb = getConversationsDb();
+      const col = insightDb.collection(AGENTIC_WORKFLOW_COLLECTION);
       const idFilter = ObjectId.isValid(modelId) ? { _id: new ObjectId(modelId) } : { name: modelId };
       const doc = await col.findOne(idFilter);
       if (!doc?.bpmnXML) {
@@ -174,18 +174,20 @@ serverRouter.post('/demo/start', async (req: Request, res: Response) => {
       return;
     }
     const db = getDb();
-    const userEmail = user?.email ?? 'ui-user@example.com';
-    const conversationId = await createConversation(db, {
+    const convDb = getConversationsDb();
+    const userEmail = user?.email ?? 'ada@the-real-insight.com';
+    const conversationId = await createConversation(convDb, {
       user: userEmail,
       contextDocuments: contextDocuments ?? [],
     });
-    await addUserMessage(db, conversationId, 'Started process');
+    await addUserMessage(convDb, conversationId, 'Started process');
     const result = await startInstance(db, {
       commandId: uuidv4(),
       definitionId,
       conversationId,
       user: { email: userEmail },
     });
+    await ingestProcessInstance(convDb, conversationId, result.instanceId);
     res.status(201).json({ ...result, conversationId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Start failed';
@@ -195,9 +197,9 @@ serverRouter.post('/demo/start', async (req: Request, res: Response) => {
 
 serverRouter.get('/demo/conversations/:conversationId', async (req: Request, res: Response) => {
   try {
-    const db = getDb();
+    const convDb = getConversationsDb();
     const { getConversation } = await import('./conversation');
-    const conv = await getConversation(db, req.params.conversationId);
+    const conv = await getConversation(convDb, req.params.conversationId);
     if (!conv) {
       res.status(404).json({ error: 'Conversation not found' });
       return;
@@ -240,14 +242,15 @@ serverRouter.post('/demo/tasks/:taskId/complete', async (req: Request, res: Resp
     }
     const instance = await getInstance(db, task.instanceId);
     if (instance?.conversationId) {
+      const convDb = getConversationsDb();
       if (contextDocuments?.length) {
-        await addContextDocuments(db, instance.conversationId, contextDocuments);
+        await addContextDocuments(convDb, instance.conversationId, contextDocuments);
       }
       const userContent =
         typeof taskResult === 'object' && taskResult != null && 'value' in taskResult
           ? String((taskResult as { value?: unknown }).value ?? JSON.stringify(taskResult))
           : JSON.stringify(taskResult ?? '');
-      if (userContent) await addUserMessage(db, instance.conversationId, userContent);
+      if (userContent) await addUserMessage(convDb, instance.conversationId, userContent);
     }
     const { Continuations } = cols;
     const now = new Date();

@@ -7,7 +7,7 @@ import { createServer } from 'http';
 import express from 'express';
 import path from 'path';
 import { existsSync } from 'fs';
-import { connectDb, closeDb, getDb } from '../db/client';
+import { connectDb, closeDb, getDb, getConversationsDb } from '../db/client';
 import { ensureIndexes } from '../db/indexes';
 import { apiRouter } from '../api/routes';
 import { worklistRouter } from '../worklist/routes';
@@ -69,7 +69,7 @@ function createServiceTaskHandler() {
       try {
         const instance = await getInstance(db, cb.instanceId);
         if (instance?.conversationId && name) {
-          await addBotMessage(db, instance.conversationId, `[${name}]`);
+          await addBotMessage(getConversationsDb(), instance.conversationId, `[${name}]`);
         }
       } catch (err) {
         console.error('Add bot message failed:', err);

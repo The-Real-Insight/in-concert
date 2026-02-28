@@ -2,14 +2,16 @@ import { MongoClient, Db } from 'mongodb';
 import { config } from '../config';
 
 let client: MongoClient | null = null;
-let db: Db | null = null;
+let bpmDb: Db | null = null;
+let conversationsDb: Db | null = null;
 
 export async function connectDb(): Promise<Db> {
-  if (db) return db;
+  if (bpmDb) return bpmDb;
   client = new MongoClient(config.mongoUrl);
   await client.connect();
-  db = client.db(config.mongoDb);
-  return db;
+  bpmDb = client.db(config.mongoBpmDb);
+  conversationsDb = client.db(config.mongoDb);
+  return bpmDb;
 }
 
 export function getClient(): MongoClient {
@@ -21,11 +23,19 @@ export async function closeDb(): Promise<void> {
   if (client) {
     await client.close();
     client = null;
-    db = null;
+    bpmDb = null;
+    conversationsDb = null;
   }
 }
 
+/** BPM engine data: definitions, instances, tasks, history, continuations, outbox. */
 export function getDb(): Db {
-  if (!db) throw new Error('Database not connected');
-  return db;
+  if (!bpmDb) throw new Error('Database not connected');
+  return bpmDb;
+}
+
+/** Conversations only (MONGO_DB). NEVER purged. */
+export function getConversationsDb(): Db {
+  if (!conversationsDb) throw new Error('Database not connected');
+  return conversationsDb;
 }

@@ -6,7 +6,7 @@ import { getCollections } from '../db/collections';
 import type { StreamPayload } from '../ws/broadcast';
 
 export function createProjectionHandler(db: Db) {
-  const { HumanTasks } = getCollections(db);
+  const { HumanTasks, ProcessInstances } = getCollections(db);
 
   return async (payload: StreamPayload): Promise<void> => {
     const now = new Date();
@@ -19,21 +19,28 @@ export function createProjectionHandler(db: Db) {
         const workItemId = p.workItemId;
         if (!workItemId) continue;
 
+        const instance = await ProcessInstances.findOne(
+          { _id: cb.instanceId },
+          { projection: { conversationId: 1 } }
+        );
+        const conversationId = instance?.conversationId;
+
+        const setFields: Record<string, unknown> = {
+          _id: workItemId,
+          instanceId: cb.instanceId,
+          nodeId: (p as { nodeId?: string }).nodeId ?? '',
+          name: p.name ?? 'Task',
+          role: p.lane,
+          status: 'OPEN',
+          candidateRoles: p.lane ? [p.lane] : [],
+          createdAt: now,
+          version: 1,
+        };
+        if (conversationId != null) setFields.conversationId = conversationId;
+
         await HumanTasks.updateOne(
           { _id: workItemId },
-          {
-            $set: {
-              _id: workItemId,
-              instanceId: cb.instanceId,
-              nodeId: (p as { nodeId?: string }).nodeId ?? '',
-              name: p.name ?? 'Task',
-              role: p.lane,
-              status: 'OPEN',
-              candidateRoles: p.lane ? [p.lane] : [],
-              createdAt: now,
-              version: 1,
-            },
-          },
+          { $set: setFields },
           { upsert: true }
         );
       }
