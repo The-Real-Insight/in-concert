@@ -1,6 +1,6 @@
 {
   "name": "@the-real-insight/tri-bpmn-engine",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "BPMN 2.0 subset execution engine with event sourcing",
   "main": "dist/index.js",
   "exports": {
