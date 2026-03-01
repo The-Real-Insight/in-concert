@@ -23,7 +23,7 @@
   }
 
   function getUserId() {
-    return document.getElementById('userId').value.trim() || 'ui-user@example.com';
+    return document.getElementById('userId').value.trim() || 'ada@the-real-insight.com';
   }
 
   let uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -46,7 +46,7 @@
     const source = getModelSource();
     let url = DEMO + '/models?source=' + encodeURIComponent(source) + '&_=' + Date.now();
     if (source === 'insight') {
-      const provider = getProviderFilter() || 'ZAW3-Y4D4-I2NY';
+      const provider = getProviderFilter() || 'S8QW-G8R2-9QLC';
       url += '&provider=' + encodeURIComponent(provider);
     }
     const { models } = await api(url);

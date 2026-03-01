@@ -259,11 +259,12 @@ export class BpmnEngineClient {
   /**
    * External system completed (e.g. async message received, long-running call returned).
    * Advances the process.
+   * Pass user when a human completed it via external UI (e.g. REST API) for audit trail.
    */
   async completeExternalTask(
     instanceId: string,
     workItemId: string,
-    options?: { commandId?: string; result?: Record<string, unknown> }
+    options?: { commandId?: string; result?: Record<string, unknown>; user?: import('./types').User }
   ): Promise<void> {
     return this.completeWorkItem(instanceId, workItemId, options);
   }

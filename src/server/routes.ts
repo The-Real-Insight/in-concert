@@ -180,7 +180,14 @@ serverRouter.post('/demo/start', async (req: Request, res: Response) => {
       user: userEmail,
       contextDocuments: contextDocuments ?? [],
     });
-    await addUserMessage(convDb, conversationId, 'Started process');
+    const { ProcessDefinitions } = getCollections(db);
+    const def = await ProcessDefinitions.findOne(
+      { _id: definitionId },
+      { projection: { name: 1 } }
+    );
+    const processName = (def as { name?: string } | null)?.name ?? 'process';
+    const timestamp = new Date().toLocaleString().replace(/[.,]/g, '');
+    await addUserMessage(convDb, conversationId, `${processName} ${timestamp}`);
     const result = await startInstance(db, {
       commandId: uuidv4(),
       definitionId,
