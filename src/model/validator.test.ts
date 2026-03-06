@@ -114,4 +114,32 @@ describe('validateBpmnXml', () => {
       })
     );
   });
+
+  it('reports orphaned tasks (no incoming or outgoing flow)', async () => {
+    const bpmnWithOrphan = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:userTask id="Task_1" name="Connected"/>
+    <bpmn:userTask id="Task_Orphan" name="Orphan"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="F1" sourceRef="Start_1" targetRef="Task_1"/>
+    <bpmn:sequenceFlow id="F2" sourceRef="Task_1" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const issues = await validateBpmnXml(bpmnWithOrphan);
+    const orphanIssues = issues.filter((i) => i.rule === 'NO_ORPHANED_NODES');
+    expect(orphanIssues).toContainEqual(
+      expect.objectContaining({
+        elementId: 'Task_Orphan',
+        message: expect.stringContaining('no incoming'),
+      })
+    );
+    expect(orphanIssues).toContainEqual(
+      expect.objectContaining({
+        elementId: 'Task_Orphan',
+        message: expect.stringContaining('no outgoing'),
+      })
+    );
+  });
 });

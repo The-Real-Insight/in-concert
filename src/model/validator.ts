@@ -88,6 +88,82 @@ function validatePoolsAndLanes(xml: string): ValidationIssue[] {
   return issues;
 }
 
+const TASK_LIKE_TYPES = new Set([
+  'userTask',
+  'serviceTask',
+  'subProcess',
+  'callActivity',
+  'exclusiveGateway',
+  'parallelGateway',
+  'inclusiveGateway',
+  'intermediateCatchEvent',
+  'intermediateThrowEvent',
+]);
+
+/**
+ * Check for orphaned flow nodes (no incoming or no outgoing connections).
+ */
+function validateNoOrphanedNodes(graph: NormalizedGraph): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const { nodes, metadata } = graph;
+  const incoming = metadata.incomingByNode ?? {};
+  const outgoing = metadata.outgoingByNode ?? {};
+
+  for (const [nodeId, node] of Object.entries(nodes)) {
+    const inCount = (incoming[nodeId] ?? []).length;
+    const outCount = (outgoing[nodeId] ?? []).length;
+
+    switch (node.type) {
+      case 'startEvent':
+        if (outCount === 0) {
+          issues.push({
+            rule: 'NO_ORPHANED_NODES',
+            severity: 'error',
+            elementId: nodeId,
+            elementType: 'startEvent',
+            message: `Start event "${nodeId}" has no outgoing flow`,
+          });
+        }
+        break;
+      case 'endEvent':
+        if (inCount === 0) {
+          issues.push({
+            rule: 'NO_ORPHANED_NODES',
+            severity: 'error',
+            elementId: nodeId,
+            elementType: 'endEvent',
+            message: `End event "${nodeId}" has no incoming flow`,
+          });
+        }
+        break;
+      default:
+        if (TASK_LIKE_TYPES.has(node.type)) {
+          if (inCount === 0) {
+            issues.push({
+              rule: 'NO_ORPHANED_NODES',
+              severity: 'error',
+              elementId: nodeId,
+              elementType: node.type,
+              message: `"${node.name || nodeId}" has no incoming flow`,
+            });
+          }
+          if (outCount === 0) {
+            issues.push({
+              rule: 'NO_ORPHANED_NODES',
+              severity: 'error',
+              elementId: nodeId,
+              elementType: node.type,
+              message: `"${node.name || nodeId}" has no outgoing flow`,
+            });
+          }
+        }
+        break;
+    }
+  }
+
+  return issues;
+}
+
 /**
  * Validate a BPMN model for executability and consistency.
  * Returns a list of problematic model elements.
@@ -102,6 +178,8 @@ export function validateBpmnGraph(graph: NormalizedGraph): ValidationIssue[] {
       message: 'Process must have at least one start event',
     });
   }
+
+  issues.push(...validateNoOrphanedNodes(graph));
 
   return issues;
 }
