@@ -17,6 +17,7 @@
  */
 export { BpmnEngineClient } from './client';
 export { TriSdk } from './facade';
+export type { ValidationIssue } from '../model/validator';
 export type {
   TriSdkConfig,
   TriSdkEngineConfig,

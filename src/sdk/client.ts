@@ -57,6 +57,16 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Validate a BPMN model for executability and consistency.
+   * Returns a list of problematic model elements (e.g. pools/lanes missing tri:roleId).
+   * Pure function: works in both rest and local mode without server/DB.
+   */
+  async validateBpmn(params: { bpmnXml: string }): Promise<import('../model/validator').ValidationIssue[]> {
+    const { validateBpmnXml } = await import('../model/validator');
+    return validateBpmnXml(params.bpmnXml);
+  }
+
+  /**
    * Deploy a BPMN process definition.
    */
   async deploy(params: DeployParams): Promise<DeployResult> {

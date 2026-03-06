@@ -68,8 +68,9 @@ function createServiceTaskHandler() {
       const name = p.name ?? '';
       try {
         const instance = await getInstance(db, cb.instanceId);
-        if (instance?.conversationId && name) {
-          await addBotMessage(getConversationsDb(), instance.conversationId, `[${name}]`);
+        if (instance?.conversationId) {
+          const werkzeugName = name || 'Unbekannt';
+          await addBotMessage(getConversationsDb(), instance.conversationId, `Ich habe das Werkzeug "${werkzeugName}" ausgeführt.`);
         }
       } catch (err) {
         console.error('Add bot message failed:', err);
