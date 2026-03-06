@@ -84,9 +84,27 @@ export async function processContinuation(
   try {
     await session.withTransaction(async () => {
       const opts = { session };
-      if (result.events.length > 0) {
+      const numEvents = result.events.length;
+
+      // Atomically reserve seq numbers first to avoid E11000 duplicate key races
+      // when multiple workers or retries process the same instance.
+      let eventsToInsert = result.events;
+      if (numEvents > 0) {
+        const updateResult = await ProcessInstanceState.findOneAndUpdate(
+          { _id: continuation.instanceId, version: stateDoc.version },
+          { $inc: { lastEventSeq: numEvents } },
+          { ...opts, returnDocument: 'after' }
+        );
+        if (!updateResult) {
+          throw new Error('Version conflict');
+        }
+        const startSeq = (updateResult.lastEventSeq ?? stateDoc.lastEventSeq) - numEvents + 1;
+        eventsToInsert = result.events.map((e, i) => ({ ...e, seq: startSeq + i }));
+      }
+
+      if (numEvents > 0) {
         await ProcessInstanceEvents.insertMany(
-          result.events.map((e) => ({ ...e, _id: uuidv4() })),
+          eventsToInsert.map((e) => ({ ...e, _id: uuidv4() })),
           opts
         );
       }
@@ -131,7 +149,7 @@ export async function processContinuation(
           : null;
       const historyRecords = buildHistoryRecords(
         continuation.instanceId,
-        result.events,
+        eventsToInsert,
         instanceDoc,
         continuationPayload,
         def.graph
