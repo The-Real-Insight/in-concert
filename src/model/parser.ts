@@ -88,6 +88,20 @@ function parseConditionExpressionsByFlow(xml: string): Record<string, string> {
   return result;
 }
 
+/** Parse lane elements from BPMN XML to extract id, name, tri:roleId. */
+function parseLanesFromXml(xml: string): { id: string; name?: string; roleId?: string }[] {
+  const result: { id: string; name?: string; roleId?: string }[] = [];
+  const laneRe = /<bpmn:lane\s+id="([^"]+)"([^>]*)>/gi;
+  let m;
+  while ((m = laneRe.exec(xml))) {
+    const attrs = m[2] ?? '';
+    const name = attrs.match(/name="([^"]*)"/)?.[1]?.trim();
+    const roleId = attrs.match(/tri:roleId="([^"]*)"/)?.[1]?.trim();
+    result.push({ id: m[1]!, name, roleId });
+  }
+  return result;
+}
+
 /** Extract custom extension attributes (ns:attr) from task nodes. Generic—no tri-specific logic. */
 function parseExtensionAttributesByNode(xml: string): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {};
@@ -125,16 +139,25 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
     laneSets?: { lanes?: { id: string; name?: string; flowNodeRef?: unknown[] }[] }[];
   };
 
-  const nodeIdToLane: Record<string, string> = {};
+  const lanesParsed = parseLanesFromXml(xml);
+  const laneIdToRole: Record<string, { roleName: string; roleId?: string }> = {};
+  for (const l of lanesParsed) {
+    laneIdToRole[l.id] = {
+      roleName: l.name ?? l.id,
+      roleId: l.roleId,
+    };
+  }
+
+  const nodeIdToLaneRole: Record<string, { roleName: string; roleId?: string }> = {};
   const laneSets = process.laneSets ?? [];
   for (const ls of laneSets) {
     const lanes = ls.lanes ?? [];
     for (const lane of lanes) {
-      const laneName = lane.name ?? lane.id;
+      const role = laneIdToRole[lane.id] ?? { roleName: lane.name ?? lane.id };
       const refs: unknown[] = lane.flowNodeRef ?? [];
       for (const ref of refs) {
         const nodeId = typeof ref === 'string' ? ref : (ref as { id?: string })?.id;
-        if (nodeId) nodeIdToLane[nodeId] = laneName;
+        if (nodeId) nodeIdToLaneRole[nodeId] = role;
       }
     }
   }
@@ -183,11 +206,13 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       const incoming = resolveIncoming(el as { incoming?: { id: string }[] });
       const outgoing = resolveOutgoing(el as { outgoing?: { id: string }[] });
 
+      const laneRole = nodeIdToLaneRole[flowEl.id];
       const node: NodeDef = {
         id: flowEl.id,
         type: getNodeType(type),
         name: flowEl.name,
-        laneRef: nodeIdToLane[flowEl.id],
+        laneRef: laneRole?.roleName,
+        roleId: laneRole?.roleId,
         incoming,
         outgoing,
       };

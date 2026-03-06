@@ -108,5 +108,7 @@ On every push to `main`, a GitHub Action:
 npm test              # all tests (unit + conformance)
 npm run test:unit      # unit tests only (no MongoDB)
 npm run test:conformance   # conformance tests (requires MongoDB, see readme/TEST.md)
+npm run test:sdk       # SDK tests (requires MongoDB)
+npm run test:worklist  # worklist role-filter tests (requires MongoDB)
 npm run test:integration   # integration script (requires MongoDB)
 ```

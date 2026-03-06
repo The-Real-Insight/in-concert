@@ -32,6 +32,14 @@ export async function ensureIndexes(db: Db): Promise<void> {
 
   await db
     .collection(COLLECTION_NAMES.HumanTask)
+    .createIndex({ status: 1, roleId: 1, createdAt: -1 });
+
+  await db
+    .collection(COLLECTION_NAMES.HumanTask)
+    .createIndex({ status: 1, assigneeUserId: 1, roleId: 1, createdAt: -1 });
+
+  await db
+    .collection(COLLECTION_NAMES.HumanTask)
     .createIndex({ instanceId: 1 });
 
   await db

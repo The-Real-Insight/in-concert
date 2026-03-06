@@ -274,6 +274,7 @@ export function applyTransition(
           kind: node.type,
           ...(node.name != null && { name: node.name }),
           ...(node.laneRef != null && { lane: node.laneRef }),
+          ...(node.roleId != null && { roleId: node.roleId }),
           ...(node.extensions && Object.keys(node.extensions).length > 0 && { extensions: node.extensions }),
         },
         status: 'READY',

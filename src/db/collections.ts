@@ -43,10 +43,16 @@ export type HumanTaskDoc = {
   definitionId?: string;
   nodeId: string;
   name: string;
+  /** Lane/pool name (role display name) from BPMN */
   role?: string;
+  /** tri:roleId from pool/lane; used for worklist filtering by user roleAssignments */
+  roleId?: string;
   status: HumanTaskStatus;
   assigneeUserId?: string;
+  /** Lane names for backward compatibility */
   candidateRoles?: string[];
+  /** Role IDs (tri:roleId) for filtering by user.roleAssignments[].role */
+  candidateRoleIds?: string[];
   createdAt: Date;
   claimedAt?: Date;
   completedAt?: Date;
@@ -247,6 +253,8 @@ export type NodeDef = {
   type: string;
   name?: string;
   laneRef?: string;
+  /** tri:roleId from pool/lane; used for worklist filtering by user roleAssignments */
+  roleId?: string;
   incoming: string[];
   outgoing: string[];
   attachedToRef?: string;

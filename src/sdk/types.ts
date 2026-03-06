@@ -76,6 +76,10 @@ export type ListTasksParams = {
   instanceId?: string;
   status?: string;
   assigneeUserId?: string;
+  /** User _id for worklist-for-user filter (claimed tasks) */
+  userId?: string;
+  /** Role IDs from user.roleAssignments[].role (ObjectId as string) for OPEN task filtering */
+  roleIds?: string[];
   limit?: number;
   sortOrder?: 'asc' | 'desc'; // createdAt: asc = oldest first (process order), desc = newest first
 };
@@ -111,6 +115,8 @@ export type CallbackWorkPayload = {
   kind: 'serviceTask' | 'userTask';
   name?: string;
   lane?: string; // BPMN lane name (role)
+  /** tri:roleId from pool/lane; used for worklist filtering by user roleAssignments */
+  roleId?: string;
   /** Custom extension attributes from BPMN node (e.g. tri:toolId, tri:toolType). */
   extensions?: Record<string, string>;
 };

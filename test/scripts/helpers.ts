@@ -39,6 +39,7 @@ export const BPMN_FILES: Record<string, string> = {
   'message-throw.bpmn': 'message-throw-to-callback.bpmn',
   'subprocess.bpmn': 'embedded-subprocess-minimal.bpmn',
   'linear-service-and-user-task.bpmn': 'linear-service-and-user-task.bpmn',
+  'linear-service-and-user-task-with-roles.bpmn': 'linear-service-and-user-task-with-roles.bpmn',
   'xor-with-transition-conditions.bpmn': 'xor-with-transition-conditions.bpmn',
   'tri-tool-linear.bpmn': 'tri-tool-linear.bpmn',
   'input-sequence.bpmn': 'input-sequence.bpmn',

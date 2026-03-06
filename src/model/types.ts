@@ -3,6 +3,8 @@ export type NodeDef = {
   type: string;
   name?: string;
   laneRef?: string; // lane name (role) from BPMN laneSet
+  /** tri:roleId from pool/lane; used for worklist filtering by user roleAssignments */
+  roleId?: string;
   /** For nodes inside an embedded subprocess: the subprocess node id. */
   parentNodeId?: string;
   incoming: string[];

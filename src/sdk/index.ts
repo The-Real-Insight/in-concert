@@ -39,4 +39,5 @@ export type {
   CallbackItem,
   CallbackWorkPayload,
   CallbackDecisionPayload,
+  ListTasksParams,
 } from './types';

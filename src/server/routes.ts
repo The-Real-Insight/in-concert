@@ -13,12 +13,14 @@ import { deployDefinition } from '../model/service';
 import { startInstance, getInstance } from '../instance/service';
 import { getCollections } from '../db/collections';
 import { createConversation, addContextDocuments, addUserMessage, ingestProcessInstance } from './conversation';
+import { extractRolesFromBpmn } from '../model/validator';
 
 export const LOCAL_MODELS = [
   { id: 'input-sequence', label: 'input-sequence — linear: input-a, input-b, input-c → calculate-results', bpmnFile: 'input-sequence.bpmn' },
   { id: 'input-sequence-with-assess', label: 'input-sequence-with-assess — input-a → assess-a → input-b → assess-b → input-c → assess-c → calculate-results', bpmnFile: 'input-sequence-with-assess.bpmn' },
   { id: 'input-sequence-with-subprocess', label: 'input-sequence-with-subprocess — input/assess a,b,c → subprocess (input-d, assess-d, input-e, assess-e) → calculate-results', bpmnFile: 'input-sequence-with-subprocess.bpmn' },
   { id: 'input-parallel-with-subprocess', label: 'input-parallel-with-subprocess — AND split: input/assess a,b,c in parallel → AND join → subprocess → calculate-results', bpmnFile: 'input-parallel-with-subprocess.bpmn' },
+  { id: 'linear-service-and-user-task-with-roles', label: 'linear-with-roles — FrontOffice → BackOffice → Accounting (tri:roleId on lanes)', bpmnFile: 'linear-service-and-user-task-with-roles.bpmn' },
 ];
 
 export type ModelSource = 'local' | 'insight';
@@ -155,7 +157,8 @@ serverRouter.post('/demo/deploy', async (req: Request, res: Response) => {
       bpmnXml,
       overwrite: true,
     });
-    res.json({ definitionId: deployed.definitionId });
+    const roles = extractRolesFromBpmn(bpmnXml);
+    res.json({ definitionId: deployed.definitionId, roles });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Deploy failed';
     res.status(400).json({ error: msg });

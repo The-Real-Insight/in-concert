@@ -10,15 +10,36 @@ export const worklistRouter = Router();
 
 worklistRouter.get('/v1/tasks', async (req: Request, res: Response) => {
   try {
-    const { assigneeUserId, candidateRole, status, instanceId, limit, cursor, sortOrder } = req.query;
+    const { assigneeUserId, candidateRole, status, instanceId, limit, cursor, sortOrder, userId, roleIds } = req.query;
     const db = getDb();
     const { HumanTasks } = getCollections(db);
 
     const filter: Record<string, unknown> = {};
-    if (status) filter.status = status;
-    else filter.status = 'OPEN';
-    if (assigneeUserId) filter.assigneeUserId = assigneeUserId;
-    if (candidateRole) filter.candidateRoles = candidateRole;
+
+    // Worklist for user: tasks claimed by user OR OPEN tasks matching user's roles (from roleAssignments)
+    const uid = typeof userId === 'string' ? userId : undefined;
+    const rids = typeof roleIds === 'string'
+      ? roleIds.split(',').map((s) => s.trim()).filter(Boolean)
+      : Array.isArray(roleIds)
+        ? roleIds.map(String).filter(Boolean)
+        : undefined;
+
+    if (uid != null && rids != null && rids.length > 0) {
+      filter.$or = [
+        { status: 'CLAIMED', assigneeUserId: uid },
+        { status: 'OPEN', roleId: { $in: rids } },
+        { status: 'OPEN', candidateRoleIds: { $in: rids } },
+      ];
+    } else if (uid != null) {
+      filter.assigneeUserId = uid;
+      if (!status) filter.status = 'CLAIMED';
+    } else {
+      if (status) filter.status = status;
+      else filter.status = 'OPEN';
+      if (assigneeUserId) filter.assigneeUserId = assigneeUserId;
+    }
+
+    if (candidateRole && !filter.$or) filter.candidateRoles = candidateRole;
     if (instanceId) filter.instanceId = instanceId;
 
     const limitNum = Math.min(parseInt(String(limit || '50'), 10) || 50, 100);

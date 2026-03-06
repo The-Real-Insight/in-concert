@@ -15,6 +15,7 @@ import { ensureIndexes } from '../../src/db/indexes';
 import { BpmnEngineClient } from '../../src/sdk/client';
 import { addStreamHandler } from '../../src/ws/broadcast';
 import { createProjectionHandler } from '../../src/worklist/projection';
+import { extractRolesFromBpmn } from '../../src/model/validator';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -83,6 +84,11 @@ const MODELS: ProcessModel[] = [
     label: 'input-parallel-with-subprocess — AND split: input/assess a,b,c in parallel → AND join → subprocess → calculate-results',
     bpmnFile: 'input-parallel-with-subprocess.bpmn',
   },
+  {
+    id: 'linear-service-and-user-task-with-roles',
+    label: 'linear-with-roles — FrontOffice → BackOffice → Accounting (tri:roleId on lanes)',
+    bpmnFile: 'linear-service-and-user-task-with-roles.bpmn',
+  },
 ];
 
 function prompt(question: string): Promise<string> {
@@ -143,6 +149,11 @@ async function main() {
   });
   const definitionId = deployed.definitionId;
 
+  const roles = extractRolesFromBpmn(bpmnXml);
+  if (roles.length > 0) {
+    robot(`Your roles (synthetic): ${roles.map((r) => r.roleName || r.roleId).join(', ')}`);
+  }
+
   const user = { email: 'cli-user@example.com' };
   const { instanceId } = await client.startInstance({
     commandId: uuidv4(),
@@ -168,14 +179,14 @@ async function main() {
       process.exit(0);
     }
 
+    const roleIds = roles.map((r) => r.roleId);
     let openTasks: Awaited<ReturnType<typeof client.listTasks>> = [];
     while (openTasks.length === 0) {
       await sleep(500);
-      openTasks = await client.listTasks({
-        instanceId,
-        status: 'OPEN',
-        sortOrder: 'asc',
-      });
+      const tasks = roleIds.length > 0
+        ? await client.getWorklistForUser({ userId, roleIds })
+        : await client.listTasks({ instanceId, status: 'OPEN', sortOrder: 'asc' });
+      openTasks = tasks.filter((t) => t.instanceId === instanceId && t.status !== 'COMPLETED');
     }
 
     const task = openTasks[0]!;

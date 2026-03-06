@@ -14,7 +14,7 @@ export function createProjectionHandler(db: Db) {
     if (payload.callbacks) {
       for (const cb of payload.callbacks) {
         if (cb.kind !== 'CALLBACK_WORK') continue;
-        const p = cb.payload as { workItemId?: string; kind?: string; name?: string; lane?: string };
+        const p = cb.payload as { workItemId?: string; kind?: string; name?: string; lane?: string; roleId?: string };
         if (p.kind !== 'userTask') continue;
         const workItemId = p.workItemId;
         if (!workItemId) continue;
@@ -31,8 +31,10 @@ export function createProjectionHandler(db: Db) {
           nodeId: (p as { nodeId?: string }).nodeId ?? '',
           name: p.name ?? 'Task',
           role: p.lane,
+          roleId: p.roleId,
           status: 'OPEN',
           candidateRoles: p.lane ? [p.lane] : [],
+          candidateRoleIds: p.roleId ? [p.roleId] : [],
           createdAt: now,
           version: 1,
         };

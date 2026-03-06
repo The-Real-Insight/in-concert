@@ -347,7 +347,7 @@ User tasks and service tasks create **work items** that your application must ha
 
 ### Work item payload
 
-`CALLBACK_WORK` payload includes `workItemId`, `nodeId`, `kind` ('userTask' | 'serviceTask'), `name`, `lane`. If the BPMN node has custom extension attributes (e.g. `tri:toolId`, `tri:toolType`), they appear in `payload.extensions`:
+`CALLBACK_WORK` payload includes `workItemId`, `nodeId`, `kind` ('userTask' | 'serviceTask'), `name`, `lane`, `roleId` (tri:roleId from pool/lane). If the BPMN node has custom extension attributes (e.g. `tri:toolId`, `tri:toolType`), they appear in `payload.extensions`:
 
 ```typescript
 const toolId = item.payload.extensions?.['tri:toolId'];
@@ -828,6 +828,7 @@ Each `CALLBACK_WORK` item includes:
 | `kind` | `'serviceTask'` or `'userTask'` |
 | `name` | Task name from BPMN |
 | `lane` | Lane name (role) from BPMN, if the task is in a lane |
+| `roleId` | `tri:roleId` from pool/lane; for worklist filtering by user.roleAssignments |
 
 ---
 
@@ -858,8 +859,25 @@ BPMN file: `test/bpmn/xor-with-transition-conditions.bpmn`
 | Operation | SDK | REST |
 |-----------|-----|------|
 | List tasks | `client.listTasks({ instanceId, status: 'OPEN', sortOrder: 'asc' })` | `GET /v1/tasks?instanceId=…&status=OPEN` |
+| Worklist for user | `client.getWorklistForUser({ userId, roleIds })` | `GET /v1/tasks?userId=…&roleIds=…` |
 | Activate | `client.activateTask(taskId, { userId })` | `POST /v1/tasks/:taskId/activate` |
 | Complete | `client.completeUserTask(instanceId, taskId, { user })` | `POST /v1/tasks/:taskId/complete` or engine work-items endpoint |
+
+**Worklist for user** – Returns OPEN tasks matching user's roles (from `roleAssignments`) plus CLAIMED tasks for that user. Pass `roleIds` from `user.roleAssignments.map(ra => String(ra.role))`. BPMN lanes must define `tri:roleId` (see [Worklist reference](#worklist-reference) below).
+
+#### Role-based worklist example
+
+When users have `roleAssignments` (e.g. from JWT), use `getWorklistForUser` to show only tasks the user can perform:
+
+```typescript
+// JWT payload: user._id, user.roleAssignments = [{ role: ObjectId }, ...]
+const roleIds = (user.roleAssignments ?? []).map((ra) => String(ra.role));
+const tasks = await client.getWorklistForUser({
+  userId: user._id,
+  roleIds,
+});
+// Returns: OPEN tasks where roleId matches user's roles + CLAIMED tasks for this user
+```
 
 ### Example script (local mode)
 
@@ -1133,6 +1151,59 @@ npm run cli
 ```
 
 Models: `input-sequence` (input-a → input-b → input-c → calculate-results), `input-sequence-with-assess` (adds assess-a, assess-b, assess-c after each input; service tasks log "Assessing X" with the last user input). Source: `test/cli/interactive.ts`.
+
+---
+
+## Worklist reference
+
+The worklist layer projects USER_TASK work items from the engine, persists them in `human_tasks`, and provides APIs for claim/complete. The engine remains authoritative; the worklist is eventually consistent.
+
+### Data model (HumanTask)
+
+| Field | Description |
+|-------|-------------|
+| `_id` | workItemId (natural key) |
+| `instanceId` | Process instance |
+| `nodeId` | BPMN node id |
+| `name` | BPMN task name |
+| `role` | Lane/pool name (display) |
+| `roleId` | tri:roleId from pool/lane; for filtering by user.roleAssignments |
+| `status` | OPEN \| CLAIMED \| COMPLETED \| CANCELED |
+| `assigneeUserId` | User who claimed the task |
+| `candidateRoles` | Lane names (legacy) |
+| `candidateRoleIds` | tri:roleId values for role-based filtering |
+| `createdAt`, `claimedAt`, `completedAt`, `canceledAt` | Timestamps |
+| `result` | Completion payload |
+| `version` | Optimistic lock |
+
+Indexes: `(status, assigneeUserId)`, `(status, roleId)`, `(status, candidateRoles)`, `(instanceId)`.
+
+### Projection rules
+
+On `CALLBACK_WORK` (kind = userTask): upsert with `_id` = workItemId, `status` = OPEN, `role` = payload.lane, `roleId` = payload.roleId, `candidateRoleIds` = [payload.roleId]. On `WORK_ITEM_COMPLETED`: status → COMPLETED. On `WORK_ITEM_CANCELED` or `INSTANCE_TERMINATED`: status → CANCELED.
+
+### REST API (GET /v1/tasks)
+
+Query params: `assigneeUserId`, `candidateRole`, `status` (default OPEN), `instanceId`, `limit`, `cursor`, `userId`, `roleIds` (comma-separated).
+
+When `userId` + `roleIds` provided: returns tasks where (assigneeUserId === userId) OR (status === OPEN AND roleId/candidateRoleIds matches roleIds).
+
+### REST API (mutating)
+
+- **POST /v1/tasks/:taskId/activate** – OPEN → CLAIMED (body: `commandId`, `userId`)
+- **POST /v1/tasks/:taskId/claim** – Same as activate
+- **POST /v1/tasks/:taskId/unclaim** – CLAIMED → OPEN (body: `commandId`, `userId`)
+- **POST /v1/tasks/:taskId/complete** – Submit completion (body: `commandId`, `userId`, `result`)
+
+All mutating endpoints require `commandId` (UUID). Completion delegates to the engine; engine 409 is propagated.
+
+### Role-based filtering
+
+BPMN lanes/pools must define `tri:roleId`. Users have `roleAssignments` (e.g. from JWT). Use `getWorklistForUser({ userId, roleIds })` with `roleIds = user.roleAssignments.map(ra => String(ra.role))`.
+
+### Lifecycle
+
+Token reaches USER_TASK → Engine creates workItem → Engine emits CALLBACK_WORK → Worklist projects task (OPEN) → User claims (CLAIMED) → User completes → Worklist calls engine → Engine resumes → Worklist marks COMPLETED.
 
 ---
 

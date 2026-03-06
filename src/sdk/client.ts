@@ -189,32 +189,37 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Get worklist for a user: OPEN tasks + CLAIMED by that user.
-   * Convenience method combining listTasks(OPEN) and listTasks(CLAIMED, assigneeUserId).
+   * Get worklist for a user: OPEN tasks matching user's roles + CLAIMED by that user.
+   * Pass userId (user._id) and roleIds from user.roleAssignments.map(ra => String(ra.role)).
    */
-  async getWorklistForUser(
-    userId?: string
-  ): Promise<import('../db/collections').HumanTaskDoc[]> {
-    const params = { limit: 100, sortOrder: 'asc' as const };
-    const [open, claimed] = await Promise.all([
-      this.listTasks({ ...params, status: 'OPEN' }),
-      userId ? this.listTasks({ ...params, status: 'CLAIMED', assigneeUserId: String(userId) }) : [],
-    ]);
-    return [...open, ...claimed];
+  async getWorklistForUser(params: {
+    userId: string;
+    roleIds?: string[];
+  }): Promise<import('../db/collections').HumanTaskDoc[]> {
+    return this.listTasks({
+      userId: params.userId,
+      roleIds: params.roleIds ?? [],
+      limit: 100,
+      sortOrder: 'asc',
+    });
   }
 
   /**
    * List worklist tasks (human tasks). Local mode: queries HumanTasks. REST: GET /v1/tasks.
+   * For worklist-for-user: pass userId + roleIds to get OPEN tasks matching roles + CLAIMED by user.
    */
   async listTasks(
-    params?: { instanceId?: string; status?: string; assigneeUserId?: string; limit?: number; sortOrder?: 'asc' | 'desc' }
+    params?: import('./types').ListTasksParams
   ): Promise<import('../db/collections').HumanTaskDoc[]> {
     if (this.config.mode === 'rest') {
       const q = new URLSearchParams();
       if (params?.instanceId) q.set('instanceId', params.instanceId);
       if (params?.status) q.set('status', params.status);
       if (params?.assigneeUserId) q.set('assigneeUserId', params.assigneeUserId);
+      if (params?.userId) q.set('userId', params.userId);
+      if (params?.roleIds?.length) q.set('roleIds', params.roleIds.join(','));
       if (params?.limit) q.set('limit', String(params.limit));
+      if (params?.sortOrder) q.set('sortOrder', params.sortOrder);
       const res = await fetch(`${this.config.baseUrl}/v1/tasks?${q}`);
       if (!res.ok) throw new Error(`List tasks failed: ${res.status}`);
       const json = (await res.json()) as { items: import('../db/collections').HumanTaskDoc[] };
@@ -227,9 +232,23 @@ export class BpmnEngineClient {
     const { HumanTasks } = (await import('../db/collections')).getCollections(this.config.db);
     const filter: Record<string, unknown> = {};
     if (params?.instanceId) filter.instanceId = params.instanceId;
-    if (params?.status) filter.status = params.status;
-    else filter.status = 'OPEN';
-    if (params?.assigneeUserId) filter.assigneeUserId = params.assigneeUserId;
+
+    const uid = params?.userId;
+    const rids = params?.roleIds ?? [];
+    if (uid != null && rids.length > 0) {
+      filter.$or = [
+        { status: 'CLAIMED', assigneeUserId: uid },
+        { status: 'OPEN', roleId: { $in: rids } },
+        { status: 'OPEN', candidateRoleIds: { $in: rids } },
+      ];
+    } else if (uid != null) {
+      filter.assigneeUserId = uid;
+      filter.status = params?.status ?? 'CLAIMED';
+    } else {
+      filter.status = params?.status ?? 'OPEN';
+      if (params?.assigneeUserId) filter.assigneeUserId = params.assigneeUserId;
+    }
+
     const limit = Math.min(params?.limit ?? 100, 100);
     const sortOrder = params?.sortOrder === 'asc' ? 1 : -1;
     return HumanTasks.find(filter).sort({ createdAt: sortOrder }).limit(limit).toArray();

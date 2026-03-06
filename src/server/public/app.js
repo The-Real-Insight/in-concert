@@ -28,6 +28,33 @@
 
   let uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
+  // Aggregated roles from all processes we've started (synthetic roleAssignments for testing)
+  let aggregatedRoles = new Map(); // roleId -> { roleId, roleName }
+
+  function addRolesFromDeploy(roles) {
+    if (!Array.isArray(roles)) return;
+    for (const r of roles) {
+      if (r && r.roleId) aggregatedRoles.set(r.roleId, { roleId: r.roleId, roleName: r.roleName || r.roleId });
+    }
+    renderRoles();
+  }
+
+  function renderRoles() {
+    const listEl = document.getElementById('rolesList');
+    const emptyEl = document.getElementById('rolesEmpty');
+    const roles = Array.from(aggregatedRoles.values());
+    if (roles.length === 0) {
+      listEl.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+    } else {
+      emptyEl.classList.add('hidden');
+      listEl.innerHTML = roles.map((r) =>
+        '<li><code>' + escapeHtml(r.roleId) + '</code>' +
+        (r.roleName && r.roleName !== r.roleId ? ' (' + escapeHtml(r.roleName) + ')' : '') + '</li>'
+      ).join('');
+    }
+  }
+
   // --- Models & Start ---
   const modelSelect = document.getElementById('modelSelect');
   const startBtn = document.getElementById('startBtn');
@@ -79,10 +106,12 @@
     startStatus.textContent = 'Starting...';
     startStatus.className = 'status';
     try {
-      const { definitionId } = await api(DEMO + '/deploy', {
+      const deployRes = await api(DEMO + '/deploy', {
         method: 'POST',
         body: JSON.stringify({ modelId, source: getModelSource() }),
       });
+      const { definitionId, roles } = deployRes;
+      addRolesFromDeploy(roles);
       const contextDocuments = await uploadFiles(startPendingFiles);
       const { instanceId } = await api(DEMO + '/start', {
         method: 'POST',
@@ -154,6 +183,11 @@
   async function listTasks(instanceId) {
     const q = new URLSearchParams({ status: 'OPEN', sortOrder: 'asc' });
     if (instanceId) q.set('instanceId', instanceId);
+    const roleIds = Array.from(aggregatedRoles.keys());
+    if (roleIds.length > 0) {
+      q.set('userId', getUserId());
+      q.set('roleIds', roleIds.join(','));
+    }
     const { items } = await api('/v1/tasks?' + q);
     return items;
   }
@@ -432,6 +466,7 @@
 
   // --- Init ---
   document.getElementById('providerFilterWrap').classList.toggle('hidden', !document.querySelector('input[name="modelSource"][value="insight"]').checked);
+  renderRoles();
   loadModels();
   refreshWorklist();
   refreshInstances();
@@ -458,6 +493,8 @@
       await api(window.location.origin + '/v1/purge', { method: 'POST', body: JSON.stringify({}) });
       currentClaim = null;
       claimForm.classList.add('hidden');
+      aggregatedRoles.clear();
+      renderRoles();
       loadModels();
       refreshWorklist();
       refreshInstances();

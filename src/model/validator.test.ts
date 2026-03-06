@@ -1,4 +1,4 @@
-import { validateBpmnXml } from './validator';
+import { validateBpmnXml, extractRolesFromBpmn } from './validator';
 
 const BPMN_WITH_LANES_NO_ROLE_ID = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">
@@ -141,5 +141,12 @@ describe('validateBpmnXml', () => {
         message: expect.stringContaining('no outgoing'),
       })
     );
+  });
+
+  it('extractRolesFromBpmn returns aggregated roles from lanes and participants', () => {
+    const roles = extractRolesFromBpmn(BPMN_VALID_LANES);
+    expect(roles).toHaveLength(2);
+    expect(roles).toContainEqual({ roleId: 'role-a', roleName: 'LaneA' });
+    expect(roles).toContainEqual({ roleId: 'role-b', roleName: 'LaneB' });
   });
 });

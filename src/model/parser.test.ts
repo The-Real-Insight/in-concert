@@ -31,4 +31,32 @@ describe('parseBpmnXml', () => {
     const empty = `<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"/>`;
     await expect(parseBpmnXml(empty)).rejects.toThrow('No process found');
   });
+
+  it('parses tri:roleId from lanes', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://example.com/tri">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_A" name="LaneA" tri:roleId="69a2b13a0c2ab7b7568a8f7a">
+        <bpmn:flowNodeRef>Task_A</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_B" name="LaneB" tri:roleId="role-b">
+        <bpmn:flowNodeRef>Task_B</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:userTask id="Task_A" name="A"/>
+    <bpmn:userTask id="Task_B" name="B"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_A" targetRef="Task_B"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_B" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.nodes['Task_A']?.laneRef).toBe('LaneA');
+    expect(graph.nodes['Task_A']?.roleId).toBe('69a2b13a0c2ab7b7568a8f7a');
+    expect(graph.nodes['Task_B']?.laneRef).toBe('LaneB');
+    expect(graph.nodes['Task_B']?.roleId).toBe('role-b');
+  });
 });
