@@ -91,8 +91,10 @@ header h1 {
   font-size: 12px;
 }
 
+.user-bar #userId { width: 180px; }
+.user-bar #userFirstName,
+.user-bar #userLastName { width: 90px; }
 .user-bar input {
-  width: 220px;
   padding: 0.35rem 0.6rem;
   background: var(--surface);
   border: 1px solid var(--border);

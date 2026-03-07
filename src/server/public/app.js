@@ -26,6 +26,14 @@
     return document.getElementById('userId').value.trim() || 'ada@the-real-insight.com';
   }
 
+  function getUser() {
+    return {
+      email: getUserId(),
+      firstName: document.getElementById('userFirstName').value.trim() || undefined,
+      lastName: document.getElementById('userLastName').value.trim() || undefined,
+    };
+  }
+
   let uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
   // Aggregated roles from all processes we've started (synthetic roleAssignments for testing)
@@ -117,7 +125,7 @@
         method: 'POST',
         body: JSON.stringify({
           definitionId,
-          user: { email: getUserId() },
+          user: getUser(),
           contextDocuments,
         }),
       });
@@ -293,6 +301,7 @@
         body: JSON.stringify({
           commandId: uuid(),
           userId: getUserId(),
+          user: getUser(),
           result,
           contextDocuments,
         }),
@@ -446,7 +455,11 @@
           const role = m.type === 'botMessage' ? 'assistant' : (m.role || 'user');
           const content = escapeHtml(String(m.content || ''));
           const at = (m.date || m.at) ? new Date(m.date || m.at).toLocaleString() : '';
-          return `<div class="conversation-message ${role}"><span class="role">${escapeHtml(role)}${at ? ' · ' + at : ''}</span><div>${content}</div></div>`;
+          const u = m.user || {};
+          const author = m.type === 'botMessage'
+            ? 'Assistant'
+            : [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.email || m.email || 'User';
+          return `<div class="conversation-message ${role}"><span class="role">${escapeHtml(author)}${at ? ' · ' + at : ''}</span><div>${content}</div></div>`;
         }).join('');
       const docs = conv.contextDocuments || [];
       conversationDocs.innerHTML = docs.length === 0

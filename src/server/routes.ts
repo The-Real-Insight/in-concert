@@ -14,6 +14,7 @@ import { startInstance, getInstance } from '../instance/service';
 import { getCollections } from '../db/collections';
 import { createConversation, addContextDocuments, addUserMessage, ingestProcessInstance } from './conversation';
 import { extractRolesFromBpmn } from '../model/validator';
+import { getUserFromAuthHeader } from './jwt';
 
 export const LOCAL_MODELS = [
   { id: 'input-sequence', label: 'input-sequence — linear: input-a, input-b, input-c → calculate-results', bpmnFile: 'input-sequence.bpmn' },
@@ -169,7 +170,7 @@ serverRouter.post('/demo/start', async (req: Request, res: Response) => {
   try {
     const { definitionId, user, contextDocuments } = req.body as {
       definitionId: string;
-      user?: { email: string };
+      user?: { email?: string; firstName?: string; lastName?: string };
       contextDocuments?: Array<{ filename: string; path: string }>;
     };
     if (!definitionId) {
@@ -179,6 +180,12 @@ serverRouter.post('/demo/start', async (req: Request, res: Response) => {
     const db = getDb();
     const convDb = getConversationsDb();
     const userEmail = user?.email ?? 'ada@the-real-insight.com';
+    const userFromJwt = getUserFromAuthHeader(req.headers.authorization);
+    const effectiveUser = user && (user.firstName || user.lastName)
+      ? user
+      : userFromJwt
+        ? { email: userEmail, firstName: userFromJwt.firstName, lastName: userFromJwt.lastName }
+        : { email: userEmail };
     const conversationId = await createConversation(convDb, {
       user: userEmail,
       contextDocuments: contextDocuments ?? [],
@@ -190,12 +197,16 @@ serverRouter.post('/demo/start', async (req: Request, res: Response) => {
     );
     const processName = (def as { name?: string } | null)?.name ?? 'process';
     const timestamp = new Date().toLocaleString().replace(/[.,]/g, '');
-    await addUserMessage(convDb, conversationId, `${processName} ${timestamp}`);
+    await addUserMessage(convDb, conversationId, `${processName} ${timestamp}`, {
+      email: effectiveUser.email ?? userEmail,
+      firstName: effectiveUser.firstName,
+      lastName: effectiveUser.lastName,
+    });
     const result = await startInstance(db, {
       commandId: uuidv4(),
       definitionId,
       conversationId,
-      user: { email: userEmail },
+      user: { email: userEmail, firstName: effectiveUser.firstName, lastName: effectiveUser.lastName },
     });
     await ingestProcessInstance(convDb, conversationId, result.instanceId);
     res.status(201).json({ ...result, conversationId });
@@ -224,9 +235,10 @@ serverRouter.get('/demo/conversations/:conversationId', async (req: Request, res
 serverRouter.post('/demo/tasks/:taskId/complete', async (req: Request, res: Response) => {
   try {
     const { taskId } = req.params;
-    const { commandId, userId, result: taskResult, contextDocuments } = req.body as {
+    const { commandId, userId, user: userDetails, result: taskResult, contextDocuments } = req.body as {
       commandId: string;
       userId: string;
+      user?: { email?: string; firstName?: string; lastName?: string };
       result?: unknown;
       contextDocuments?: Array<{ filename: string; path: string }>;
     };
@@ -260,7 +272,13 @@ serverRouter.post('/demo/tasks/:taskId/complete', async (req: Request, res: Resp
         typeof taskResult === 'object' && taskResult != null && 'value' in taskResult
           ? String((taskResult as { value?: unknown }).value ?? JSON.stringify(taskResult))
           : JSON.stringify(taskResult ?? '');
-      if (userContent) await addUserMessage(convDb, instance.conversationId, userContent);
+      if (userContent) {
+        const userForMessage =
+          userDetails && (userDetails.firstName || userDetails.lastName || userDetails.email)
+            ? { email: userId, firstName: userDetails.firstName, lastName: userDetails.lastName }
+            : getUserFromAuthHeader(req.headers.authorization) ?? { email: userId };
+        await addUserMessage(convDb, instance.conversationId, userContent, userForMessage);
+      }
     }
     const { Continuations } = cols;
     const now = new Date();

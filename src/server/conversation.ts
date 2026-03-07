@@ -39,7 +39,10 @@ function toContextDocument(d: { filename: string; path: string; summary?: string
 
 export async function createConversation(
   db: Db,
-  params: { user: string; contextDocuments?: Array<{ filename: string; path: string; summary?: string }> }
+  params: {
+    user: string;
+    contextDocuments?: Array<{ filename: string; path: string; summary?: string }>;
+  }
 ): Promise<string> {
   const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
   const id = new ObjectId();
@@ -76,10 +79,25 @@ export async function addContextDocuments(
 export async function addUserMessage(
   db: Db,
   conversationId: string,
-  content: string
+  content: string,
+  userDetails?: { email?: string; firstName?: string; lastName?: string }
 ): Promise<void> {
   const col = db.collection<ConversationDoc>(CONVERSATION_COLLECTION);
-  const msg = { type: MessageType.userMessage, content, date: new Date(), confirmation: false, resources: [], sourceResources: [] };
+  const msg = {
+    type: MessageType.userMessage,
+    content,
+    date: new Date(),
+    confirmation: false,
+    resources: [],
+    sourceResources: [],
+    ...(userDetails && (userDetails.email || userDetails.firstName || userDetails.lastName) && {
+      user: {
+        ...(userDetails.email && { email: userDetails.email }),
+        ...(userDetails.firstName && { firstName: userDetails.firstName }),
+        ...(userDetails.lastName && { lastName: userDetails.lastName }),
+      },
+    }),
+  };
   await col.updateOne(byConversationId(conversationId) as any, {
     $push: { messages: msg as any },
   });
