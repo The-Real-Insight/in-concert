@@ -32,6 +32,37 @@ describe('parseBpmnXml', () => {
     await expect(parseBpmnXml(empty)).rejects.toThrow('No process found');
   });
 
+  it('parses tri:parameterOverwrites into extensions', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:serviceTask id="Task_P" name="Process" tri:parameterOverwrites="override-config"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Task_P"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_P" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.nodes['Task_P']?.extensions?.['tri:parameterOverwrites']).toBe('override-config');
+  });
+
+  it('parses tri:multiInstanceData into multiInstance', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:serviceTask id="Task_MI" name="Process Items" tri:multiInstanceData="processList"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Task_MI"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_MI" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.nodes['Task_MI']?.multiInstance).toEqual({ data: 'processList' });
+    expect(graph.nodes['Task_MI']?.extensions?.['tri:multiInstanceData']).toBe('processList');
+  });
+
   it('parses tri:roleId from lanes', async () => {
     const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://example.com/tri">

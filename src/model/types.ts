@@ -15,8 +15,10 @@ export type NodeDef = {
   timerDefinition?: string;
   messageRef?: string;
   eventDefinition?: string;
-  /** Custom extension attributes from BPMN (e.g. tri:toolId, tri:toolType). */
+  /** Custom extension attributes from BPMN (e.g. tri:toolId, tri:toolType, tri:parameterOverwrites). */
   extensions?: Record<string, string>;
+  /** Multi-instance metadata when tri:multiInstanceData is present. */
+  multiInstance?: { data?: string };
 };
 
 export type FlowDef = {

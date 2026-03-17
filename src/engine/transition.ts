@@ -238,52 +238,106 @@ export function applyTransition(
         );
       }
     } else if (node.type === 'serviceTask' || node.type === 'userTask') {
-      const workItemId = uuidv4();
-      const idx = tokens.findIndex((t) => t.tokenId === tokenId);
-      if (idx >= 0) {
-        tokens[idx] = { ...tokens[idx], status: 'WAITING' };
-        patchTokens(() => tokens);
-      }
+      const multiInstance = (node as NodeDef & { multiInstance?: { data?: string } }).multiInstance;
 
-      waits.workItems = [
-        ...waits.workItems,
-        {
-          workItemId,
-          nodeId,
-          tokenId,
-          scopeId,
-          kind: node.type === 'serviceTask' ? 'SERVICE_TASK' : 'USER_TASK',
-          status: 'OPEN',
-          createdAt: now,
-        },
-      ];
-      statePatch.waits = waits;
+      if (multiInstance) {
+        // Multi-instance: emit resolve callback; user calls submitMultiInstanceData to continue
+        const idx = tokens.findIndex((t) => t.tokenId === tokenId);
+        if (idx >= 0) {
+          tokens[idx] = { ...tokens[idx], status: 'CONSUMED' };
+          patchTokens(() => tokens);
+        }
+        emit('TOKEN_CONSUMED', { tokenId });
 
-      emit('WORK_ITEM_CREATED', { workItemId, nodeId, tokenId, scopeId });
+        const miKey = `${nodeId}-${scopeId}`;
+        const miPending = { ...(state.multiInstancePending ?? {}) };
+        miPending[miKey] = { nodeId, scopeId, parentTokenId: tokenId, totalItems: 0, completedCount: 0 };
+        statePatch.multiInstancePending = miPending;
 
-      outbox.push({
-        instanceId: state._id,
-        rootInstanceId: state._id,
-        kind: 'CALLBACK_WORK',
-        destination: { url: '' },
+        outbox.push({
+          instanceId: state._id,
+          rootInstanceId: state._id,
+          kind: 'CALLBACK_MULTI_INSTANCE_RESOLVE',
+          destination: { url: '' },
         payload: {
-          workItemId,
-          nodeId,
-          tokenId,
-          scopeId,
-          kind: node.type,
-          ...(node.name != null && { name: node.name }),
-          ...(node.laneRef != null && { lane: node.laneRef }),
-          ...(node.roleId != null && { roleId: node.roleId }),
-          ...(node.extensions && Object.keys(node.extensions).length > 0 && { extensions: node.extensions }),
-        },
-        status: 'READY',
-        attempts: 0,
-        nextAttemptAt: now,
-        idempotencyKey: workItemId,
-        createdAt: now,
-        updatedAt: now,
-      } as Omit<OutboxDoc, '_id'>);
+          instanceId: state._id,
+            nodeId,
+            tokenId,
+            scopeId,
+            kind: node.type,
+            ...(node.name != null && { name: node.name }),
+            ...(node.laneRef != null && { lane: node.laneRef }),
+            ...(node.roleId != null && { roleId: node.roleId }),
+            ...(node.extensions && Object.keys(node.extensions).length > 0 && { extensions: node.extensions }),
+            ...(node.extensions?.['tri:multiInstanceData'] != null && {
+              multiInstanceData: node.extensions['tri:multiInstanceData'],
+            }),
+            ...(node.extensions?.['tri:parameterOverwrites'] != null && {
+              parameterOverwrites: node.extensions['tri:parameterOverwrites'],
+            }),
+          },
+          status: 'READY',
+          attempts: 0,
+          nextAttemptAt: now,
+          idempotencyKey: `mi-resolve-${miKey}`,
+          createdAt: now,
+          updatedAt: now,
+        } as Omit<OutboxDoc, '_id'>);
+      } else {
+        // Single-instance: create one work item
+        const workItemId = uuidv4();
+        const idx = tokens.findIndex((t) => t.tokenId === tokenId);
+        if (idx >= 0) {
+          tokens[idx] = { ...tokens[idx], status: 'WAITING' };
+          patchTokens(() => tokens);
+        }
+
+        waits.workItems = [
+          ...waits.workItems,
+          {
+            workItemId,
+            nodeId,
+            tokenId,
+            scopeId,
+            kind: node.type === 'serviceTask' ? 'SERVICE_TASK' : 'USER_TASK',
+            status: 'OPEN',
+            createdAt: now,
+          },
+        ];
+        statePatch.waits = waits;
+
+        emit('WORK_ITEM_CREATED', { workItemId, nodeId, tokenId, scopeId });
+
+        outbox.push({
+          instanceId: state._id,
+          rootInstanceId: state._id,
+          kind: 'CALLBACK_WORK',
+          destination: { url: '' },
+          payload: {
+            workItemId,
+            nodeId,
+            tokenId,
+            scopeId,
+            kind: node.type,
+            ...(node.name != null && { name: node.name }),
+            ...(node.laneRef != null && { lane: node.laneRef }),
+            ...(node.roleId != null && { roleId: node.roleId }),
+            ...(node.extensions && Object.keys(node.extensions).length > 0 && { extensions: node.extensions }),
+            ...(node.extensions?.['tri:multiInstanceData'] != null && {
+              multiInstanceData: node.extensions['tri:multiInstanceData'],
+            }),
+            ...(node.extensions?.['tri:parameterOverwrites'] != null && {
+              parameterOverwrites: node.extensions['tri:parameterOverwrites'],
+            }),
+          },
+          status: 'READY',
+          attempts: 0,
+          nextAttemptAt: now,
+          idempotencyKey: workItemId,
+          createdAt: now,
+          updatedAt: now,
+        } as Omit<OutboxDoc, '_id'>);
+      }
     } else if (node.type === 'exclusiveGateway') {
       const outgoing = getOutgoingFlows(graph, nodeId);
       const incoming = getIncomingFlows(graph, nodeId);
@@ -491,7 +545,24 @@ export function applyTransition(
     if (pl.completedByDetails != null) workCompletedPayload.completedByDetails = pl.completedByDetails;
     emit('WORK_ITEM_COMPLETED', workCompletedPayload);
 
-    if (toNodeId) {
+    const miKey = workItem.multiInstanceKey;
+    let shouldCreateOutgoing = true;
+    if (miKey) {
+      const miPending = { ...(state.multiInstancePending ?? {}) };
+      const entry = miPending[miKey];
+      if (entry) {
+        const newCount = entry.completedCount + 1;
+        if (newCount < entry.totalItems) {
+          miPending[miKey] = { ...entry, completedCount: newCount };
+          shouldCreateOutgoing = false;
+        } else {
+          delete miPending[miKey];
+        }
+        statePatch.multiInstancePending = Object.keys(miPending).length > 0 ? miPending : undefined;
+      }
+    }
+
+    if (shouldCreateOutgoing && toNodeId) {
       const flowId = outgoingFlows[0]?.id;
       const newTokenId = uuidv4();
       emit('TOKEN_CREATED', {
@@ -520,6 +591,90 @@ export function applyTransition(
       ...state.dedupe,
       completedWorkItemIds: [...state.dedupe.completedWorkItemIds, workItemId].slice(-1000),
     };
+    statePatch.lastEventSeq = lastSeq;
+    statePatch.updatedAt = now;
+    return { events, statePatch, newContinuations, outbox };
+  }
+
+  if (continuation.kind === 'MULTI_INSTANCE_RESOLVED') {
+    const pl = continuation.payload as { nodeId: string; tokenId: string; scopeId: string; items: unknown[] };
+    const { nodeId, scopeId, items } = pl;
+    const miKey = `${nodeId}-${scopeId}`;
+    const miPending = { ...(state.multiInstancePending ?? {}) };
+    const entry = miPending[miKey];
+    if (!entry || !Array.isArray(items) || items.length === 0) {
+      return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
+    }
+
+    const node = graph.nodes[nodeId];
+    if (!node || (node.type !== 'serviceTask' && node.type !== 'userTask')) {
+      return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
+    }
+
+    const totalItems = items.length;
+    entry.totalItems = totalItems;
+
+    const newWorkItems: typeof waits.workItems = [];
+    const newTokens: Token[] = [];
+
+    for (let i = 0; i < totalItems; i++) {
+      const workItemId = uuidv4();
+      const childTokenId = uuidv4();
+      newWorkItems.push({
+        workItemId,
+        nodeId,
+        tokenId: childTokenId,
+        scopeId,
+        kind: node.type === 'serviceTask' ? 'SERVICE_TASK' : 'USER_TASK',
+        status: 'OPEN',
+        createdAt: now,
+        executionIndex: i,
+        multiInstanceKey: miKey,
+      });
+      newTokens.push({ tokenId: childTokenId, nodeId, scopeId, status: 'WAITING', createdAt: now });
+      emit('TOKEN_CREATED', { tokenId: childTokenId, nodeId, scopeId, status: 'WAITING' });
+      emit('WORK_ITEM_CREATED', { workItemId, nodeId, tokenId: childTokenId, scopeId });
+
+      outbox.push({
+        instanceId: state._id,
+        rootInstanceId: state._id,
+        kind: 'CALLBACK_WORK',
+        destination: { url: '' },
+        payload: {
+          workItemId,
+          nodeId,
+          tokenId: childTokenId,
+          scopeId,
+          kind: node.type,
+          executionIndex: i,
+          loopCounter: i + 1,
+          totalItems,
+          ...(node.name != null && { name: node.name }),
+          ...(node.laneRef != null && { lane: node.laneRef }),
+          ...(node.roleId != null && { roleId: node.roleId }),
+          ...(node.extensions && Object.keys(node.extensions).length > 0 && { extensions: node.extensions }),
+          ...(node.extensions?.['tri:multiInstanceData'] != null && {
+            multiInstanceData: node.extensions['tri:multiInstanceData'],
+          }),
+          ...(node.extensions?.['tri:parameterOverwrites'] != null && {
+            parameterOverwrites: node.extensions['tri:parameterOverwrites'],
+          }),
+        },
+        status: 'READY',
+        attempts: 0,
+        nextAttemptAt: now,
+        idempotencyKey: workItemId,
+        createdAt: now,
+        updatedAt: now,
+      } as Omit<OutboxDoc, '_id'>);
+    }
+
+    waits.workItems = [...waits.workItems, ...newWorkItems];
+    statePatch.waits = waits;
+    patchTokens((t) => [...t, ...newTokens]);
+    statePatch.multiInstancePending = miPending;
+
+    statePatch.version = state.version + 1;
     statePatch.lastEventSeq = lastSeq;
     statePatch.updatedAt = now;
     return { events, statePatch, newContinuations, outbox };

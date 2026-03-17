@@ -8,7 +8,8 @@
     "./sdk": "./dist/sdk/index.js",
     "./db": "./dist/db/index.js",
     "./local": "./dist/local.js",
-    "./validator": "./dist/model/validator.js"
+    "./validator": "./dist/model/validator.js",
+    "./tri-schema": "./dist/model/tri-schema.js"
   },
   "scripts": {
     "build": "tsc",

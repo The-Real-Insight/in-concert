@@ -47,6 +47,7 @@ export class BpmnEngineClient {
       onWorkItem: config.onWorkItem,
       onServiceCall: config.onServiceCall,
       onDecision: config.onDecision,
+      onMultiInstanceResolve: config.onMultiInstanceResolve,
     };
     this.serviceVocabulary = config.serviceVocabulary ?? null;
   }
@@ -356,6 +357,48 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Submit resolved multi-instance data. Call after onMultiInstanceResolve returns { items }.
+   */
+  async submitMultiInstanceData(
+    instanceId: string,
+    params: { nodeId: string; tokenId: string; scopeId: string; items: unknown[] }
+  ): Promise<void> {
+    const { nodeId, tokenId, scopeId, items } = params;
+    if (!Array.isArray(items)) {
+      throw new Error('items must be an array');
+    }
+    if (this.config.mode === 'rest') {
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/instances/${instanceId}/multi-instance/resolve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodeId, tokenId, scopeId, items }),
+        }
+      );
+      if (!res.ok && res.status !== 202) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error((err as { error?: string }).error ?? `Submit multi-instance data failed: ${res.status}`);
+      }
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { Continuations } = getCollections(this.config.db);
+    const now = new Date();
+    await Continuations.insertOne({
+      _id: uuidv4(),
+      instanceId,
+      dueAt: now,
+      kind: 'MULTI_INSTANCE_RESOLVED',
+      payload: { nodeId, tokenId, scopeId, items },
+      status: 'READY',
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  /**
    * Submit a decision for an XOR gateway.
    */
   async submitDecision(
@@ -404,7 +447,9 @@ export class BpmnEngineClient {
       throw new Error('recover is only available in local mode');
     }
     const handlers = options?.handlers ?? this.initHandlers;
-    if (!handlers?.onWorkItem && !handlers?.onServiceCall && !handlers?.onDecision) {
+    const hasWork = handlers?.onWorkItem || handlers?.onServiceCall || handlers?.onDecision;
+    const hasMi = !!handlers?.onMultiInstanceResolve;
+    if (!hasWork && !hasMi) {
       throw new Error('recover requires init() handlers or options.handlers');
     }
     const { claimContinuation, processContinuation } = await import('../workers/processor');
@@ -420,7 +465,20 @@ export class BpmnEngineClient {
       processed++;
       for (const ob of outbox) {
         const item = { kind: ob.kind, instanceId: ob.instanceId, payload: ob.payload } as CallbackItem;
-        if (ob.kind === 'CALLBACK_WORK') {
+        if (ob.kind === 'CALLBACK_MULTI_INSTANCE_RESOLVE' && handlers.onMultiInstanceResolve) {
+          const p = ob.payload as import('./types').CallbackMultiInstanceResolvePayload;
+          const { items } = await handlers.onMultiInstanceResolve(item as {
+            kind: 'CALLBACK_MULTI_INSTANCE_RESOLVE';
+            instanceId: string;
+            payload: import('./types').CallbackMultiInstanceResolvePayload;
+          });
+          await this.submitMultiInstanceData(ob.instanceId, {
+            nodeId: p.nodeId,
+            tokenId: p.tokenId,
+            scopeId: p.scopeId,
+            items,
+          });
+        } else if (ob.kind === 'CALLBACK_WORK') {
           const p = ob.payload as import('./types').CallbackWorkPayload;
           if (p.kind === 'userTask' && handlers.onWorkItem) {
             await handlers.onWorkItem(item as { kind: 'CALLBACK_WORK'; instanceId: string; payload: import('./types').CallbackWorkPayload });
@@ -461,7 +519,9 @@ export class BpmnEngineClient {
       throw new Error('processUntilComplete is only available in local mode');
     }
     const h = handlers ?? this.initHandlers;
-    if (!h?.onWorkItem && !h?.onServiceCall && !h?.onDecision) {
+    const hasWorkHandlers = h?.onWorkItem || h?.onServiceCall || h?.onDecision;
+    const hasMiHandler = !!h?.onMultiInstanceResolve;
+    if (!hasWorkHandlers && !hasMiHandler) {
       throw new Error('processUntilComplete requires init() handlers or handlers argument');
     }
     const { claimContinuation, processContinuation } = await import('../workers/processor');
@@ -500,7 +560,20 @@ export class BpmnEngineClient {
           instanceId: ob.instanceId,
           payload: ob.payload,
         } as CallbackItem;
-        if (ob.kind === 'CALLBACK_WORK') {
+        if (ob.kind === 'CALLBACK_MULTI_INSTANCE_RESOLVE' && h.onMultiInstanceResolve) {
+          const p = ob.payload as import('./types').CallbackMultiInstanceResolvePayload;
+          const { items } = await h.onMultiInstanceResolve(item as {
+            kind: 'CALLBACK_MULTI_INSTANCE_RESOLVE';
+            instanceId: string;
+            payload: import('./types').CallbackMultiInstanceResolvePayload;
+          });
+          await this.submitMultiInstanceData(instanceId, {
+            nodeId: p.nodeId,
+            tokenId: p.tokenId,
+            scopeId: p.scopeId,
+            items,
+          });
+        } else if (ob.kind === 'CALLBACK_WORK') {
           const p = ob.payload as import('./types').CallbackWorkPayload;
           if (p.kind === 'userTask' && h.onWorkItem) {
             await h.onWorkItem(item as {
@@ -515,7 +588,7 @@ export class BpmnEngineClient {
               instanceId: string;
               payload: import('./types').CallbackWorkPayload;
             });
-          }
+        }
         }
         if (ob.kind === 'CALLBACK_DECISION' && h.onDecision) {
           await h.onDecision(item as {
@@ -587,7 +660,7 @@ export class BpmnEngineClient {
         const msg = JSON.parse(String(data));
         if (msg.type === 'callbacks' && Array.isArray(msg.items)) {
           for (const item of msg.items) {
-            if (item.kind === 'CALLBACK_WORK' || item.kind === 'CALLBACK_DECISION') {
+            if (item.kind === 'CALLBACK_WORK' || item.kind === 'CALLBACK_DECISION' || item.kind === 'CALLBACK_MULTI_INSTANCE_RESOLVE') {
               callback(item as CallbackItem);
             }
           }

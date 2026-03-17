@@ -132,6 +132,10 @@ export type WorkItemRef = {
   status: WorkItemStatus;
   createdAt: Date;
   correlationHints?: Record<string, unknown>;
+  /** Multi-instance: 0-based index of this iteration. */
+  executionIndex?: number;
+  /** Multi-instance: key to correlate iterations (nodeId-scopeId). */
+  multiInstanceKey?: string;
 };
 
 export type MessageSubRef = {
@@ -196,6 +200,11 @@ export type ProcessInstanceStateDoc = {
   lastEventSeq: number;
   updatedAt: Date;
   joinArrivals?: Record<string, Record<string, Record<string, string>>>; // joinNodeId -> scopeId -> flowId -> tokenId
+  /** Multi-instance: tracks completion per MI activity. Key: nodeId-scopeId. */
+  multiInstancePending?: Record<
+    string,
+    { nodeId: string; scopeId: string; parentTokenId: string; totalItems: number; completedCount: number }
+  >;
 };
 
 export type ProcessInstanceEventDoc = {
@@ -213,7 +222,8 @@ export type ContinuationKind =
   | 'TIMER_DUE'
   | 'MESSAGE'
   | 'WORK_COMPLETED'
-  | 'DECISION_RECORDED';
+  | 'DECISION_RECORDED'
+  | 'MULTI_INSTANCE_RESOLVED';
 
 export type ContinuationDoc = {
   _id: string;
@@ -230,7 +240,7 @@ export type ContinuationDoc = {
   updatedAt: Date;
 };
 
-export type OutboxKind = 'CALLBACK_WORK' | 'CALLBACK_DECISION' | 'CALLBACK_EVENT';
+export type OutboxKind = 'CALLBACK_WORK' | 'CALLBACK_DECISION' | 'CALLBACK_EVENT' | 'CALLBACK_MULTI_INSTANCE_RESOLVE';
 
 export type OutboxDoc = {
   _id: string;

@@ -257,7 +257,13 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       }
 
       const nodeExtensions = extensionByNode[flowEl.id];
-      if (nodeExtensions) node.extensions = nodeExtensions;
+      if (nodeExtensions) {
+        node.extensions = nodeExtensions;
+        const miData = nodeExtensions['tri:multiInstanceData'];
+        if (miData != null && (type === 'bpmn:ServiceTask' || type === 'bpmn:UserTask')) {
+          node.multiInstance = { data: miData };
+        }
+      }
 
       nodes[flowEl.id] = node;
 

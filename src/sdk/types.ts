@@ -119,6 +119,34 @@ export type CallbackWorkPayload = {
   roleId?: string;
   /** Custom extension attributes from BPMN node (e.g. tri:toolId, tri:toolType). */
   extensions?: Record<string, string>;
+  /** tri:multiInstanceData from BPMN node; reference for per-iteration data. */
+  multiInstanceData?: string;
+  /** tri:parameterOverwrites from BPMN node; JSON string for parameter overrides. */
+  parameterOverwrites?: string;
+  /** Multi-instance: 0-based index of this iteration. */
+  executionIndex?: number;
+  /** Multi-instance: 1-based loop counter (BPMN style). */
+  loopCounter?: number;
+  /** Multi-instance: total number of iterations. */
+  totalItems?: number;
+};
+
+/** Payload for multi-instance resolve callback. Handler returns { items: unknown[] }. */
+export type CallbackMultiInstanceResolvePayload = {
+  instanceId: string;
+  nodeId: string;
+  tokenId: string;
+  scopeId: string;
+  kind: 'serviceTask' | 'userTask';
+  name?: string;
+  lane?: string;
+  roleId?: string;
+  /** Custom extension attributes including tri:multiInstanceData. */
+  extensions?: Record<string, string>;
+  /** tri:multiInstanceData from BPMN node; reference for per-iteration data. */
+  multiInstanceData?: string;
+  /** tri:parameterOverwrites from BPMN node; JSON string for parameter overrides. */
+  parameterOverwrites?: string;
 };
 
 /** Transition option for XOR gateway—one outgoing alternative. */
@@ -179,6 +207,12 @@ export type CallbackHandlers = {
     instanceId: string;
     payload: CallbackDecisionPayload;
   }) => void | Promise<void>;
+  /** Called for multi-instance tasks. Return { items: unknown[] }, then call submitMultiInstanceData(). */
+  onMultiInstanceResolve?: (item: {
+    kind: 'CALLBACK_MULTI_INSTANCE_RESOLVE';
+    instanceId: string;
+    payload: CallbackMultiInstanceResolvePayload;
+  }) => Promise<{ items: unknown[] }>;
 };
 
 /**
@@ -189,13 +223,15 @@ export type EngineInitConfig = {
   onWorkItem?: CallbackHandlers['onWorkItem'];
   onServiceCall?: CallbackHandlers['onServiceCall'];
   onDecision?: CallbackHandlers['onDecision'];
+  onMultiInstanceResolve?: CallbackHandlers['onMultiInstanceResolve'];
   /** Service/tool registry (e.g. tri:toolId → implementation). Handlers use this to resolve and invoke. */
   serviceVocabulary?: Record<string, unknown>;
 };
 
 export type CallbackItem =
   | { kind: 'CALLBACK_WORK'; instanceId: string; payload: CallbackWorkPayload }
-  | { kind: 'CALLBACK_DECISION'; instanceId: string; payload: CallbackDecisionPayload };
+  | { kind: 'CALLBACK_DECISION'; instanceId: string; payload: CallbackDecisionPayload }
+  | { kind: 'CALLBACK_MULTI_INSTANCE_RESOLVE'; instanceId: string; payload: CallbackMultiInstanceResolvePayload };
 
 export type InstanceState = {
   _id: string;

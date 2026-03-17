@@ -234,6 +234,38 @@ apiRouter.post(
 );
 
 apiRouter.post(
+  '/v1/instances/:instanceId/multi-instance/resolve',
+  async (req: Request, res: Response) => {
+    try {
+      const { instanceId } = req.params;
+      const { nodeId, tokenId, scopeId, items } = req.body;
+      if (!nodeId || !tokenId || !scopeId || !Array.isArray(items)) {
+        res.status(400).json({ error: 'nodeId, tokenId, scopeId, and items (array) are required' });
+        return;
+      }
+      const db = getDb();
+      const { Continuations } = getCollections(db);
+      const now = new Date();
+      await Continuations.insertOne({
+        _id: uuidv4(),
+        instanceId,
+        dueAt: now,
+        kind: 'MULTI_INSTANCE_RESOLVED',
+        payload: { nodeId, tokenId, scopeId, items },
+        status: 'READY',
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+      res.status(202).json({ accepted: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Submit multi-instance data failed';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+apiRouter.post(
   '/v1/instances/:instanceId/work-items/:workItemId/complete',
   async (req: Request, res: Response) => {
     try {
