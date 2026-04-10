@@ -62,47 +62,38 @@ Built for teams who want **deterministic, inspectable process execution** withou
 
 **Prerequisites:** Node.js 18+, MongoDB
 
-### 1. Install
-
 ```bash
 npm install @the-real-insight/in-concert
 ```
 
-### 2. REST mode — engine as a service
-
-Run the engine as a standalone HTTP + WebSocket service, then connect via the SDK from any Node.js app.
-
-Start the engine server (e.g. in your `server.ts`):
-
-```typescript
-import express from 'express';
-import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
-// The engine server is started via the package's built-in entry point.
-// See docs/getting-started.md for environment variables (MONGO_URL, PORT).
-```
-
-Connect from your application:
+The SDK works in two modes — the API is identical, only initialisation differs:
 
 ```typescript
 import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
 
-const client = new BpmnEngineClient({
-  mode: 'rest',
-  baseUrl: 'http://localhost:3000',
-});
+// REST mode — connects to a running engine service
+const client = new BpmnEngineClient({ mode: 'rest', baseUrl: 'http://localhost:3000' });
 
-// Register handlers once at startup
+// Local mode — direct MongoDB, no server needed (ideal for tests)
+import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
+const db = await connectDb('mongodb://localhost:27017/in-concert');
+await ensureIndexes(db);
+const client = new BpmnEngineClient({ mode: 'local', db });
+```
+
+Register your handlers once at startup, then deploy and run:
+
+```typescript
+// Register handlers
 client.init({
   onServiceCall: async ({ instanceId, payload }) => {
-    // invoke your service, then:
-    await client.completeExternalTask(instanceId, payload.workItemId, {
-      result: { ok: true },
-    });
+    // call your service, then advance the process
+    await client.completeExternalTask(instanceId, payload.workItemId, { result: { ok: true } });
   },
   onDecision: async ({ instanceId, payload }) => {
-    const selected = payload.transitions[0].flowId; // your routing logic
+    // pick a route, then submit
     await client.submitDecision(instanceId, payload.decisionId, {
-      selectedFlowIds: [selected],
+      selectedFlowIds: [payload.transitions[0].flowId],
     });
   },
 });
@@ -119,60 +110,26 @@ const { definitionId } = await client.deploy({
 const { instanceId } = await client.startInstance({
   commandId: crypto.randomUUID(),
   definitionId,
-  businessKey: 'order-42',
 });
 
-// Subscribe to push callbacks (WebSocket) — no polling
-const unsubscribe = client.subscribeToCallbacks((item) => {
-  console.log(item.kind, item.instanceId);
-});
+// REST mode: subscribe via WebSocket — no polling
+client.subscribeToCallbacks((item) => console.log(item.kind, item.instanceId));
+
+// Local mode: run to completion inline
+const { status } = await client.run(instanceId);
+console.log(status); // COMPLETED | FAILED | TERMINATED
 ```
 
-### 3. Local / embedded mode
-
-For tests or in-process use — no HTTP server needed, runs directly against MongoDB:
+**Worklist (human tasks)**
 
 ```typescript
-import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
-import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
-
-const db = await connectDb('mongodb://localhost:27017/in-concert');
-await ensureIndexes(db);
-
-const client = new BpmnEngineClient({ mode: 'local', db });
-
-// Deploy + start
-const { definitionId } = await client.deploy({ id: 'my-process', name: 'My Process', version: '1', bpmnXml });
-const { instanceId } = await client.startInstance({ commandId: crypto.randomUUID(), definitionId });
-
-// Run to completion — handlers called inline, no server required
-const { status } = await client.run(instanceId, {
-  onServiceCall: async ({ instanceId, payload }) => {
-    await client.completeExternalTask(instanceId, payload.workItemId, { result: { ok: true } });
-  },
-  onDecision: async ({ instanceId, payload }) => {
-    await client.submitDecision(instanceId, payload.decisionId, {
-      selectedFlowIds: [payload.transitions[0].flowId],
-    });
-  },
-});
-
-console.log('Process finished with status:', status); // COMPLETED | FAILED | TERMINATED
-```
-
-### 4. Worklist (human tasks)
-
-```typescript
-// Get tasks for a user (by role)
 const tasks = await client.getWorklistForUser({
   userId: user._id,
   roleIds: user.roleAssignments.map(ra => String(ra.role)),
 });
 
-// Claim a task
 await client.activateTask(taskId, { userId: user._id });
 
-// Complete a user task
 await client.completeUserTask(instanceId, workItemId, {
   result: { approved: true },
   user: { email: 'user@example.com' },
