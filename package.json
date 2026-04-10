@@ -1,5 +1,5 @@
 {
-  "name": "@the-real-insight/tri-bpmn-engine",
+  "name": "@the-real-insight/in-concert",
   "version": "0.1.18",
   "description": "BPMN 2.0 subset execution engine with event sourcing",
   "main": "dist/index.js",
