@@ -1,6 +1,7 @@
 <div align="center">
-
+<div style="background-color: #000000; width: 100%; margin-bottom: 30px;" align="center">
 <img src="./docs/banner.png" alt="in-concert logo" width="800" />
+</div>
 
 **A production-grade BPMN 2.0 execution engine for Node.js**
 
@@ -41,7 +42,8 @@ Built for teams who want **deterministic, inspectable process execution** withou
 
 | | |
 |---|---|
-| 🔁 **Event-sourced instances** | Every token move is an event. Replay, audit, and debug any instance from its stream. |
+| 🔁 **Event-sour<div align="center">
+ced instances** | Every token move is an event. Replay, audit, and debug any instance from its stream. |
 | ⚡ **Optimistic concurrency** | Safe parallel execution without pessimistic locking. |
 | 📬 **Push-style callbacks** | Human tasks, service tasks, and gateway decisions delivered via WebSocket — no polling. |
 | 🔌 **Two integration modes** | **REST mode** (HTTP + WebSocket) for microservices, **local mode** (direct MongoDB) for tests and embedding. |
