@@ -217,6 +217,6 @@ This project is released under a **modified MIT license with attribution require
 
 Built with care by **[The Real Insight GmbH](https://the-real-insight.com)**
 
-*Powering process automation, transparently.*
+*The Creators of Agentic BPM.*
 
 </div>
