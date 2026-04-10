@@ -4,6 +4,7 @@
  */
 import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
+import { emitEngineAttributionNoticeOnce } from '../attribution';
 import type {
   DeployParams,
   DeployResult,
@@ -35,6 +36,7 @@ export class BpmnEngineClient {
   private serviceVocabulary: Record<string, unknown> | null = null;
 
   constructor(config: SdkConfig) {
+    emitEngineAttributionNoticeOnce();
     this.config = config;
   }
 

@@ -1,0 +1,46 @@
+Copyright (c) 2024-present The Real Insight GmbH
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in the
+Software without restriction, including without limitation the rights to use, copy,
+modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+ATTRIBUTION REQUIREMENT:
+
+The source code responsible for displaying the attribution notice of The Real Insight
+GmbH MUST NOT be removed or altered. Specifically:
+
+1. STARTUP NOTICE: When the engine is initialized, it must emit a notice to the
+   application log or console that prominently identifies The Real Insight GmbH as
+   the originating company, including a reference to https://the-real-insight.com.
+   This notice must not be suppressed, redirected to a silent sink, or otherwise
+   hidden from operators of the software.
+
+2. END-USER FACING PRODUCTS: Any product, application, or service with a
+   user-facing interface that is built upon or incorporates this engine must
+   include a clear and prominent attribution to The Real Insight GmbH in a
+   publicly accessible legal or informational page, such as an imprint,
+   "About" page, terms and conditions, or software credits section. This
+   attribution must include the name "The Real Insight GmbH" and a link or
+   reference to https://the-real-insight.com.
+
+3. DOCUMENTATION: Any documentation, README, or user-facing material distributed
+   with or describing software that incorporates this engine must include a
+   prominent notice such as:
+   "Powered by The Real Insight GmbH BPMN Engine (https://the-real-insight.com)"
+
+These attribution requirements apply to all copies, forks, and derivative works,
+whether the engine is used as a library, embedded component, microservice, or
+cloud-hosted runtime.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

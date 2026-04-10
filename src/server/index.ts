@@ -22,6 +22,7 @@ import { getCollections } from '../db/collections';
 import { serverRouter } from './routes';
 import { getInstance } from '../instance/service';
 import { addBotMessage } from './conversation';
+import { emitEngineAttributionNoticeOnce } from '../attribution';
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -127,6 +128,7 @@ async function workerLoop() {
 }
 
 async function main() {
+  emitEngineAttributionNoticeOnce();
   const db = await connectDb();
   await ensureIndexes(db);
 

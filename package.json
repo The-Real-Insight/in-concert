@@ -35,9 +35,10 @@
     "workflow",
     "engine"
   ],
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "dependencies": {
     "@the-real-insight/tri-model": "^0.0.748",

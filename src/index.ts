@@ -10,6 +10,7 @@ import { config } from './config';
 import { claimContinuation, processContinuation } from './workers/processor';
 import { broadcastAll } from './ws/broadcast';
 import { attachWebSocketServer } from './ws/server';
+import { emitEngineAttributionNoticeOnce } from './attribution';
 
 const app = express();
 app.use(express.json());
@@ -44,6 +45,7 @@ async function workerLoop() {
 }
 
 async function main() {
+  emitEngineAttributionNoticeOnce();
   const db = await connectDb();
   await ensureIndexes(db);
 

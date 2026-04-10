@@ -20,7 +20,8 @@ Thank you for your interest in **tri-bpmn-engine**. Community contributions help
 - Prefer extending existing helpers over duplicating BPMN or Mongo logic.  
 - Public behavior should be covered by tests when practical.  
 - User-facing documentation belongs under **`docs/`**; link new pages from [docs/README.md](README.md).  
-- Deep design specs may still live under **`readme/`** (requirements, implementation notes).
+- Deep design specs may still live under **`readme/`** (requirements, implementation notes).  
+- Do **not** remove or bypass **license attribution** (`LICENSE`, `src/attribution.ts`, and the “Powered by …” notice in README / docs). Changes here have legal effect; discuss with maintainers first.
 
 ## Publishing
 

@@ -1,5 +1,7 @@
 # Documentation
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 Welcome to the **tri-bpmn-engine** documentation. This engine runs a carefully scoped subset of **BPMN 2.0** with **event-sourced** process instances, **optimistic concurrency**, and **push-style callbacks** (WebSocket in REST mode, in-process in local mode) for user tasks, service tasks, and external gateway decisions.
 
 ## Start here

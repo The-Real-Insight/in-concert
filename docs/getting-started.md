@@ -1,5 +1,7 @@
 # Getting started
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 This page explains **what you actually do** with tri-bpmn-engine: deploy a process model, start runs, handle **human work** through a **worklist**, and handle **automation** by reacting to **service-task callbacks** (for example by calling a public REST API yourself).
 
 ---

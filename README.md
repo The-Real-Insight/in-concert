@@ -1,5 +1,7 @@
 # tri-bpmn-engine
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 A **BPMN 2.0 subset** execution engine for **Node.js**, with **event-sourced** process instances, **optimistic concurrency**, and **push-style callbacks** for human tasks, service tasks, and external gateway decisions. Use it as an **HTTP service** (REST + WebSocket) or embed it in **local mode** against MongoDB.
 
 **npm package:** [`@the-real-insight/tri-bpmn-engine`](https://www.npmjs.com/package/@the-real-insight/tri-bpmn-engine)
@@ -103,7 +105,9 @@ We welcome issues and pull requests. Please read **[docs/contributing.md](docs/c
 
 ## License
 
-License terms are specified in **`package.json`** (`license` field). If you need OSS-friendly licensing for redistribution, open an issue so maintainers can align on a standard license file.
+Copyright (c) 2024-present **The Real Insight GmbH**. See **[LICENSE](LICENSE)** for the full license and **attribution requirements** (startup notice, end-user products, and documentation).
+
+Redistribution and derivative works must keep the license file, comply with attribution, and must not remove or hide the engine’s startup attribution (see `src/attribution.ts`).
 
 ---
 
