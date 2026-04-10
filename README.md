@@ -1,22 +1,20 @@
 <div align="center">
 
-<img src="https://the-real-insight.com/favicon.ico" width="64" height="64" alt="TRI Logo" />
-
-# tri-bpmn-engine
+<img src="./docs/logo.png" alt="in-concert logo" width="480" />
 
 **A production-grade BPMN 2.0 execution engine for Node.js**
 
 *Event-sourced · Optimistic concurrency · Push-style callbacks · REST & embedded*
 
-[![npm version](https://img.shields.io/npm/v/@the-real-insight/tri-bpmn-engine?style=flat-square&color=0f172a&labelColor=64748b)](https://www.npmjs.com/package/@the-real-insight/tri-bpmn-engine)
+[![npm version](https://img.shields.io/npm/v/@the-real-insight/in-concert?style=flat-square&color=0f172a&labelColor=64748b)](https://www.npmjs.com/package/@the-real-insight/in-concert)
 [![License](https://img.shields.io/badge/license-TRI--MIT-0f172a?style=flat-square&labelColor=64748b)](./LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-0f172a?style=flat-square&labelColor=64748b)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-0f172a?style=flat-square&labelColor=64748b)](https://www.typescriptlang.org)
-[![Tests](https://img.shields.io/github/actions/workflow/status/The-Real-Insight/tri-bpmn-engine/test.yml?style=flat-square&label=tests&labelColor=64748b)](https://github.com/The-Real-Insight/tri-bpmn-engine/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/The-Real-Insight/in-concert/test.yml?style=flat-square&label=tests&labelColor=64748b)](https://github.com/The-Real-Insight/in-concert/actions)
 
 <br/>
 
-[**Get started →**](#quick-start) · [**Documentation**](./docs/README.md) · [**npm**](https://www.npmjs.com/package/@the-real-insight/tri-bpmn-engine) · [**Contributing**](./docs/contributing.md)
+[**Get started →**](#quick-start) · [**Documentation**](./docs/README.md) · [**npm**](https://www.npmjs.com/package/@the-real-insight/in-concert) · [**Contributing**](./docs/contributing.md)
 
 </div>
 
@@ -24,16 +22,18 @@
 
 ## What is this?
 
-`tri-bpmn-engine` executes **BPMN 2.0 process definitions** in Node.js. It is not a visual modeler or a full Camunda/Flowable replacement — it is a focused, embeddable runtime that covers the BPMN subset most production workflows actually need.
+**in-concert** executes **BPMN 2.0 process definitions** in Node.js. It is not a visual modeler or a full Camunda/Flowable replacement — it is a focused, embeddable runtime that covers the BPMN subset most production workflows actually need.
 
 ```
-BPMN file ──▶ Engine ──▶ Event-sourced instance
-                │
-                ├── REST + WebSocket (microservice mode)
-                └── Local MongoDB   (embedded / test mode)
+BPMN file ──▶ in-concert ──▶ Event-sourced instance
+                   │
+                   ├── REST + WebSocket (microservice mode)
+                   └── Local MongoDB   (embedded / test mode)
 ```
 
 Built for teams who want **deterministic, inspectable process execution** without the weight of a full BPM platform.
+
+> **Powered by [The Real Insight GmbH](https://the-real-insight.com)**
 
 ---
 
@@ -57,8 +57,8 @@ Built for teams who want **deterministic, inspectable process execution** withou
 ### Run as a service
 
 ```bash
-git clone https://github.com/The-Real-Insight/tri-bpmn-engine.git
-cd tri-bpmn-engine
+git clone https://github.com/The-Real-Insight/in-concert.git
+cd in-concert
 npm install
 cp .env.example .env          # set MONGO_URL if needed
 npm run dev                   # API + worker + WebSocket on :3000
@@ -67,15 +67,15 @@ npm run dev                   # API + worker + WebSocket on :3000
 ### Install the SDK
 
 ```bash
-npm install @the-real-insight/tri-bpmn-engine
+npm install @the-real-insight/in-concert
 ```
 
 ### Connect from your app
 
 ```typescript
-import { BpmnEngineClient } from '@the-real-insight/tri-bpmn-engine/sdk';
+import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
 
-// REST mode — connects to a running engine service
+// REST mode — connects to a running in-concert service
 const client = new BpmnEngineClient({
   mode: 'rest',
   baseUrl: 'http://localhost:3000',
@@ -142,7 +142,7 @@ Design & internals:
 
 ## BPMN Support
 
-This engine implements a curated BPMN 2.0 subset. See the full [conformance matrix](./readme/TEST.md) for details. Unsupported elements fail fast and loudly — never silently skip.
+in-concert implements a curated BPMN 2.0 subset. See the full [conformance matrix](./readme/TEST.md) for details. Unsupported elements fail fast and loudly — never silently.
 
 **Supported:** Start/End events · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
 
