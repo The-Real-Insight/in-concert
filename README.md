@@ -1,7 +1,14 @@
 <div align="center">
-<div style="background-color: #000000; width: 100%; margin-bottom: 30px;" align="center">
-<img src="./docs/banner.png" alt="in-concert logo" width="800" />
-</div>
+
+<img src="./docs/logo.png" alt="in-concert logo" width="200" />
+
+# in concert
+
+**BPMN 2.0 EXECUTION ENGINE**
+
+*BY THE REAL INSIGHT GMBH*
+
+---
 
 **A production-grade BPMN 2.0 execution engine for Node.js**
 
@@ -42,8 +49,7 @@ Built for teams who want **deterministic, inspectable process execution** withou
 
 | | |
 |---|---|
-| 🔁 **Event-sour<div align="center">
-ced instances** | Every token move is an event. Replay, audit, and debug any instance from its stream. |
+| 🔁 **Event-sourced instances** | Every token move is an event. Replay, audit, and debug any instance from its stream. |
 | ⚡ **Optimistic concurrency** | Safe parallel execution without pessimistic locking. |
 | 📬 **Push-style callbacks** | Human tasks, service tasks, and gateway decisions delivered via WebSocket — no polling. |
 | 🔌 **Two integration modes** | **REST mode** (HTTP + WebSocket) for microservices, **local mode** (direct MongoDB) for tests and embedding. |
@@ -56,51 +62,124 @@ ced instances** | Every token move is an event. Replay, audit, and debug any ins
 
 **Prerequisites:** Node.js 18+, MongoDB
 
-### Run as a service
-
-```bash
-git clone https://github.com/The-Real-Insight/in-concert.git
-cd in-concert
-npm install
-cp .env.example .env          # set MONGO_URL if needed
-npm run dev                   # API + worker + WebSocket on :3000
-```
-
-### Install the SDK
+### 1. Install
 
 ```bash
 npm install @the-real-insight/in-concert
 ```
 
-### Connect from your app
+### 2. REST mode — engine as a service
+
+Run the engine as a standalone HTTP + WebSocket service, then connect via the SDK from any Node.js app.
+
+Start the engine server (e.g. in your `server.ts`):
+
+```typescript
+import express from 'express';
+import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
+// The engine server is started via the package's built-in entry point.
+// See docs/getting-started.md for environment variables (MONGO_URL, PORT).
+```
+
+Connect from your application:
 
 ```typescript
 import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
 
-// REST mode — connects to a running in-concert service
 const client = new BpmnEngineClient({
   mode: 'rest',
   baseUrl: 'http://localhost:3000',
 });
 
-// Deploy a process definition
-await client.deployDefinition({ bpmnXml: myBpmnXml });
+// Register handlers once at startup
+client.init({
+  onServiceCall: async ({ instanceId, payload }) => {
+    // invoke your service, then:
+    await client.completeExternalTask(instanceId, payload.workItemId, {
+      result: { ok: true },
+    });
+  },
+  onDecision: async ({ instanceId, payload }) => {
+    const selected = payload.transitions[0].flowId; // your routing logic
+    await client.submitDecision(instanceId, payload.decisionId, {
+      selectedFlowIds: [selected],
+    });
+  },
+});
+
+// Deploy a BPMN definition
+const { definitionId } = await client.deploy({
+  id: 'order-process',
+  name: 'Order Process',
+  version: '1',
+  bpmnXml: myBpmnXml,
+});
 
 // Start an instance
 const { instanceId } = await client.startInstance({
-  processId: 'my-process',
-  variables: { orderId: '42' },
+  commandId: crypto.randomUUID(),
+  definitionId,
+  businessKey: 'order-42',
 });
 
-// Subscribe to push callbacks (human tasks, service tasks, decisions)
-client.subscribeToCallbacks(instanceId, async (callback) => {
-  if (callback.type === 'CALLBACK_WORK') {
-    await client.completeUserTask(instanceId, callback.workItemId, { approved: true });
-  }
+// Subscribe to push callbacks (WebSocket) — no polling
+const unsubscribe = client.subscribeToCallbacks((item) => {
+  console.log(item.kind, item.instanceId);
 });
 ```
 
-> **Embedded / local mode** (direct MongoDB, no HTTP) is documented in [SDK overview →](./docs/sdk/README.md)
+### 3. Local / embedded mode
+
+For tests or in-process use — no HTTP server needed, runs directly against MongoDB:
+
+```typescript
+import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
+import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
+
+const db = await connectDb('mongodb://localhost:27017/in-concert');
+await ensureIndexes(db);
+
+const client = new BpmnEngineClient({ mode: 'local', db });
+
+// Deploy + start
+const { definitionId } = await client.deploy({ id: 'my-process', name: 'My Process', version: '1', bpmnXml });
+const { instanceId } = await client.startInstance({ commandId: crypto.randomUUID(), definitionId });
+
+// Run to completion — handlers called inline, no server required
+const { status } = await client.run(instanceId, {
+  onServiceCall: async ({ instanceId, payload }) => {
+    await client.completeExternalTask(instanceId, payload.workItemId, { result: { ok: true } });
+  },
+  onDecision: async ({ instanceId, payload }) => {
+    await client.submitDecision(instanceId, payload.decisionId, {
+      selectedFlowIds: [payload.transitions[0].flowId],
+    });
+  },
+});
+
+console.log('Process finished with status:', status); // COMPLETED | FAILED | TERMINATED
+```
+
+### 4. Worklist (human tasks)
+
+```typescript
+// Get tasks for a user (by role)
+const tasks = await client.getWorklistForUser({
+  userId: user._id,
+  roleIds: user.roleAssignments.map(ra => String(ra.role)),
+});
+
+// Claim a task
+await client.activateTask(taskId, { userId: user._id });
+
+// Complete a user task
+await client.completeUserTask(instanceId, workItemId, {
+  result: { approved: true },
+  user: { email: 'user@example.com' },
+});
+```
+
+> Full API reference → [SDK usage guide](./docs/sdk/usage.md)
 
 ---
 
