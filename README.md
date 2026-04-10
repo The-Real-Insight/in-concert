@@ -1,116 +1,184 @@
+<div align="center">
+
+<img src="https://the-real-insight.com/favicon.ico" width="64" height="64" alt="TRI Logo" />
+
 # tri-bpmn-engine
 
-**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+**A production-grade BPMN 2.0 execution engine for Node.js**
 
-A **BPMN 2.0 subset** execution engine for **Node.js**, with **event-sourced** process instances, **optimistic concurrency**, and **push-style callbacks** for human tasks, service tasks, and external gateway decisions. Use it as an **HTTP service** (REST + WebSocket) or embed it in **local mode** against MongoDB.
+*Event-sourced · Optimistic concurrency · Push-style callbacks · REST & embedded*
 
-**npm package:** [`@the-real-insight/tri-bpmn-engine`](https://www.npmjs.com/package/@the-real-insight/tri-bpmn-engine)
+[![npm version](https://img.shields.io/npm/v/@the-real-insight/tri-bpmn-engine?style=flat-square&color=0f172a&labelColor=64748b)](https://www.npmjs.com/package/@the-real-insight/tri-bpmn-engine)
+[![License](https://img.shields.io/badge/license-TRI--MIT-0f172a?style=flat-square&labelColor=64748b)](./LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-0f172a?style=flat-square&labelColor=64748b)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-0f172a?style=flat-square&labelColor=64748b)](https://www.typescriptlang.org)
+[![Tests](https://img.shields.io/github/actions/workflow/status/The-Real-Insight/tri-bpmn-engine/test.yml?style=flat-square&label=tests&labelColor=64748b)](https://github.com/The-Real-Insight/tri-bpmn-engine/actions)
+
+<br/>
+
+[**Get started →**](#quick-start) · [**Documentation**](./docs/README.md) · [**npm**](https://www.npmjs.com/package/@the-real-insight/tri-bpmn-engine) · [**Contributing**](./docs/contributing.md)
+
+</div>
 
 ---
 
-## Why this project
+## What is this?
 
-- **Deterministic execution** — token flow, joins, and recorded decisions; replay-friendly event stream per instance.  
-- **Two integration styles** — **REST** (`BpmnEngineClient` + `/ws`) for microservices, or **local** (`BpmnEngineClient` + `mongodb` `Db`) for tests and embedded use.  
-- **Worklist-ready** — human tasks projected to **`/v1/tasks`** with claim, activate, and complete flows; optional **`TriSdk`** facade for engine + tasks in one object.  
-- **Honest scope** — implements a defined BPMN subset (see [requirements](readme/REQUIREMENTS.md)); not a full Camunda/Flowable replacement.
+`tri-bpmn-engine` executes **BPMN 2.0 process definitions** in Node.js. It is not a visual modeler or a full Camunda/Flowable replacement — it is a focused, embeddable runtime that covers the BPMN subset most production workflows actually need.
+
+```
+BPMN file ──▶ Engine ──▶ Event-sourced instance
+                │
+                ├── REST + WebSocket (microservice mode)
+                └── Local MongoDB   (embedded / test mode)
+```
+
+Built for teams who want **deterministic, inspectable process execution** without the weight of a full BPM platform.
 
 ---
 
-## Quick start
+## Highlights
 
-**Prerequisites:** Node.js 18+, MongoDB.
+| | |
+|---|---|
+| 🔁 **Event-sourced instances** | Every token move is an event. Replay, audit, and debug any instance from its stream. |
+| ⚡ **Optimistic concurrency** | Safe parallel execution without pessimistic locking. |
+| 📬 **Push-style callbacks** | Human tasks, service tasks, and gateway decisions delivered via WebSocket — no polling. |
+| 🔌 **Two integration modes** | **REST mode** (HTTP + WebSocket) for microservices, **local mode** (direct MongoDB) for tests and embedding. |
+| 📋 **Worklist built in** | Human tasks projected to `/v1/tasks` with claim, activate, and complete flows out of the box. |
+| 🎯 **Honest scope** | A [well-defined BPMN subset](./readme/REQUIREMENTS.md) — no hidden surprises, no partially-supported elements. |
+
+---
+
+## Quick Start
+
+**Prerequisites:** Node.js 18+, MongoDB
+
+### Run as a service
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/The-Real-Insight/tri-bpmn-engine.git
 cd tri-bpmn-engine
 npm install
-cp .env.example .env
-# Set MONGO_URL in .env if needed
+cp .env.example .env          # set MONGO_URL if needed
+npm run dev                   # API + worker + WebSocket on :3000
 ```
 
-**Run the engine** (API + worker + WebSocket on port 3000 by default):
-
-```bash
-npm run dev
-```
-
-**Run the browser demo** (interactive test UI; default port **9100** in `npm run server`):
-
-```bash
-npm run server
-# Open http://localhost:9100/
-```
-
-**Use from your app:**
+### Install the SDK
 
 ```bash
 npm install @the-real-insight/tri-bpmn-engine
 ```
 
+### Connect from your app
+
 ```typescript
 import { BpmnEngineClient } from '@the-real-insight/tri-bpmn-engine/sdk';
 
+// REST mode — connects to a running engine service
 const client = new BpmnEngineClient({
   mode: 'rest',
   baseUrl: 'http://localhost:3000',
 });
 
-// deploy, startInstance, getState, completeUserTask, subscribeToCallbacks, …
+// Deploy a process definition
+await client.deployDefinition({ bpmnXml: myBpmnXml });
+
+// Start an instance
+const { instanceId } = await client.startInstance({
+  processId: 'my-process',
+  variables: { orderId: '42' },
+});
+
+// Subscribe to push callbacks (human tasks, service tasks, decisions)
+client.subscribeToCallbacks(instanceId, async (callback) => {
+  if (callback.type === 'CALLBACK_WORK') {
+    await client.completeUserTask(instanceId, callback.workItemId, { approved: true });
+  }
+});
 ```
 
-More examples, local mode, `init`, and worklist patterns are in the **[documentation](#documentation)**.
+> **Embedded / local mode** (direct MongoDB, no HTTP) is documented in [SDK overview →](./docs/sdk/README.md)
+
+---
+
+## HTTP API
+
+The engine exposes a REST API under `/v1`. Key endpoints:
+
+```
+POST   /v1/definitions                              Deploy a BPMN file
+POST   /v1/instances                                Start a process instance
+GET    /v1/instances/:id                            Get instance
+GET    /v1/instances/:id/state                      Get execution state
+POST   /v1/instances/:id/work-items/:wid/complete   Complete a work item
+POST   /v1/instances/:id/decisions/:did             Resolve an XOR gateway
+GET    /v1/tasks                                    Worklist query
+WS     /ws                                          Push callbacks (REST mode)
+```
+
+Full reference → [SDK usage guide](./docs/sdk/usage.md)
 
 ---
 
 ## Documentation
 
-| | |
+| Guide | Description |
 |---|---|
-| **[Documentation home](docs/README.md)** | Index of all guides |
-| **[Getting started](docs/getting-started.md)** | Environment, ports, install, test commands |
-| **[SDK overview](docs/sdk/README.md)** | Entry points, REST vs local, `TriSdk` |
-| **[SDK usage (full reference)](docs/sdk/usage.md)** | API reference, callbacks, WebSocket, worklist |
-| **[Browser demo (test UI)](docs/test-ui.md)** | Demo server features and layout |
-| **[Testing](docs/testing.md)** | Jest targets and conformance pointers |
-| **[Contributing](docs/contributing.md)** | How to contribute and project expectations |
+| [Getting started](./docs/getting-started.md) | Environment setup, ports, install, test commands |
+| [SDK overview](./docs/sdk/README.md) | Entry points, REST vs local mode, `TriSdk` facade |
+| [SDK usage (full reference)](./docs/sdk/usage.md) | API reference, callbacks, WebSocket, worklist |
+| [Browser demo](./docs/test-ui.md) | Interactive test UI (`npm run server`) |
+| [Testing](./docs/testing.md) | Jest targets and conformance pointers |
+| [Contributing](./docs/contributing.md) | How to contribute |
 
-Design depth:
+Design & internals:
 
-- [Requirements & BPMN subset](readme/REQUIREMENTS.md)  
-- [Implementation notes (MongoDB)](readme/IMPLEMENTATION.md)  
-- [Conformance matrix (table)](readme/TEST.md)  
+- [BPMN subset & requirements](./readme/REQUIREMENTS.md)
+- [Implementation notes (MongoDB)](./readme/IMPLEMENTATION.md)
+- [Conformance matrix](./readme/TEST.md)
 
 ---
 
-## HTTP API (sketch)
+## BPMN Support
 
-Typical **`/v1`** operations (see SDK and server routes for full detail):
+This engine implements a curated BPMN 2.0 subset. See the full [conformance matrix](./readme/TEST.md) for details. Unsupported elements fail fast and loudly — never silently skip.
 
-- `POST /v1/definitions` — deploy BPMN  
-- `POST /v1/instances` — start instance  
-- `GET /v1/instances/:id` / `.../state` — inspect instance  
-- `POST /v1/instances/:id/work-items/:workItemId/complete` — complete work  
-- `POST /v1/instances/:id/decisions/:decisionId` — XOR / external decision  
-- `GET /v1/tasks` — worklist query  
-- WebSocket **`/ws`** — `CALLBACK_WORK` / `CALLBACK_DECISION` push (REST mode SDK)
+**Supported:** Start/End events · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
+
+**Not in scope (yet):** Compensation · Complex gateways · Choreography · Conversation
 
 ---
 
 ## Contributing
 
-We welcome issues and pull requests. Please read **[docs/contributing.md](docs/contributing.md)** and run **`npm run test:unit`** (plus SDK/conformance tests when you touch runtime code) before submitting.
+Issues and pull requests are welcome. Please read [docs/contributing.md](./docs/contributing.md) and run tests before submitting:
+
+```bash
+npm run test:unit          # fast unit tests
+npm run test:conformance   # BPMN conformance suite
+```
 
 ---
 
 ## License
 
-Copyright (c) 2024-present **The Real Insight GmbH**. See **[LICENSE](LICENSE)** for the full license and **attribution requirements** (startup notice, end-user products, and documentation).
+Copyright © 2024-present **[The Real Insight GmbH](https://the-real-insight.com)**
 
-Redistribution and derivative works must keep the license file, comply with attribution, and must not remove or hide the engine’s startup attribution (see `src/attribution.ts`).
+This project is released under a **modified MIT license with attribution requirements**. See [LICENSE](./LICENSE) for the full text.
+
+**In short:** You may use, copy, modify, and distribute this software freely — with three conditions:
+
+> 1. The engine's **startup log notice** identifying The Real Insight GmbH must not be removed or suppressed.
+> 2. Any **end-user product** built on this engine must credit The Real Insight GmbH in its imprint, About page, or terms and conditions.
+> 3. Any **documentation or README** accompanying a derivative must include a "Powered by" attribution.
 
 ---
 
-## Publishing note
+<div align="center">
 
-CI may bump versions and publish to npm on pushes to the default branch; configure **`NPM_TOKEN`** in GitHub Actions secrets as described in your workflow files.
+Built with care by **[The Real Insight GmbH](https://the-real-insight.com)**
+
+*Powering process automation, transparently.*
+
+</div>
