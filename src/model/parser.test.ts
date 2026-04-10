@@ -63,6 +63,39 @@ describe('parseBpmnXml', () => {
     expect(graph.nodes['Task_MI']?.extensions?.['tri:multiInstanceData']).toBe('processList');
   });
 
+  it('parses tri:condition on sequenceFlow into conditionExpression', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:exclusiveGateway id="Gw_1"/>
+    <bpmn:endEvent id="End_A"/>
+    <bpmn:endEvent id="End_B"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Gw_1"/>
+    <bpmn:sequenceFlow id="Flow_cond" sourceRef="Gw_1" targetRef="End_A" tri:condition="Mittlere Temperatur &#60; 23 Grad&#10;"/>
+    <bpmn:sequenceFlow id="Flow_default" sourceRef="Gw_1" targetRef="End_B" tri:condition=""/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.flows['Flow_cond']?.conditionExpression).toBe('Mittlere Temperatur < 23 Grad\n');
+    expect(graph.flows['Flow_default']?.conditionExpression).toBeUndefined();
+  });
+
+  it('nested bpmn:conditionExpression overrides tri:condition on same flow', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="End_1" tri:condition="from tri">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression"><![CDATA[from nested]]></bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.flows['Flow_1']?.conditionExpression).toBe('from nested');
+  });
+
   it('parses tri:roleId from lanes', async () => {
     const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://example.com/tri">

@@ -74,18 +74,57 @@ function getEventDefinition(el: { eventDefinitions?: { $type?: string }[] }): st
   return defs[0]?.$type ?? undefined;
 }
 
+/** Decode a small subset of XML entities used in BPMN attribute values (e.g. tri:condition). */
+function decodeXmlEntitiesInAttribute(raw: string): string {
+  if (!raw) return raw;
+  return raw
+    .replace(/&#x([0-9a-fA-F]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * TRI extension: sequence flows may carry `tri:condition="..."` on the opening/self-closing tag
+ * (modeller output) instead of nested `<bpmn:conditionExpression>`.
+ */
+function parseTriConditionAttributesByFlow(xml: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const tagRe = /<bpmn:sequenceFlow(\s[^>]*)>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(xml))) {
+    const attrs = m[1] ?? '';
+    const idMatch = /\bid="([^"]+)"/i.exec(attrs);
+    const condMatch = /\btri:condition="([^"]*)"/i.exec(attrs);
+    const flowId = idMatch?.[1];
+    if (!flowId) continue;
+    const raw = condMatch?.[1];
+    if (raw == null) continue;
+    const decoded = decodeXmlEntitiesInAttribute(raw);
+    // Empty tri:condition="" skips; do not trim() so trailing &#10; etc. stay meaningful for NL conditions.
+    if (decoded.replace(/\s/g, '').length === 0) continue;
+    result[flowId] = decoded;
+  }
+  return result;
+}
+
 /** Extract conditionExpression per flow id from BPMN XML (bpmn-moddle may not expose it). */
 function parseConditionExpressionsByFlow(xml: string): Record<string, string> {
-  const result: Record<string, string> = {};
+  const fromNested: Record<string, string> = {};
   const condRe =
     /<bpmn:sequenceFlow\s+id="([^"]+)"[^>]*>\s*<bpmn:conditionExpression[^>]*>\s*(?:<!\[CDATA\[([^\]]*)\]\]>|([^<]+))/gi;
   let m;
   while ((m = condRe.exec(xml))) {
     const flowId = m[1];
     const body = (m[2] ?? m[3] ?? '').trim();
-    if (body) result[flowId] = body;
+    if (body) fromNested[flowId] = body;
   }
-  return result;
+  const fromTri = parseTriConditionAttributesByFlow(xml);
+  // Nested BPMN 2.0 conditionExpression wins over tri:condition when both are present.
+  return { ...fromTri, ...fromNested };
 }
 
 /** Parse lane elements from BPMN XML to extract id, name, tri:roleId. */

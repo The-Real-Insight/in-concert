@@ -12,7 +12,7 @@ The engine uses the following MongoDB collections. Collections are created impli
 | **ProcessInstanceEvents** | Append-only event store per instance |
 | **Continuations** | Durable work units (START, TOKEN_AT_NODE, WORK_COMPLETED, etc.) |
 | **Outbox** | Pending callbacks for external delivery (CALLBACK_WORK, CALLBACK_DECISION, CALLBACK_EVENT) |
-| **HumanTasks** | Worklist projection of USER_TASK work items (see USAGE.md Worklist reference) |
+| **HumanTasks** | Worklist projection of USER_TASK work items (see [docs/sdk/usage.md](../docs/sdk/usage.md) Worklist reference) |
 
 ### Indexes
 

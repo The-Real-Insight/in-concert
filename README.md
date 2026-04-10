@@ -1,114 +1,112 @@
 # tri-bpmn-engine
 
-BPMN 2.0 subset execution engine with event sourcing, optimistic concurrency, and external decision evaluation.
+A **BPMN 2.0 subset** execution engine for **Node.js**, with **event-sourced** process instances, **optimistic concurrency**, and **push-style callbacks** for human tasks, service tasks, and external gateway decisions. Use it as an **HTTP service** (REST + WebSocket) or embed it in **local mode** against MongoDB.
 
-## Stack
+**npm package:** [`@the-real-insight/tri-bpmn-engine`](https://www.npmjs.com/package/@the-real-insight/tri-bpmn-engine)
 
-- TypeScript on Node.js
-- Express
-- MongoDB
+---
 
-## Setup
+## Why this project
+
+- **Deterministic execution** — token flow, joins, and recorded decisions; replay-friendly event stream per instance.  
+- **Two integration styles** — **REST** (`BpmnEngineClient` + `/ws`) for microservices, or **local** (`BpmnEngineClient` + `mongodb` `Db`) for tests and embedded use.  
+- **Worklist-ready** — human tasks projected to **`/v1/tasks`** with claim, activate, and complete flows; optional **`TriSdk`** facade for engine + tasks in one object.  
+- **Honest scope** — implements a defined BPMN subset (see [requirements](readme/REQUIREMENTS.md)); not a full Camunda/Flowable replacement.
+
+---
+
+## Quick start
+
+**Prerequisites:** Node.js 18+, MongoDB.
 
 ```bash
+git clone <repository-url>
+cd tri-bpmn-engine
 npm install
 cp .env.example .env
-# Edit .env and set MONGO_URL (default: mongodb://localhost:27017/tri-bpmn-engine)
+# Set MONGO_URL in .env if needed
 ```
 
-## Run
-
-Requires MongoDB. Then:
+**Run the engine** (API + worker + WebSocket on port 3000 by default):
 
 ```bash
 npm run dev
 ```
 
-## Implemented
-
-- **Model Service**: BPMN XML parsing, graph normalization
-- **Runtime API**: Deploy, start instance, complete work, submit decision, query state
-- **Core flow**: Start event, end event, sequence flow
-- **Tasks**: Service task, user task (external callback via outbox)
-- **Gateways**: XOR (split + join), AND (split + join)
-- **Workers**: Claims and processes continuations; in-process polling
-- **Outbox**: CALLBACK_WORK, CALLBACK_DECISION enqueued for delivery
-- **WebSocket**: Push callbacks to clients at `/ws` (REST mode)
-- **Event sourcing**: Append-only events per instance
-- **Optimistic concurrency**: Versioned state updates
-
-## Not yet implemented
-
-- OR gateway (inclusive, conservative join)
-- Timers (intermediate catch, boundary)
-- Message events (catch, throw)
-- Boundary error events
-- Embedded subprocess, Call activity
-- Outbox dispatcher (delivery loop)
-- OR-join upstream metadata
-- Full idempotency (commandId) for all mutating APIs
-
-## API
-
-### Deploy definition
+**Run the browser demo** (interactive test UI; default port **9100** in `npm run server`):
 
 ```bash
-curl -X POST http://localhost:3000/v1/definitions \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Test","version":1,"bpmnXml":"<bpmn:definitions>...</bpmn:definitions>"}'
+npm run server
+# Open http://localhost:9100/
 ```
 
-### Start instance
+**Use from your app:**
 
 ```bash
-curl -X POST http://localhost:3000/v1/instances \
-  -H "Content-Type: application/json" \
-  -d '{"commandId":"cmd-1","definitionId":"<definitionId>"}'
+npm install @the-real-insight/tri-bpmn-engine
 ```
 
-### Submit decision (XOR gateway)
+```typescript
+import { BpmnEngineClient } from '@the-real-insight/tri-bpmn-engine/sdk';
 
-```bash
-curl -X POST http://localhost:3000/v1/instances/<instanceId>/decisions/<decisionId> \
-  -H "Content-Type: application/json" \
-  -d '{"commandId":"cmd-2","outcome":{"selectedFlowIds":["<flowId>"]}}'
+const client = new BpmnEngineClient({
+  mode: 'rest',
+  baseUrl: 'http://localhost:3000',
+});
+
+// deploy, startInstance, getState, completeUserTask, subscribeToCallbacks, …
 ```
 
-### Complete work item
-
-```bash
-curl -X POST http://localhost:3000/v1/instances/<instanceId>/work-items/<workItemId>/complete \
-  -H "Content-Type: application/json" \
-  -d '{"commandId":"cmd-2"}'
-```
-
-### Query instance
-
-```bash
-curl http://localhost:3000/v1/instances/<instanceId>
-curl http://localhost:3000/v1/instances/<instanceId>/state
-```
-
-## Publishing
-
-On every push to `main`, a GitHub Action:
-
-1. Runs tests (`npm run test:sdk`)
-2. Bumps the patch version (`0.1.0` → `0.1.1`)
-3. Publishes to npm
-4. Commits the version bump back to the repo (with `[skip ci]` to avoid loops)
-
-**Setup**: Add `NPM_TOKEN` as a repository secret in GitHub. Create a token at [npmjs.com/access-tokens](https://www.npmjs.com/access-tokens) with "Automation" type (or "Publish" for granular access).
+More examples, local mode, `init`, and worklist patterns are in the **[documentation](#documentation)**.
 
 ---
 
-## Test
+## Documentation
 
-```bash
-npm test              # all tests (unit + conformance)
-npm run test:unit      # unit tests only (no MongoDB)
-npm run test:conformance   # conformance tests (requires MongoDB, see readme/TEST.md)
-npm run test:sdk       # SDK tests (requires MongoDB)
-npm run test:worklist  # worklist role-filter tests (requires MongoDB)
-npm run test:integration   # integration script (requires MongoDB)
-```
+| | |
+|---|---|
+| **[Documentation home](docs/README.md)** | Index of all guides |
+| **[Getting started](docs/getting-started.md)** | Environment, ports, install, test commands |
+| **[SDK overview](docs/sdk/README.md)** | Entry points, REST vs local, `TriSdk` |
+| **[SDK usage (full reference)](docs/sdk/usage.md)** | API reference, callbacks, WebSocket, worklist |
+| **[Browser demo (test UI)](docs/test-ui.md)** | Demo server features and layout |
+| **[Testing](docs/testing.md)** | Jest targets and conformance pointers |
+| **[Contributing](docs/contributing.md)** | How to contribute and project expectations |
+
+Design depth:
+
+- [Requirements & BPMN subset](readme/REQUIREMENTS.md)  
+- [Implementation notes (MongoDB)](readme/IMPLEMENTATION.md)  
+- [Conformance matrix (table)](readme/TEST.md)  
+
+---
+
+## HTTP API (sketch)
+
+Typical **`/v1`** operations (see SDK and server routes for full detail):
+
+- `POST /v1/definitions` — deploy BPMN  
+- `POST /v1/instances` — start instance  
+- `GET /v1/instances/:id` / `.../state` — inspect instance  
+- `POST /v1/instances/:id/work-items/:workItemId/complete` — complete work  
+- `POST /v1/instances/:id/decisions/:decisionId` — XOR / external decision  
+- `GET /v1/tasks` — worklist query  
+- WebSocket **`/ws`** — `CALLBACK_WORK` / `CALLBACK_DECISION` push (REST mode SDK)
+
+---
+
+## Contributing
+
+We welcome issues and pull requests. Please read **[docs/contributing.md](docs/contributing.md)** and run **`npm run test:unit`** (plus SDK/conformance tests when you touch runtime code) before submitting.
+
+---
+
+## License
+
+License terms are specified in **`package.json`** (`license` field). If you need OSS-friendly licensing for redistribution, open an issue so maintainers can align on a standard license file.
+
+---
+
+## Publishing note
+
+CI may bump versions and publish to npm on pushes to the default branch; configure **`NPM_TOKEN`** in GitHub Actions secrets as described in your workflow files.
