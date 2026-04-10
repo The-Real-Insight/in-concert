@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./docs/banner.png" alt="in-concert logo" width="680" />
+<img src="./docs/banner.png" alt="in-concert logo" width="800" />
 
 **A production-grade BPMN 2.0 execution engine for Node.js**
 
