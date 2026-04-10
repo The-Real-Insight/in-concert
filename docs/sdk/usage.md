@@ -1,5 +1,7 @@
 # Usage Guide
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 Develop against **tri-bpmn-engine** (npm: `@the-real-insight/tri-bpmn-engine`) using the **SDK**. The SDK supports two modes:
 
 - **REST mode** – connect to a running engine server over HTTP

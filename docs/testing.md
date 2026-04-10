@@ -1,5 +1,7 @@
 # Testing
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 Tests use **Jest**. Some suites need a running **MongoDB** instance and variables from `.env` (see [Getting started](getting-started.md)).
 
 ## Commands (from `package.json`)

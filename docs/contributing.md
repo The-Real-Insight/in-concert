@@ -1,5 +1,7 @@
 # Contributing
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 Thank you for your interest in **tri-bpmn-engine**. Community contributions help harden BPMN execution, documentation, and tooling.
 
 ## Ways to contribute

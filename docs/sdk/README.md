@@ -1,5 +1,7 @@
 # SDK overview
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 The **SDK** is the supported way to deploy definitions, start instances, complete work, submit gateway decisions, and (optionally) drive the **worklist** over HTTP.
 
 Published package: **`@the-real-insight/tri-bpmn-engine`**.

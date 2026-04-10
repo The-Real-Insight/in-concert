@@ -1,5 +1,7 @@
 # Browser demo (test UI)
 
+**Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
+
 The **demo server** is an Express app that serves a static **browser UI** and the same **`/v1`** REST API and **`/ws`** WebSocket endpoint as the main engine. It is intended for **manual exploration**, demos, and quick validation—not as a production admin console.
 
 Source: `src/server/index.ts`, static assets in `src/server/public/`.
