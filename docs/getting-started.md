@@ -2,250 +2,359 @@
 
 **Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
 
-This page explains **what you actually do** with tri-bpmn-engine: deploy a process model, start runs, handle **human work** through a **worklist**, and handle **automation** by reacting to **service-task callbacks** (for example by calling a public REST API yourself).
+This guide is a complete, runnable example. Every pattern from the README — external storage, service task handlers, XOR decision routing, human task worklist — is implemented concretely, so you can copy and adapt it.
+
+The scenario: **NASA Near-Earth Object (NEO) Watch** — a workflow that fetches today's asteroid data from the NASA public API, routes to a human reviewer if a potentially hazardous object is detected, then files an alert or logs all-clear.
 
 ---
 
-## The use case in one picture
+## The process
 
-Imagine a small process for a **launch checklist**:
+```
+Start
+  └─▶ Fetch NEO data     (service task — calls NASA API, stores result)
+          └─▶ [Hazardous?]    (XOR gateway — your code reads the result and routes)
+                ├─ Yes ─▶ Review threat    (user task — astronomer inbox)
+                │               └─▶ File hazard alert   (service task)
+                │                             └─▶ End
+                └─ No  ─▶ Log all-clear    (service task)
+                                └─▶ End
+```
 
-1. A **user task** — an operator enters a callsign in a UI (worklist).  
-2. A **service task** — your integration code calls a **public REST API** (no API keys) to fetch live data, then tells the engine the step is done.  
-3. Another **user task** — a lead reviews the result and approves.
-
-The engine does **not** execute JavaScript inside the diagram and does **not** magically call external URLs. It **orchestrates**: it moves tokens, records events, creates **work items** for people, and emits **callbacks** so *your* code runs service work and reports back. That split is what makes the model portable (BPMN XML) and the integrations testable (plain HTTP + your handlers).
-
----
-
-## Step 0 — Nothing runs without a deployed model
-
-Before you can start a process instance, the engine must know the **process definition**: the normalized graph derived from your **BPMN 2.0 XML**.
-
-- **Deploy** = register that XML once (per id/version). You get a `definitionId` (or equivalent) to use when starting instances.  
-- **Start instance** = create a new run of an already deployed definition.  
-- **Worklist** = query open **user tasks** (and related operations) while the instance is `RUNNING`.  
-- **Service tasks** = the engine **pauses** and notifies you via **callback** (WebSocket in REST mode, or your handler in local mode); **you** perform the side effect (e.g. `fetch` to a REST API) and then **complete** the work item.
-
-If you skip deployment, `startInstance` has nothing valid to point at.
+This covers all the key patterns: **service task**, **XOR decision** backed by external data, and **human task** with worklist routing.
 
 ---
 
-## Authoring the model: bpmn.io
+## Step 1 — Install
 
-Most teams **draw** BPMN in a visual editor and export **XML**.
-
-**[bpmn.io](https://bpmn.io/)** is the open-source project behind the popular **BPMN toolkit** used in many products (including Camunda’s web Modeler). It provides embeddable modeling components and a polished **online demo** where you can sketch pools, lanes, user tasks, service tasks, gateways, and sequence flows—then **download BPMN 2.0 XML** for your app.
-
-- **Project & docs:** [bpmn.io](https://bpmn.io/)  
-- **Try the modeler in the browser:** [demo.bpmn.io](https://demo.bpmn.io/)
-
-Export your diagram as `.bpmn` / XML. The engine supports a **defined subset** of BPMN (see [requirements & subset](../readme/REQUIREMENTS.md)); start with **start event → user tasks / service tasks → end event** before adding XOR/AND gateways.
-
----
-
-## Example process: “ISS briefing” (conceptual BPMN)
-
-**Story:** After an operator enters a **callsign** (user task), automation **fetches the current ISS position** from a **public JSON API** (service task). A **flight director** then confirms “go” or “no-go” (user task).
-
-**Sequence:** `Start` → `Enter callsign` *(userTask)* → `Fetch ISS position` *(serviceTask)* → `Go / no-go` *(userTask)* → `End`
-
-A similar **three-step** shape (user → service → user) exists in the repo as `test/bpmn/linear-service-and-user-task.bpmn`—handy if you want a file to open in [demo.bpmn.io](https://demo.bpmn.io/) and adapt.
-
-**Public REST endpoint for the story** (no auth, GET, JSON):  
-[https://api.open-notify.org/iss-now.json](https://api.open-notify.org/iss-now.json) — returns the International Space Station’s current latitude/longitude. Your service-task handler can `fetch` this URL, optionally store part of the JSON in the **completion payload**, and call the engine’s complete API.
-
----
-
-## Run the engine on your machine
+```bash
+npm install @the-real-insight/in-concert
+```
 
 **Prerequisites:** Node.js 18+, MongoDB.
 
-```bash
-git clone <repository-url>
-cd tri-bpmn-engine
-npm install
-cp .env.example .env
-# Set MONGO_URL if MongoDB is not the default
+---
+
+## Step 2 — The BPMN process model
+
+Save this as `neo-watch.bpmn` (also available in the repo as `test/bpmn/neo-watch.bpmn`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  id="Defs_NeoWatch"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_NeoWatch" isExecutable="true">
+
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_Automation" name="Automation">
+        <bpmn:flowNodeRef>Start</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_FetchNeo</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Gateway_Hazardous</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_FileAlert</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_LogAllClear</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_Astronomer" name="Astronomer">
+        <bpmn:flowNodeRef>Task_ReviewThreat</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+
+    <bpmn:startEvent id="Start"/>
+
+    <bpmn:serviceTask id="Task_FetchNeo" name="Fetch NEO data"
+      tri:toolId="fetch-neo-data"/>
+
+    <bpmn:exclusiveGateway id="Gateway_Hazardous" name="Any hazardous object?"
+      default="Flow_AllClear"/>
+
+    <bpmn:userTask id="Task_ReviewThreat" name="Review threat"/>
+
+    <bpmn:serviceTask id="Task_FileAlert" name="File hazard alert"
+      tri:toolId="file-alert"/>
+
+    <bpmn:serviceTask id="Task_LogAllClear" name="Log all-clear"
+      tri:toolId="log-all-clear"/>
+
+    <bpmn:endEvent id="End"/>
+
+    <bpmn:sequenceFlow id="Flow_1"         sourceRef="Start"             targetRef="Task_FetchNeo"/>
+    <bpmn:sequenceFlow id="Flow_2"         sourceRef="Task_FetchNeo"     targetRef="Gateway_Hazardous"/>
+    <bpmn:sequenceFlow id="Flow_Hazardous" name="Yes"
+      sourceRef="Gateway_Hazardous" targetRef="Task_ReviewThreat">
+      <bpmn:conditionExpression xsi:type="tFormalExpression"><![CDATA[${hazardous}]]></bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_AllClear"  name="No"
+      sourceRef="Gateway_Hazardous" targetRef="Task_LogAllClear"/>
+    <bpmn:sequenceFlow id="Flow_3"         sourceRef="Task_ReviewThreat" targetRef="Task_FileAlert"/>
+    <bpmn:sequenceFlow id="Flow_4"         sourceRef="Task_FileAlert"    targetRef="End"/>
+    <bpmn:sequenceFlow id="Flow_5"         sourceRef="Task_LogAllClear"  targetRef="End"/>
+
+  </bpmn:process>
+</bpmn:definitions>
 ```
 
-| Variable | Purpose |
-|----------|---------|
-| `MONGO_URL` | MongoDB connection string |
-| `MONGO_DB` / `MONGO_BPM_DB` | BPM data databases (see `src/config.ts`; [Database schema](database-schema.md) describes collections) |
-| `PORT` | HTTP port for `npm run dev` (default **3000**) |
+Two things to note:
 
-Start the **API + worker + WebSocket** server:
-
-```bash
-npm run dev
-```
-
-- REST API: `/v1/...`  
-- Callback stream (SDK): WebSocket `/ws`
-
-For a **browser demo** (default port **9100**): `npm run server` → [http://localhost:9100/](http://localhost:9100/) — see [test-ui.md](test-ui.md).
+- **`tri:toolId`** on service tasks is how your handlers identify which task fired. You define the values — the engine passes them back in `payload.extensions['tri:toolId']`.
+- **`default="Flow_AllClear"`** on the gateway means the all-clear path is taken unless your `onDecision` handler explicitly selects `Flow_Hazardous`. Your code decides — the engine never evaluates `${hazardous}` itself.
 
 ---
 
-## 1. Deploy the model
+## Step 3 — The complete example
 
-Register the XML once. In an **application that talks to the engine** (separate from cloning this repo), add the client:
-
-```bash
-npm install @the-real-insight/tri-bpmn-engine
-```
-
-Then deploy with the **SDK**:
+Create `neo-watch.ts`:
 
 ```typescript
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { BpmnEngineClient } from '@the-real-insight/tri-bpmn-engine/sdk';
+import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
+import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
 
-const client = new BpmnEngineClient({
-  mode: 'rest',
-  baseUrl: 'http://localhost:3000',
+// ── Storage ───────────────────────────────────────────────────────────────────
+//
+// The engine never stores or reads your domain data.
+// You own the storage; instanceId is the only binding key.
+
+interface NeoScanResult {
+  date: string;
+  hazardousObjects: Array<{ id: string; name: string; missDistanceKm: number }>;
+}
+
+const store = new Map<string, NeoScanResult>();
+
+// ── NASA API ──────────────────────────────────────────────────────────────────
+//
+// Fully public — no account needed in development (DEMO_KEY: 30 req/hr).
+// Register a free key at https://api.nasa.gov for production use.
+
+async function fetchNeoData(date: string): Promise<NeoScanResult> {
+  const url =
+    `https://api.nasa.gov/neo/rest/v1/feed` +
+    `?start_date=${date}&end_date=${date}&api_key=DEMO_KEY`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`NASA API ${res.status}: ${await res.text()}`);
+
+  const data = (await res.json()) as Record<string, any>;
+  const objects: any[] = data.near_earth_objects?.[date] ?? [];
+
+  return {
+    date,
+    hazardousObjects: objects
+      .filter(o => o.is_potentially_hazardous_asteroid)
+      .map(o => ({
+        id: String(o.id),
+        name: String(o.name),
+        missDistanceKm: Math.round(
+          parseFloat(o.close_approach_data?.[0]?.miss_distance?.kilometers ?? '0')
+        ),
+      })),
+  };
+}
+
+// ── Engine setup ──────────────────────────────────────────────────────────────
+
+const db = await connectDb(
+  process.env.MONGO_URL ?? 'mongodb://localhost:27017/in-concert'
+);
+await ensureIndexes(db);
+
+const client = new BpmnEngineClient({ mode: 'local', db });
+
+client.init({
+  // Called for every service task.
+  // Dispatch on tri:toolId, perform the real work, complete the work item.
+  onServiceCall: async ({ instanceId, payload }) => {
+    const toolId = payload.extensions?.['tri:toolId'];
+
+    if (toolId === 'fetch-neo-data') {
+      const date = new Date().toISOString().slice(0, 10);
+      const result = await fetchNeoData(date);
+
+      // Store under instanceId — the engine never sees this object.
+      store.set(instanceId, result);
+
+      console.log(
+        `[${instanceId}] Scanned ${result.date}:`,
+        result.hazardousObjects.length > 0
+          ? `${result.hazardousObjects.length} potentially hazardous object(s) detected`
+          : 'no hazardous objects'
+      );
+
+      await client.completeExternalTask(instanceId, payload.workItemId);
+    }
+
+    if (toolId === 'file-alert') {
+      const { hazardousObjects } = store.get(instanceId)!;
+      // In production: open an incident ticket, page the on-call astronomer, etc.
+      console.log(`[${instanceId}] HAZARD ALERT filed:`, hazardousObjects);
+      await client.completeExternalTask(instanceId, payload.workItemId);
+    }
+
+    if (toolId === 'log-all-clear') {
+      const { date } = store.get(instanceId)!;
+      console.log(`[${instanceId}] All clear — no hazardous objects on ${date}.`);
+      await client.completeExternalTask(instanceId, payload.workItemId);
+    }
+  },
+
+  // Called when the XOR gateway needs a routing decision.
+  // Read your stored context. Pick a flow. The engine advances the token.
+  // The condition expression in the BPMN (${hazardous}) is documentation only —
+  // your code here is what actually routes.
+  onDecision: async ({ instanceId, payload }) => {
+    const context = store.get(instanceId)!;
+    const isHazardous = context.hazardousObjects.length > 0;
+
+    // payload.transitions lists every outgoing sequence flow:
+    //   { flowId, name, isDefault, conditionExpression, targetNodeName }
+    // Pick the one matching your domain condition.
+    const selected =
+      payload.transitions.find(t => (isHazardous ? !t.isDefault : t.isDefault))
+      ?? payload.transitions[0]!;
+
+    console.log(
+      `[${instanceId}] Gateway decision: ${isHazardous ? `hazardous → "${selected.name}"` : 'all-clear (default)'}`
+    );
+
+    await client.submitDecision(instanceId, payload.decisionId, {
+      selectedFlowIds: [selected.flowId],
+    });
+  },
 });
 
-const bpmnXml = readFileSync('./iss-briefing.bpmn', 'utf8');
+// ── Deploy ────────────────────────────────────────────────────────────────────
+
+const bpmnXml = readFileSync('./neo-watch.bpmn', 'utf8');
 
 const { definitionId } = await client.deploy({
-  id: 'iss-briefing',
-  name: 'IssBriefing',
+  id: 'neo-watch',
+  name: 'NEO Watch',
   version: '1',
   bpmnXml,
-  overwrite: true, // optional: replace if same id + version already deployed
+  overwrite: true,
 });
-```
 
-Under the hood this is `POST /v1/definitions` with JSON body `{ name, version, bpmnXml, ... }`. You need the returned **`definitionId`** to start runs.
+// ── Start and run ─────────────────────────────────────────────────────────────
+//
+// run() drives the instance through all pending callbacks (service tasks,
+// decisions) until the process completes or pauses at a user task.
+//
+// It returns { status: 'COMPLETED' } on the all-clear path, or
+// { status: 'RUNNING' } when paused at "Review threat".
 
----
-
-## 2. Start a process instance
-
-```typescript
 const { instanceId } = await client.startInstance({
   commandId: randomUUID(),
   definitionId,
 });
+
+let result = await client.run(instanceId);
+console.log('Status after automated steps:', result.status);
+
+// ── Worklist — handle the human task if the hazardous path was taken ──────────
+
+if (result.status === 'RUNNING') {
+  // Query open tasks for this instance.
+  // In local mode, listTasks reads the HumanTasks projection populated during run().
+  const tasks = await client.listTasks({ instanceId, status: 'OPEN' });
+  const reviewTask = tasks[0]!;
+  console.log('Open task:', reviewTask.name); // "Review threat"
+
+  // Astronomer claims the task (prevents double-claiming in multi-user setups).
+  await client.activateTask(reviewTask._id, { userId: 'astronomer@agency.space' });
+
+  // Astronomer submits their assessment. The result payload is yours — store it
+  // however your application needs; the engine records it on the task document.
+  await client.completeUserTask(instanceId, reviewTask._id, {
+    result: {
+      severity: 'LOW',
+      comment: 'Miss distance > 1 M km. No action required at this time.',
+    },
+    user: { email: 'astronomer@agency.space' },
+  });
+
+  // Resume: engine advances to "File hazard alert" and then reaches End.
+  result = await client.run(instanceId);
+  console.log('Final status:', result.status); // COMPLETED
+}
 ```
 
-Equivalent HTTP:
+Run it:
 
 ```bash
-curl -s -X POST http://localhost:3000/v1/instances \
-  -H "Content-Type: application/json" \
-  -d '{
-    "commandId": "550e8400-e29b-41d4-a716-446655440000",
-    "definitionId": "<definitionId-from-deploy>"
-  }'
+npx tsx neo-watch.ts
+# or: tsc && node neo-watch.js
 ```
-
-The instance is now **running**. Tokens **wait** at **user tasks** and **service tasks** until something completes them.
 
 ---
 
-## 3. Obtain the worklist (human tasks)
+## What each piece does
 
-User tasks are projected into a **worklist** you can query over REST.
+| Pattern | Where | What it shows |
+|---|---|---|
+| `store.set(instanceId, result)` | `onServiceCall` | Your data, your storage. `instanceId` is the only binding key. |
+| `payload.extensions?.['tri:toolId']` | `onServiceCall` | How you identify which service task fired. Comes from `tri:toolId` in the BPMN. |
+| `completeExternalTask(instanceId, workItemId)` | `onServiceCall` | Tells the engine the service task is done. Token advances. |
+| `payload.transitions.find(...)` | `onDecision` | All outgoing flows are presented. Your code picks one based on domain logic. |
+| `submitDecision(instanceId, decisionId, ...)` | `onDecision` | Commits the routing choice. The engine never evaluates BPMN condition expressions itself. |
+| `client.run(instanceId)` | main | Drives the instance. Returns `RUNNING` when paused at a user task. |
+| `listTasks / activateTask / completeUserTask` | main | The full worklist cycle: discover → claim → complete. |
+| `client.run(instanceId)` again | main | Resumes from the user task. Call run whenever you want the engine to advance. |
+
+---
+
+## Authoring the BPMN visually
+
+Draw and export at **[demo.bpmn.io](https://demo.bpmn.io/)** — the open-source browser modeler. Open `neo-watch.bpmn` there to see the diagram, or start from scratch and export BPMN 2.0 XML.
+
+Add `tri:toolId` on service tasks via **Properties panel → Extensions** in bpmn.io. See the [supported BPMN subset](../readme/REQUIREMENTS.md) before adding elements.
+
+---
+
+## Running in REST mode
+
+For production, run the engine as a standalone server and connect via WebSocket:
 
 ```bash
-# Open tasks for this instance (adjust query to your needs)
-curl -s "http://localhost:3000/v1/tasks?instanceId=<instanceId>&status=OPEN"
+MONGO_URL=mongodb://localhost:27017 MONGO_BPM_DB=in-concert PORT=3000 \
+  node node_modules/@the-real-insight/in-concert/dist/index.js
 ```
-
-Typical flow for a person:
-
-1. **List** tasks (`GET /v1/tasks`, optionally filtered by user/role).  
-2. **Claim / activate** so only one person works the task (`POST /v1/tasks/:taskId/activate` with `userId` + `commandId`).  
-3. **Complete** with an optional result payload (`POST /v1/tasks/:taskId/complete`).
-
-The engine remains the source of truth; the worklist is built for **inbox UIs** and role-based routing (lanes / `tri:roleId` when you use them in BPMN). Details: [SDK usage — Worklist reference](sdk/usage.md#worklist-reference).
-
----
-
-## 4. Service tasks: you run the integration (e.g. REST)
-
-When execution hits **`Fetch ISS position`**, the engine creates a **work item** and emits a **callback** (`CALLBACK_WORK` with `kind: 'serviceTask'`). The engine does **not** perform the HTTP call for you.
-
-**Semantics:**
-
-1. Execution reaches the service task → work item + outbox callback.  
-2. **Your worker or service** receives the callback (subscribe with the SDK over **`/ws`** in REST mode, or handle it in process in local mode).  
-3. You do the real work—here, call the public API:
-
-   ```typescript
-   const res = await fetch('https://api.open-notify.org/iss-now.json');
-   const data = await res.json();
-   ```
-
-4. You tell the engine the step finished (reuse `randomUUID` from `node:crypto` as in deploy/start above):
-
-   ```typescript
-   await client.completeExternalTask(instanceId, workItemId, {
-     commandId: randomUUID(),
-     result: { issPosition: data.iss_position },
-   });
-   ```
-
-After that, the worker advances the token to the next node (e.g. the **Go / no-go** user task), and the worklist updates accordingly.
-
-So: **service task = “your code’s turn,”** often wrapping **REST**, queues, or internal libraries—always ending in **`completeExternalTask`** (or the equivalent REST path for work items).
-
-Full callback and WebSocket details: [SDK usage — Callbacks](sdk/usage.md#callbacks-for-user-tasks-and-service-tasks).
-
----
-
-## Wire the service task: subscribe and complete
-
-Using the same **`BpmnEngineClient`** instance (after **`npm install @the-real-insight/tri-bpmn-engine`**), connect **`subscribeToCallbacks`** so every **`CALLBACK_WORK`** for a **service task** triggers your REST call and completion (user tasks are usually **not** completed here—you route those to the worklist UI):
 
 ```typescript
-import { randomUUID } from 'node:crypto';
-import { BpmnEngineClient } from '@the-real-insight/tri-bpmn-engine/sdk';
+const client = new BpmnEngineClient({ mode: 'rest', baseUrl: 'http://localhost:3000' });
 
-const client = new BpmnEngineClient({
-  mode: 'rest',
-  baseUrl: 'http://localhost:3000',
-});
-
-client.subscribeToCallbacks((item) => {
+// Subscribe once. Callbacks arrive over WebSocket — no polling.
+client.subscribeToCallbacks(async (item) => {
   if (item.kind !== 'CALLBACK_WORK') return;
-  const p = item.payload;
-  if (p.kind !== 'serviceTask') return;
-
-  void (async () => {
-    const res = await fetch('https://api.open-notify.org/iss-now.json');
-    const data = (await res.json()) as { iss_position?: { latitude: number; longitude: number } };
-    await client.completeExternalTask(p.instanceId, p.workItemId, {
-      commandId: randomUUID(),
-      result: { issPosition: data.iss_position },
-    });
-  })().catch(console.error);
+  const toolId = item.payload.extensions?.['tri:toolId'];
+  // same dispatch logic as above
 });
 ```
 
-Pair this with **`GET /v1/tasks`** (or **`TriSdk`** — [SDK overview](sdk/README.md)) so operators see and complete **user tasks** while your worker handles **service tasks**.
+Full REST API reference → [SDK usage guide](sdk/usage.md)
 
 ---
 
-## Run tests
-
-See [testing.md](testing.md). Quick checks:
+## Run the tests
 
 ```bash
-npm run test:unit           # no MongoDB
-npm run test:sdk            # integration (MongoDB)
-npm run test:conformance    # BPMN scenarios (MongoDB)
+npm run test:unit          # fast unit tests, no MongoDB
+npm run test:conformance   # BPMN conformance suite
+npm run test:sdk           # SDK integration tests (requires MongoDB)
+npm run test:worklist      # worklist tests
 ```
 
 ---
 
 ## Next steps
 
-- [SDK overview](sdk/README.md) — `TriSdk`, local vs REST  
-- [SDK usage (full)](sdk/usage.md) — `init`, decisions, recovery  
-- [Browser demo](test-ui.md) — try flows without writing a client first  
-- [Contributing](contributing.md)  
+- [SDK overview](sdk/README.md) — entry points, REST vs local mode
+- [SDK usage (full reference)](sdk/usage.md) — all API methods, callbacks, WebSocket, worklist
+- [BPMN subset & requirements](../readme/REQUIREMENTS.md) — what's supported and what fails loudly
+- [Conformance matrix](../readme/TEST.md) — test coverage per element
+- [Contributing](contributing.md)
