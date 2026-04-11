@@ -66,34 +66,64 @@ Built for teams who want **deterministic, inspectable process execution** withou
 npm install @the-real-insight/in-concert
 ```
 
-The SDK works in two modes — the API is identical, only initialisation differs:
+in-concert supports two integration modes. The API is identical — only initialisation differs.
+
+**Remote mode** is the right choice when you want to scale the engine independently as a microservice, share it across multiple applications, or keep process execution decoupled from your business logic. The engine runs as a standalone HTTP + WebSocket server; your app connects via the SDK.
+
+You can initialise for remote use like this:
 
 ```typescript
 import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
 
-// REST mode — connects to a running engine service
-const client = new BpmnEngineClient({ mode: 'rest', baseUrl: 'http://localhost:3000' });
+const client = new BpmnEngineClient({
+  mode: 'rest',
+  baseUrl: 'http://localhost:3000',
+});
+```
 
-// Local mode — direct MongoDB, no server needed (ideal for tests)
+Alternatively, **local mode** embeds the engine directly in your process — no server, no network hop. It runs against MongoDB in-process, which makes it ideal for testing, serverless functions, or applications where co-location matters more than scale-out.
+
+You can initialise for embedded use like this:
+
+```typescript
+import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
 import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
+
 const db = await connectDb('mongodb://localhost:27017/in-concert');
 await ensureIndexes(db);
+
 const client = new BpmnEngineClient({ mode: 'local', db });
 ```
 
-Register your handlers once at startup, then deploy and run:
+### Handlers — keeping your logic outside the engine
+
+in-concert does not execute your business logic. Instead, it notifies your code when the process needs something, and waits. This is a deliberate design choice: your data, your documents, your services, and your routing decisions all live outside the engine. The process instance id is the binding key — use it to correlate any external state.
+
+This means your handlers can do anything: call a synchronous REST API, publish to a message queue and wait for an asynchronous reply, query your own database to evaluate a condition, or map data from your domain model into the result. The engine does not care how long it takes or how you get there.
+
+Register your handlers once at startup:
 
 ```typescript
-// Register handlers
 client.init({
+  // Called when a service task is reached.
+  // Your code calls the service — sync, async, queue-based, whatever fits.
+  // Use instanceId to bind results back to this process instance.
   onServiceCall: async ({ instanceId, payload }) => {
-    // call your service, then advance the process
-    await client.completeExternalTask(instanceId, payload.workItemId, { result: { ok: true } });
+    const result = await myService.execute(payload.extensions?.toolId, {
+      processInstanceId: instanceId,
+      ...myDataStore.getContextFor(instanceId),
+    });
+    await client.completeExternalTask(instanceId, payload.workItemId, { result });
   },
+
+  // Called when an XOR gateway needs a routing decision.
+  // Evaluate the condition in your own code, against your own data.
+  // The engine never sees your domain objects — only the selected flow id.
   onDecision: async ({ instanceId, payload }) => {
-    // pick a route, then submit
+    const context = await myDataStore.getContextFor(instanceId);
+    const selected = myRouter.evaluate(payload.transitions, context);
     await client.submitDecision(instanceId, payload.decisionId, {
-      selectedFlowIds: [payload.transitions[0].flowId],
+      selectedFlowIds: [selected.flowId],
     });
   },
 });
@@ -120,19 +150,39 @@ const { status } = await client.run(instanceId);
 console.log(status); // COMPLETED | FAILED | TERMINATED
 ```
 
-**Worklist (human tasks)**
+### Worklist — building task-driven UIs
+
+in-concert projects human tasks into a queryable worklist, giving you the flexibility to build any interaction model your product needs. Tasks can be filtered by role, by the user who has claimed them, by process instance, or by status — so you can support cherry-picking (users browse open tasks and self-assign), supervisor assignment (a manager picks who does what), or fully automated routing.
+
+**Fetching tasks for a user** returns all open tasks matching that user's roles, plus any tasks they have already claimed:
 
 ```typescript
 const tasks = await client.getWorklistForUser({
   userId: user._id,
   roleIds: user.roleAssignments.map(ra => String(ra.role)),
 });
+```
 
+**Claiming a task** locks it for that user, preventing others from picking it up simultaneously:
+
+```typescript
 await client.activateTask(taskId, { userId: user._id });
+```
 
+You can also query more broadly — by instance, status, or assignee — to build supervisor views or audit dashboards:
+
+```typescript
+const allOpen    = await client.listTasks({ status: 'OPEN' });
+const myInstance = await client.listTasks({ instanceId });
+const claimedBy  = await client.listTasks({ userId: user._id });
+```
+
+**Completing a task** advances the process. Pass the result and user for a full audit trail:
+
+```typescript
 await client.completeUserTask(instanceId, workItemId, {
-  result: { approved: true },
-  user: { email: 'user@example.com' },
+  result: { approved: true, comment: 'Looks good' },
+  user: { email: user.email },
 });
 ```
 
@@ -217,6 +267,6 @@ This project is released under a **modified MIT license with attribution require
 
 Built with care by **[The Real Insight GmbH](https://the-real-insight.com)**
 
-*The Creators of Agentic BPM.*
+*The creators of Agentic BPM.*
 
 </div>
