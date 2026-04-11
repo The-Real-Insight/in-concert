@@ -55,7 +55,7 @@ async function main() {
   attachWebSocketServer(httpServer);
 
   httpServer.listen(config.port, () => {
-    console.log(`tri-bpmn-engine listening on port ${config.port} (HTTP + WS /ws)`);
+    console.log(`in-concert listening on port ${config.port} (HTTP + WS /ws)`);
   });
 
   workerLoop();
