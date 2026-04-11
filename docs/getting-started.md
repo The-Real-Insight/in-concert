@@ -415,54 +415,48 @@ npm run server
 
 Then open **[http://localhost:9100/](http://localhost:9100/)**.
 
-*(screenshot — portal landing page)*
+The portal has four areas: **Start Process** at the top, then a three-column layout with the **Worklist** (left), **Active Task** (centre), and **Process History** (right). The header bar lets you set a test user identity.
 
-### 2. Set your test user
+![Portal overview after purging the database](portal/neo/portal%20overview.png)
 
-Fill in the **User** fields in the header (email, first name, last name). These are attached to task completions and the process audit trail so the history looks realistic.
+### 2. Start the NEO Watch process
 
-*(screenshot — user fields in header)*
+1. Select **NEO Watch** from the model dropdown — the description shows the full flow: *fetch NEO data, XOR gateway, astronomer review, file alert*.
+2. Click **Start process**.
 
-### 3. Load and start the NEO Watch process
+The status line confirms the new instance ID. Behind the scenes, the demo server immediately runs the automated steps: **Fetch NEO data** calls the NASA API for today's near-Earth objects, then the XOR gateway decides the route.
 
-1. In the **Start process** panel, choose **Local** as the model source.
-2. Select **neo-watch** from the list — it is loaded from `test/bpmn/neo-watch.bpmn`.
-3. Click **Start process**.
+![Starting the NEO Watch process — instance ID confirmed](portal/neo/start-process.png)
 
-The engine deploys the definition (if not already deployed) and starts a new instance. The service tasks — *Fetch NEO data*, *File hazard alert*, and *Log all-clear* — are handled automatically by the demo server's built-in service task runner.
+### 3. Claim the review task
 
-*(screenshot — Start process panel with neo-watch selected)*
+When the closest asteroid passes within the review threshold, the gateway takes the hazardous path and the process pauses at **Review threat** — a user task in the Astronomer lane. The task appears in the **Worklist**.
 
-### 4. Watch the service tasks complete
+Click **Claim** to assign it to yourself.
 
-After start, the engine advances through the automated steps:
+![Worklist showing the Review threat task with Claim button](portal/neo/worklist.png)
 
-- **Fetch NEO data** fires and completes.
-- The XOR gateway evaluates and routes the token — either to **Review threat** (hazardous path) or straight to **Log all-clear** (all-clear path).
+### 4. Complete the review
 
-If the all-clear path is taken, the process completes immediately. Check the **Process history** panel to see the full event trail.
+After claiming, the **Active Task** panel shows the task name and a response field. The default response is pre-filled with "ok".
 
-*(screenshot — process history showing completed all-clear run)*
+Enter your assessment and click **Submit**.
 
-### 5. Work the human task (hazardous path)
+![Claimed task ready for review — Submit and Cancel buttons visible](portal/neo/claim-task.png)
 
-If a hazardous object was detected, the process pauses at **Review threat** and a task appears in the **Worklist**.
+### 5. Process completes
 
-1. Click **Refresh** in the Worklist panel to load open tasks.
-2. Select the **Review threat** task and click **Claim**.
-3. Fill in your assessment and click **Complete**.
+Once submitted, the engine resumes: **File hazard alert** runs automatically, and the process reaches **End**. The status line shows "Task completed." and the worklist is empty again.
 
-The engine resumes, advances to *File hazard alert*, and reaches **End**.
+![Task completed — worklist empty, process finished](portal/neo/submit-task.png)
 
-*(screenshot — worklist showing Review threat task)*
+### 6. Inspect the process history
 
-*(screenshot — task detail / completion form)*
+Select the completed instance from the dropdown in the **Process History** panel. The event table shows the full audit trail: `INSTANCE_STARTED`, `TASK_STARTED`, `TASK_COMPLETED`, and every step the engine executed.
 
-### 6. Inspect the audit trail
+Use **View diagram** to see the BPMN model and **View conversation** to review the message trail attached to the instance.
 
-Select the completed instance in the **Process history** panel to review the full sequence of events — which tasks ran, who completed the human task, and what result was submitted.
-
-*(screenshot — process history / audit trail)*
+![Process history showing the event sequence for the completed instance](portal/neo/process-history.png)
 
 ---
 

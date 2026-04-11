@@ -53,7 +53,111 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: msg });
 });
 
-// Auto-complete service tasks (assess-*, calculate-results, etc.)
+// ── NEO Watch handler ─────────────────────────────────────────────────────────
+
+const NEO_TOOL_IDS = new Set(['fetch-neo-data', 'file-alert', 'log-all-clear']);
+const NEO_REVIEW_THRESHOLD_KM = 50_000_000;
+
+interface NeoScanResult {
+  date: string;
+  closestObject: { id: string; name: string; missDistanceKm: number; isHazardous: boolean } | null;
+  requiresReview: boolean;
+}
+
+const neoStore = new Map<string, NeoScanResult>();
+const neoInstances = new Set<string>();
+
+async function fetchNeoData(date: string): Promise<NeoScanResult> {
+  const url = `https://api.nasa.gov/neo/rest/v1/feed?start_date=${date}&end_date=${date}&api_key=DEMO_KEY`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`NASA API ${res.status}`);
+  const data = await res.json() as Record<string, any>;
+  const objects: any[] = data.near_earth_objects?.[date] ?? [];
+  const closest = objects
+    .map(o => ({
+      id: String(o.id),
+      name: String(o.name),
+      missDistanceKm: Math.round(parseFloat(o.close_approach_data?.[0]?.miss_distance?.kilometers ?? '0')),
+      isHazardous: Boolean(o.is_potentially_hazardous_asteroid),
+    }))
+    .sort((a, b) => a.missDistanceKm - b.missDistanceKm)[0] ?? null;
+  return { date, closestObject: closest, requiresReview: closest !== null && closest.missDistanceKm < NEO_REVIEW_THRESHOLD_KM };
+}
+
+function createNeoWatchHandler() {
+  const baseUrl = `http://localhost:${config.port}`;
+  type Cb = { kind: string; instanceId: string; payload: Record<string, unknown> };
+
+  return async (payload: { callbacks?: Cb[] }) => {
+    if (!payload.callbacks) return;
+    for (const cb of payload.callbacks) {
+
+      // ── Service tasks ──
+      if (cb.kind === 'CALLBACK_WORK') {
+        const p = cb.payload as { kind?: string; workItemId?: string; extensions?: Record<string, string> };
+        if (p.kind !== 'serviceTask' || !p.workItemId) continue;
+        const toolId = p.extensions?.['tri:toolId'];
+        if (!toolId || !NEO_TOOL_IDS.has(toolId)) continue;
+
+        neoInstances.add(cb.instanceId);
+        let result: unknown = {};
+
+        try {
+          if (toolId === 'fetch-neo-data') {
+            const date = new Date().toISOString().slice(0, 10);
+            const scan = await fetchNeoData(date);
+            neoStore.set(cb.instanceId, scan);
+            result = { date: scan.date, closestObject: scan.closestObject, requiresReview: scan.requiresReview };
+            console.log(`[NEO] ${cb.instanceId} — closest: ${scan.closestObject?.name} at ${scan.closestObject?.missDistanceKm.toLocaleString()} km — review: ${scan.requiresReview}`);
+          } else if (toolId === 'file-alert') {
+            const ctx = neoStore.get(cb.instanceId);
+            console.log(`[NEO] CLOSE APPROACH ALERT filed for ${cb.instanceId}:`, ctx?.closestObject);
+          } else if (toolId === 'log-all-clear') {
+            const ctx = neoStore.get(cb.instanceId);
+            console.log(`[NEO] All clear for ${cb.instanceId} on ${ctx?.date}. Closest: ${ctx?.closestObject?.name} at ${ctx?.closestObject?.missDistanceKm.toLocaleString()} km`);
+          }
+        } catch (err) {
+          console.error(`[NEO] handler error (${toolId}):`, err);
+        }
+
+        try {
+          await fetch(`${baseUrl}/v1/instances/${cb.instanceId}/work-items/${p.workItemId}/complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ commandId: uuidv4(), result }),
+          });
+        } catch (err) {
+          console.error('[NEO] complete task failed:', err);
+        }
+      }
+
+      // ── XOR gateway decision ──
+      if (cb.kind === 'CALLBACK_DECISION') {
+        if (!neoInstances.has(cb.instanceId)) continue;
+        const p = cb.payload as { decisionId?: string; transitions?: Array<{ flowId: string; isDefault: boolean }> };
+        if (!p.decisionId || !p.transitions?.length) continue;
+
+        const ctx = neoStore.get(cb.instanceId);
+        const requiresReview = ctx?.requiresReview ?? false;
+        const selected = p.transitions.find(t => requiresReview ? !t.isDefault : t.isDefault) ?? p.transitions[0]!;
+
+        console.log(`[NEO] Gateway decision for ${cb.instanceId}: ${requiresReview ? 'review required' : 'all clear'}`);
+        try {
+          await fetch(`${baseUrl}/v1/instances/${cb.instanceId}/decisions/${p.decisionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ commandId: uuidv4(), outcome: { selectedFlowIds: [selected.flowId] } }),
+          });
+        } catch (err) {
+          console.error('[NEO] submit decision failed:', err);
+        }
+      }
+    }
+  };
+}
+
+// ── Generic service task auto-completer (all models except NEO Watch) ─────────
+
 function createServiceTaskHandler() {
   const baseUrl = `http://localhost:${config.port}`;
   return async (payload: { callbacks?: Array<{ kind: string; instanceId: string; payload: Record<string, unknown> }> }) => {
@@ -61,10 +165,14 @@ function createServiceTaskHandler() {
     const db = getDb();
     for (const cb of payload.callbacks) {
       if (cb.kind !== 'CALLBACK_WORK') continue;
-      const p = cb.payload as { kind?: string; workItemId?: string; name?: string };
+      const p = cb.payload as { kind?: string; workItemId?: string; name?: string; extensions?: Record<string, string> };
       if (p.kind !== 'serviceTask') continue;
       const workItemId = p.workItemId;
       if (!workItemId) continue;
+
+      // NEO Watch tasks are handled by createNeoWatchHandler — skip here
+      const toolId = p.extensions?.['tri:toolId'];
+      if (toolId && NEO_TOOL_IDS.has(toolId)) continue;
 
       const name = p.name ?? '';
       try {
@@ -88,10 +196,7 @@ function createServiceTaskHandler() {
         await fetch(`${baseUrl}/v1/instances/${cb.instanceId}/work-items/${workItemId}/complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            commandId: uuidv4(),
-            result,
-          }),
+          body: JSON.stringify({ commandId: uuidv4(), result }),
         });
       } catch (err) {
         console.error('Service task complete failed:', err);
@@ -133,6 +238,7 @@ async function main() {
   await ensureIndexes(db);
 
   addStreamHandler(createProjectionHandler(db));
+  addStreamHandler(createNeoWatchHandler());
   addStreamHandler(createServiceTaskHandler());
 
   const httpServer = createServer(app);
