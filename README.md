@@ -58,6 +58,16 @@ Built for teams who want **deterministic, inspectable process execution** withou
 
 ---
 
+## A real process, running live
+
+The diagram below is a working BPMN 2.0 process executed by in-concert. It calls the NASA Near-Earth Object API, routes on the result through an XOR gateway, and hands off to a human reviewer when a hazardous object is detected — all with your logic, your storage, and your services wired in from outside the engine.
+
+![NEO Watch — NASA asteroid hazard workflow](./docs/neo-bpmn.svg)
+
+→ [Full walkthrough with code](./docs/getting-started.md)
+
+---
+
 ## Quick Start
 
 **Prerequisites:** Node.js 18+, MongoDB
