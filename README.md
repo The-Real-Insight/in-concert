@@ -68,9 +68,24 @@ npm install @the-real-insight/in-concert
 
 in-concert supports two integration modes. The API is identical — only initialisation differs.
 
-**Remote mode** is the right choice when you want to scale the engine independently as a microservice, share it across multiple applications, or keep process execution decoupled from your business logic. The engine runs as a standalone HTTP + WebSocket server; your app connects via the SDK.
+**Remote mode** is the right choice when you want to scale the engine independently as a microservice, share it across multiple applications, or keep process execution decoupled from your business logic. The engine runs as a standalone HTTP + WebSocket server; your application connects via the SDK.
 
-You can initialise for remote use like this:
+**Server side** — the engine exposes a REST API and a WebSocket endpoint. Configure it via environment variables and start it with Node:
+
+```bash
+# .env
+MONGO_URL=mongodb://localhost:27017
+MONGO_BPM_DB=in-concert
+PORT=3000
+```
+
+```bash
+node node_modules/@the-real-insight/in-concert/dist/index.js
+```
+
+The engine is now listening on `:3000` — REST API under `/v1`, WebSocket at `/ws`.
+
+**Client side** — connect from any Node.js application using the SDK:
 
 ```typescript
 import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
@@ -99,7 +114,7 @@ const client = new BpmnEngineClient({ mode: 'local', db });
 
 in-concert does not execute your business logic. Instead, it notifies your code when the process needs something, and waits. This is a deliberate design choice: your data, your documents, your services, and your routing decisions all live outside the engine. The process instance id is the binding key — use it to correlate any external state.
 
-This means your handlers can do anything: call a synchronous REST API, publish to a message queue and wait for an asynchronous reply, query your own database to evaluate a condition, or map data from your domain model into the result. The engine does not care how long it takes or how you get there.
+This means your handlers can do anything: make a REST call, publish to a message queue and await the reply, poll an external system, query your own database to evaluate a condition, or map data from your domain model into the result. The engine does not care how long it takes or how you get there.
 
 Register your handlers once at startup:
 
@@ -218,13 +233,12 @@ Full reference → [SDK usage guide](./docs/sdk/usage.md)
 | [SDK usage (full reference)](./docs/sdk/usage.md) | API reference, callbacks, WebSocket, worklist |
 | [Browser demo](./docs/test-ui.md) | Interactive test UI (`npm run server`) |
 | [Testing](./docs/testing.md) | Jest targets and conformance pointers |
-| [Database schema (MongoDB)](./docs/database-schema.md) | Collections, indexes, event log, worklist projection |
 | [Contributing](./docs/contributing.md) | How to contribute |
 
 Design & internals:
 
 - [BPMN subset & requirements](./readme/REQUIREMENTS.md)
-- [Implementation notes (MongoDB)](./readme/IMPLEMENTATION.md) — summary; full schema → [docs/database-schema.md](./docs/database-schema.md)
+- [Implementation notes (MongoDB)](./readme/IMPLEMENTATION.md)
 - [Conformance matrix](./readme/TEST.md)
 
 ---
