@@ -44,6 +44,9 @@ Save this as `neo-watch.bpmn` (also available in the repo as `test/bpmn/neo-watc
 <bpmn:definitions
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
   xmlns:tri="http://tri.com/schema/bpmn"
   id="Defs_NeoWatch"
   targetNamespace="http://example.com/bpmn">
@@ -95,6 +98,81 @@ Save this as `neo-watch.bpmn` (also available in the repo as `test/bpmn/neo-watc
     <bpmn:sequenceFlow id="Flow_5"         sourceRef="Task_LogAllClear"  targetRef="End"/>
 
   </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_NeoWatch">
+    <bpmndi:BPMNPlane id="BPMNPlane_NeoWatch" bpmnElement="Process_NeoWatch">
+      <bpmndi:BPMNShape id="Lane_Automation_di" bpmnElement="Lane_Automation" isHorizontal="true">
+        <dc:Bounds x="30" y="30" width="840" height="135"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_Astronomer_di" bpmnElement="Lane_Astronomer" isHorizontal="true">
+        <dc:Bounds x="30" y="165" width="840" height="135"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Start_di" bpmnElement="Start">
+        <dc:Bounds x="137" y="79" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_FetchNeo_di" bpmnElement="Task_FetchNeo">
+        <dc:Bounds x="215" y="57" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_Hazardous_di" bpmnElement="Gateway_Hazardous" isMarkerVisible="true">
+        <dc:Bounds x="390" y="72" width="50" height="50"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="368" y="129" width="94" height="27"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_LogAllClear_di" bpmnElement="Task_LogAllClear">
+        <dc:Bounds x="485" y="57" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_FileAlert_di" bpmnElement="Task_FileAlert">
+        <dc:Bounds x="615" y="57" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="End_di" bpmnElement="End">
+        <dc:Bounds x="772" y="79" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_ReviewThreat_di" bpmnElement="Task_ReviewThreat">
+        <dc:Bounds x="490" y="192" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <di:waypoint x="173" y="97"/>
+        <di:waypoint x="215" y="97"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <di:waypoint x="315" y="97"/>
+        <di:waypoint x="390" y="97"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_Hazardous_di" bpmnElement="Flow_Hazardous">
+        <di:waypoint x="415" y="122"/>
+        <di:waypoint x="415" y="232"/>
+        <di:waypoint x="490" y="232"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="422" y="172" width="18" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_AllClear_di" bpmnElement="Flow_AllClear">
+        <di:waypoint x="440" y="97"/>
+        <di:waypoint x="485" y="97"/>
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="454" y="79" width="15" height="14"/>
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_3_di" bpmnElement="Flow_3">
+        <di:waypoint x="590" y="232"/>
+        <di:waypoint x="665" y="232"/>
+        <di:waypoint x="665" y="137"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_4_di" bpmnElement="Flow_4">
+        <di:waypoint x="715" y="97"/>
+        <di:waypoint x="772" y="97"/>
+      </bpmndi:BPMNEdge>
+      <!-- LogAllClear → End routed above the task row to avoid crossing FileAlert -->
+      <bpmndi:BPMNEdge id="Flow_5_di" bpmnElement="Flow_5">
+        <di:waypoint x="585" y="97"/>
+        <di:waypoint x="585" y="44"/>
+        <di:waypoint x="790" y="44"/>
+        <di:waypoint x="790" y="79"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
 </bpmn:definitions>
 ```
 
