@@ -233,12 +233,13 @@ Full reference → [SDK usage guide](./docs/sdk/usage.md)
 | [SDK usage (full reference)](./docs/sdk/usage.md) | API reference, callbacks, WebSocket, worklist |
 | [Browser demo](./docs/test-ui.md) | Interactive test UI (`npm run server`) |
 | [Testing](./docs/testing.md) | Jest targets and conformance pointers |
+| [Database schema](./docs/database-schema.md) | MongoDB hub; canonical tables in `readme/database-schema.md` |
 | [Contributing](./docs/contributing.md) | How to contribute |
 
 Design & internals:
 
 - [BPMN subset & requirements](./readme/REQUIREMENTS.md)
-- [Implementation notes (MongoDB)](./readme/IMPLEMENTATION.md)
+- [MongoDB database schema](./readme/database-schema.md) — collections, fields, types, semantics, indexes
 - [Conformance matrix](./readme/TEST.md)
 
 ---

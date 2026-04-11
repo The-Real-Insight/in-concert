@@ -34,14 +34,14 @@ Welcome to the **tri-bpmn-engine** documentation. This engine runs a carefully s
 
 | Document | Description |
 |----------|-------------|
-| [Database schema (MongoDB)](database-schema.md) | Collections, document fields, indexes, event log; complements `src/db/` types |
+| [Database schema (MongoDB)](database-schema.md) | Entry point; canonical field-level spec in [`readme/database-schema.md`](../readme/database-schema.md) |
 
 ## Design references (repository `readme/`)
 
 These files stay next to historical design notes and deep requirements:
 
 - [Requirements & BPMN subset](../readme/REQUIREMENTS.md) — goals, supported elements, non-goals  
-- [Implementation notes](../readme/IMPLEMENTATION.md) — short MongoDB overview (see [Database schema](database-schema.md) for full detail)  
+- [MongoDB database schema (canonical)](../readme/database-schema.md) — collections, fields, types, semantics, indexes  
 - [Conformance matrix (raw)](../readme/TEST.md) — scenario table used by conformance work  
 
 ---
