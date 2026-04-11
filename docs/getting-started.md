@@ -23,6 +23,8 @@ Start
 
 This covers all the key patterns: **service task**, **XOR decision** backed by external data, and **human task** with worklist routing.
 
+![NEO Watch process diagram](./neo-bpmn.svg)
+
 ---
 
 ## Step 1 — Install
