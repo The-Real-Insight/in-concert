@@ -18,6 +18,7 @@ import { extractRolesFromBpmn } from '../model/validator';
 import { getUserFromAuthHeader } from './jwt';
 
 export const LOCAL_MODELS = [
+  { id: 'neo-watch', label: 'NEO Watch — NASA asteroid hazard: fetch NEO data → XOR gateway → astronomer review → file alert', bpmnFile: 'neo-watch.bpmn' },
   { id: 'input-sequence', label: 'input-sequence — linear: input-a, input-b, input-c → calculate-results', bpmnFile: 'input-sequence.bpmn' },
   { id: 'input-sequence-with-assess', label: 'input-sequence-with-assess — input-a → assess-a → input-b → assess-b → input-c → assess-c → calculate-results', bpmnFile: 'input-sequence-with-assess.bpmn' },
   { id: 'input-sequence-with-subprocess', label: 'input-sequence-with-subprocess — input/assess a,b,c → subprocess (input-d, assess-d, input-e, assess-e) → calculate-results', bpmnFile: 'input-sequence-with-subprocess.bpmn' },
