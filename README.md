@@ -203,6 +203,8 @@ await client.completeUserTask(instanceId, workItemId, {
 
 > Full API reference → [SDK usage guide](./docs/sdk/usage.md)
 
+> **End-to-end example →** The [NASA Near-Earth Object Watch](./docs/getting-started.md) is a complete, copy-paste-ready workflow: a live NASA API call, an XOR gateway routing on the result, and an astronomer review task that goes through the worklist — all wired up in a single file with every external concept implemented concretely.
+
 ---
 
 ## HTTP API
