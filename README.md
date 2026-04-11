@@ -219,6 +219,23 @@ The [NASA Near-Earth Object Watch](./docs/getting-started.md) is a complete, cop
 
 ---
 
+## Test portal
+
+The engine ships with a browser-based **process portal** for hands-on testing. Deploy a process, start instances, claim and complete human tasks, and inspect the full event history — no application code required.
+
+```bash
+npm run server
+# opens at http://localhost:9100
+```
+
+![Process portal — NEO Watch running with worklist, active task, and event history](./docs/portal/neo/process-history.png)
+
+The portal shows the complete interaction cycle: start a process (top), claim tasks from the worklist (left), complete them with a response and optional file attachments (centre), and trace every engine event in the process history (right). It is the fastest way to verify a BPMN model end-to-end before wiring up integrations.
+
+Step-by-step walkthrough with the NEO Watch process: [Getting started — Test portal](./docs/getting-started.md#running-the-process-in-the-test-portal)
+
+---
+
 ## HTTP API
 
 The engine exposes a REST API under `/v1`. Key endpoints:
