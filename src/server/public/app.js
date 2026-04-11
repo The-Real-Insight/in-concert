@@ -478,9 +478,28 @@
   conversationModal.querySelector('.modal-backdrop').onclick = () => conversationModal.classList.add('hidden');
 
   // --- Init ---
-  document.getElementById('providerFilterWrap').classList.toggle('hidden', !document.querySelector('input[name="modelSource"][value="insight"]').checked);
+  api('/demo/config').then((cfg) => {
+    const sourceSwitch = document.querySelector('.source-switch');
+    if (!cfg.triTesting) {
+      // Hide the Local / The Real Insight toggle and force local source
+      sourceSwitch.classList.add('hidden');
+      document.getElementById('providerFilterWrap').classList.add('hidden');
+      const localRadio = document.querySelector('input[name="modelSource"][value="local"]');
+      if (localRadio) localRadio.checked = true;
+    } else {
+      sourceSwitch.classList.remove('hidden');
+      const insight = document.querySelector('input[name="modelSource"][value="insight"]').checked;
+      document.getElementById('providerFilterWrap').classList.toggle('hidden', !insight);
+    }
+    loadModels();
+  }).catch(() => {
+    // Fallback: default to local if config endpoint unavailable
+    document.querySelector('.source-switch').classList.add('hidden');
+    document.getElementById('providerFilterWrap').classList.add('hidden');
+    loadModels();
+  });
+
   renderRoles();
-  loadModels();
   refreshWorklist();
   refreshInstances();
 

@@ -3,6 +3,7 @@
  * AgenticWorkflow lives in MONGO_DB; BPM definitions/instances in MONGO_BPM_DB.
  */
 import { Router, Request, Response } from 'express';
+import { config } from '../config';
 import multer from 'multer';
 import { ObjectId } from 'mongodb';
 import path from 'path';
@@ -53,6 +54,11 @@ const upload = multer({
 const AGENTIC_WORKFLOW_COLLECTION = 'AgenticWorkflow';
 
 export const serverRouter = Router();
+
+/** Portal feature flags — consumed by app.js on startup. */
+serverRouter.get('/demo/config', (_req: Request, res: Response) => {
+  res.json({ triTesting: config.triTesting });
+});
 
 /** Upload files to data/, return [{ filename, path }]. Path is stored filename (e.g. "abc12345-report.pdf"). */
 serverRouter.post('/demo/upload', upload.array('files', 20), (req: Request, res: Response) => {
