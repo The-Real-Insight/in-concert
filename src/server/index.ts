@@ -139,8 +139,9 @@ async function main() {
   attachWebSocketServer(httpServer);
 
   httpServer.listen(config.port, () => {
-    console.log(`tri-bpmn-engine demo server: http://localhost:${config.port}`);
-    console.log(`  UI: http://localhost:${config.port}/`);
+    console.log(`in-concert portal: http://localhost:${config.port}`);
+    console.log(`  MONGO_URL:    ${config.mongoUrl}`);
+    console.log(`  MONGO_BPM_DB: ${config.mongoBpmDb}`);
   });
 
   workerLoop();
