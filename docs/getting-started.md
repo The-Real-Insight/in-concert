@@ -4,7 +4,7 @@
 
 This guide is a complete, runnable example. Every pattern from the README — external storage, service task handlers, XOR decision routing, human task worklist — is implemented concretely, so you can copy and adapt it.
 
-The scenario: **NASA Near-Earth Object (NEO) Watch** — a workflow that fetches today's asteroid data from the NASA public API, routes to a human reviewer if a potentially hazardous object is detected, then files an alert or logs all-clear.
+The scenario: **NASA Near-Earth Object (NEO) Watch** — a workflow that fetches today's asteroid data from the NASA public API, finds the closest-approaching object, routes to a human reviewer if it passes within 5 million km, then files an alert or logs all-clear. There is almost always at least one object within that range on any given day, so the review path fires regularly.
 
 ---
 
@@ -74,7 +74,7 @@ Save this as `neo-watch.bpmn` (also available in the repo as `test/bpmn/neo-watc
     <bpmn:serviceTask id="Task_FetchNeo" name="Fetch NEO data"
       tri:toolId="fetch-neo-data"/>
 
-    <bpmn:exclusiveGateway id="Gateway_Hazardous" name="Any hazardous object?"
+    <bpmn:exclusiveGateway id="Gateway_Hazardous" name="Close approach?"
       default="Flow_AllClear"/>
 
     <bpmn:userTask id="Task_ReviewThreat" name="Review threat"/>
@@ -202,10 +202,16 @@ import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
 
 interface NeoScanResult {
   date: string;
-  hazardousObjects: Array<{ id: string; name: string; missDistanceKm: number }>;
+  closestObject: { id: string; name: string; missDistanceKm: number; isHazardous: boolean } | null;
+  requiresReview: boolean;  // true when closest approach is within REVIEW_THRESHOLD_KM
 }
 
 const store = new Map<string, NeoScanResult>();
+
+// Trigger a review when the closest object passes within this distance.
+// ~1 lunar distance is 384,400 km — a reasonable "worth a look" threshold.
+// There is almost always at least one object within 5 M km on any given day.
+const REVIEW_THRESHOLD_KM = 5_000_000;
 
 // ── NASA API ──────────────────────────────────────────────────────────────────
 //
@@ -223,17 +229,22 @@ async function fetchNeoData(date: string): Promise<NeoScanResult> {
   const data = (await res.json()) as Record<string, any>;
   const objects: any[] = data.near_earth_objects?.[date] ?? [];
 
+  // Pick the closest-approaching object — there is always at least one.
+  const closest = objects
+    .map(o => ({
+      id: String(o.id),
+      name: String(o.name),
+      missDistanceKm: Math.round(
+        parseFloat(o.close_approach_data?.[0]?.miss_distance?.kilometers ?? '0')
+      ),
+      isHazardous: Boolean(o.is_potentially_hazardous_asteroid),
+    }))
+    .sort((a, b) => a.missDistanceKm - b.missDistanceKm)[0] ?? null;
+
   return {
     date,
-    hazardousObjects: objects
-      .filter(o => o.is_potentially_hazardous_asteroid)
-      .map(o => ({
-        id: String(o.id),
-        name: String(o.name),
-        missDistanceKm: Math.round(
-          parseFloat(o.close_approach_data?.[0]?.miss_distance?.kilometers ?? '0')
-        ),
-      })),
+    closestObject: closest,
+    requiresReview: closest !== null && closest.missDistanceKm < REVIEW_THRESHOLD_KM,
   };
 }
 
@@ -259,47 +270,51 @@ client.init({
       // Store under instanceId — the engine never sees this object.
       store.set(instanceId, result);
 
+      const { closestObject, requiresReview } = result;
       console.log(
-        `[${instanceId}] Scanned ${result.date}:`,
-        result.hazardousObjects.length > 0
-          ? `${result.hazardousObjects.length} potentially hazardous object(s) detected`
-          : 'no hazardous objects'
+        `[${instanceId}] Closest approach on ${result.date}:`,
+        closestObject
+          ? `${closestObject.name} at ${closestObject.missDistanceKm.toLocaleString()} km` +
+            (requiresReview ? ' — REVIEW REQUIRED' : ' — no review needed')
+          : 'no objects today'
       );
 
       await client.completeExternalTask(instanceId, payload.workItemId);
     }
 
     if (toolId === 'file-alert') {
-      const { hazardousObjects } = store.get(instanceId)!;
+      const { closestObject } = store.get(instanceId)!;
       // In production: open an incident ticket, page the on-call astronomer, etc.
-      console.log(`[${instanceId}] HAZARD ALERT filed:`, hazardousObjects);
+      console.log(`[${instanceId}] CLOSE APPROACH ALERT filed:`, closestObject);
       await client.completeExternalTask(instanceId, payload.workItemId);
     }
 
     if (toolId === 'log-all-clear') {
-      const { date } = store.get(instanceId)!;
-      console.log(`[${instanceId}] All clear — no hazardous objects on ${date}.`);
+      const { date, closestObject } = store.get(instanceId)!;
+      console.log(
+        `[${instanceId}] All clear on ${date}.`,
+        closestObject ? `Closest: ${closestObject.name} at ${closestObject.missDistanceKm.toLocaleString()} km.` : ''
+      );
       await client.completeExternalTask(instanceId, payload.workItemId);
     }
   },
 
   // Called when the XOR gateway needs a routing decision.
   // Read your stored context. Pick a flow. The engine advances the token.
-  // The condition expression in the BPMN (${hazardous}) is documentation only —
+  // The condition expression in the BPMN (${requiresReview}) is documentation only —
   // your code here is what actually routes.
   onDecision: async ({ instanceId, payload }) => {
-    const context = store.get(instanceId)!;
-    const isHazardous = context.hazardousObjects.length > 0;
+    const { requiresReview } = store.get(instanceId)!;
 
     // payload.transitions lists every outgoing sequence flow:
     //   { flowId, name, isDefault, conditionExpression, targetNodeName }
     // Pick the one matching your domain condition.
     const selected =
-      payload.transitions.find(t => (isHazardous ? !t.isDefault : t.isDefault))
+      payload.transitions.find(t => (requiresReview ? !t.isDefault : t.isDefault))
       ?? payload.transitions[0]!;
 
     console.log(
-      `[${instanceId}] Gateway decision: ${isHazardous ? `hazardous → "${selected.name}"` : 'all-clear (default)'}`
+      `[${instanceId}] Gateway: ${requiresReview ? `close approach → review` : 'all clear (default)'}`
     );
 
     await client.submitDecision(instanceId, payload.decisionId, {

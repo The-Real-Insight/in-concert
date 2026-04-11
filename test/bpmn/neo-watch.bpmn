@@ -30,7 +30,7 @@
     <bpmn:serviceTask id="Task_FetchNeo" name="Fetch NEO data"
       tri:toolId="fetch-neo-data"/>
 
-    <bpmn:exclusiveGateway id="Gateway_Hazardous" name="Any hazardous object?"
+    <bpmn:exclusiveGateway id="Gateway_Hazardous" name="Close approach?"
       default="Flow_AllClear"/>
 
     <bpmn:userTask id="Task_ReviewThreat" name="Review threat"/>
