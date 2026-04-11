@@ -23,8 +23,6 @@ Start
 
 This covers all the key patterns: **service task**, **XOR decision** backed by external data, and **human task** with worklist routing.
 
-![NEO Watch process diagram](./neo-bpmn.svg)
-
 ---
 
 ## Step 1 — Install
@@ -38,6 +36,8 @@ npm install @the-real-insight/in-concert
 ---
 
 ## Step 2 — The BPMN process model
+
+![NEO Watch process diagram](./neo-bpmn.svg)
 
 Save this as `neo-watch.bpmn` (also available in the repo as `test/bpmn/neo-watch.bpmn`):
 
