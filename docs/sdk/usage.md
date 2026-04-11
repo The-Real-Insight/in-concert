@@ -193,7 +193,7 @@ new BpmnEngineClient(config: SdkConfig)
 { mode: 'local'; db: Db }
 ```
 
-`Db` is MongoDB’s `Db` from `mongodb`. Use `connectDb()` from `@the-real-insight/tri-bpmn-engine/db` or your own `MongoClient.db()`.
+`Db` is MongoDB’s `Db` from `mongodb`. Use `connectDb()` from `@the-real-insight/tri-bpmn-engine/db` or your own `MongoClient.db()`. For **collections, fields, and indexes** in that database, see [Database schema (MongoDB)](../database-schema.md).
 
 ---
 

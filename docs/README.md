@@ -30,12 +30,18 @@ Welcome to the **tri-bpmn-engine** documentation. This engine runs a carefully s
 |----------|-------------|
 | [Testing](testing.md) | Jest targets, MongoDB requirements, conformance matrix pointer |
 
+## Data & persistence
+
+| Document | Description |
+|----------|-------------|
+| [Database schema (MongoDB)](database-schema.md) | Collections, document fields, indexes, event log; complements `src/db/` types |
+
 ## Design references (repository `readme/`)
 
 These files stay next to historical design notes and deep requirements:
 
 - [Requirements & BPMN subset](../readme/REQUIREMENTS.md) — goals, supported elements, non-goals  
-- [Implementation notes](../readme/IMPLEMENTATION.md) — MongoDB collections and indexes  
+- [Implementation notes](../readme/IMPLEMENTATION.md) — short MongoDB overview (see [Database schema](database-schema.md) for full detail)  
 - [Conformance matrix (raw)](../readme/TEST.md) — scenario table used by conformance work  
 
 ---

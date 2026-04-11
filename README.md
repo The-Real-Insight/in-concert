@@ -218,12 +218,13 @@ Full reference → [SDK usage guide](./docs/sdk/usage.md)
 | [SDK usage (full reference)](./docs/sdk/usage.md) | API reference, callbacks, WebSocket, worklist |
 | [Browser demo](./docs/test-ui.md) | Interactive test UI (`npm run server`) |
 | [Testing](./docs/testing.md) | Jest targets and conformance pointers |
+| [Database schema (MongoDB)](./docs/database-schema.md) | Collections, indexes, event log, worklist projection |
 | [Contributing](./docs/contributing.md) | How to contribute |
 
 Design & internals:
 
 - [BPMN subset & requirements](./readme/REQUIREMENTS.md)
-- [Implementation notes (MongoDB)](./readme/IMPLEMENTATION.md)
+- [Implementation notes (MongoDB)](./readme/IMPLEMENTATION.md) — summary; full schema → [docs/database-schema.md](./docs/database-schema.md)
 - [Conformance matrix](./readme/TEST.md)
 
 ---

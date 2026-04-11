@@ -50,6 +50,8 @@ const client = new BpmnEngineClient({ mode: 'local', db });
 
 Use **`processUntilComplete()`**, **`recover()`**, or **`subscribeToCallbacks()`** depending on your hosting model.
 
+MongoDB **collections and document shapes** for the BPM database are documented in [Database schema (MongoDB)](../database-schema.md).
+
 ## `TriSdk`: engine + worklist HTTP facade
 
 `TriSdk` combines **`BpmnEngineClient`** (engine) with thin **`fetch`** wrappers for **`/v1/tasks`** (claim, activate, complete, list):
@@ -70,7 +72,7 @@ Use this when your app treats the engine as a remote service and human tasks flo
 
 ## Full reference
 
-Everything else—`init`, `deploy`, `startInstance`, callbacks, XOR decisions, worklist examples, and CLI patterns—is in the **[usage guide](usage.md)**.
+Everything else—`init`, `deploy`, `startInstance`, callbacks, XOR decisions, worklist examples, and CLI patterns—is in the **[usage guide](usage.md)**. Persistence details: **[database schema](../database-schema.md)**.
 
 ## Source layout
 

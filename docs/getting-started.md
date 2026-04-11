@@ -72,7 +72,7 @@ cp .env.example .env
 | Variable | Purpose |
 |----------|---------|
 | `MONGO_URL` | MongoDB connection string |
-| `MONGO_DB` / `MONGO_BPM_DB` | BPM data databases (see `src/config.ts`) |
+| `MONGO_DB` / `MONGO_BPM_DB` | BPM data databases (see `src/config.ts`; [Database schema](database-schema.md) describes collections) |
 | `PORT` | HTTP port for `npm run dev` (default **3000**) |
 
 Start the **API + worker + WebSocket** server:
