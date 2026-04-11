@@ -283,7 +283,7 @@ in-concert implements a curated BPMN 2.0 subset. See the full [conformance matri
 
 **Not in scope (yet):** Compensation · Complex gateways · Choreography · Conversation
 
-$\color{red}{\textsf{Want these to be added? Contribute!}}$
+**<span style="color:red">Want these to be added? [Contribute!](./docs/contributing.md)</span>**
 
 ---
 
