@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  id="Defs_NeoWatch"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_NeoWatch" isExecutable="true">
+
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_Automation" name="Automation">
+        <bpmn:flowNodeRef>Start</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_FetchNeo</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Gateway_Hazardous</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_FileAlert</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_LogAllClear</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>End</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_Astronomer" name="Astronomer">
+        <bpmn:flowNodeRef>Task_ReviewThreat</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+
+    <bpmn:startEvent id="Start"/>
+
+    <bpmn:serviceTask id="Task_FetchNeo" name="Fetch NEO data"
+      tri:toolId="fetch-neo-data"/>
+
+    <bpmn:exclusiveGateway id="Gateway_Hazardous" name="Any hazardous object?"
+      default="Flow_AllClear"/>
+
+    <bpmn:userTask id="Task_ReviewThreat" name="Review threat"/>
+
+    <bpmn:serviceTask id="Task_FileAlert" name="File hazard alert"
+      tri:toolId="file-alert"/>
+
+    <bpmn:serviceTask id="Task_LogAllClear" name="Log all-clear"
+      tri:toolId="log-all-clear"/>
+
+    <bpmn:endEvent id="End"/>
+
+    <bpmn:sequenceFlow id="Flow_1"         sourceRef="Start"             targetRef="Task_FetchNeo"/>
+    <bpmn:sequenceFlow id="Flow_2"         sourceRef="Task_FetchNeo"     targetRef="Gateway_Hazardous"/>
+    <bpmn:sequenceFlow id="Flow_Hazardous" name="Yes"
+      sourceRef="Gateway_Hazardous" targetRef="Task_ReviewThreat">
+      <bpmn:conditionExpression xsi:type="tFormalExpression"><![CDATA[${hazardous}]]></bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_AllClear"  name="No"
+      sourceRef="Gateway_Hazardous" targetRef="Task_LogAllClear"/>
+    <bpmn:sequenceFlow id="Flow_3"         sourceRef="Task_ReviewThreat" targetRef="Task_FileAlert"/>
+    <bpmn:sequenceFlow id="Flow_4"         sourceRef="Task_FileAlert"    targetRef="End"/>
+    <bpmn:sequenceFlow id="Flow_5"         sourceRef="Task_LogAllClear"  targetRef="End"/>
+
+  </bpmn:process>
+</bpmn:definitions>
