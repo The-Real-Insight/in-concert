@@ -56,6 +56,8 @@ async function main() {
 
   httpServer.listen(config.port, () => {
     console.log(`in-concert listening on port ${config.port} (HTTP + WS /ws)`);
+    console.log(`  MONGO_URL:     ${config.mongoUrl}`);
+    console.log(`  MONGO_BPM_DB:  ${config.mongoBpmDb}`);
   });
 
   workerLoop();
