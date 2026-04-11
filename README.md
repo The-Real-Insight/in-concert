@@ -165,6 +165,8 @@ const { status } = await client.run(instanceId);
 console.log(status); // COMPLETED | FAILED | TERMINATED
 ```
 
+> **End-to-end example →** The [NASA Near-Earth Object Watch](./docs/getting-started.md) is a complete, copy-paste-ready workflow: a live NASA API call, an XOR gateway routing on the result, and an astronomer review task that goes through the worklist — all wired up in a single file with every external concept implemented concretely.
+
 ### Worklist — building task-driven UIs
 
 in-concert projects human tasks into a queryable worklist, giving you the flexibility to build any interaction model your product needs. Tasks can be filtered by role, by the user who has claimed them, by process instance, or by status — so you can support cherry-picking (users browse open tasks and self-assign), supervisor assignment (a manager picks who does what), or fully automated routing.
@@ -202,8 +204,6 @@ await client.completeUserTask(instanceId, workItemId, {
 ```
 
 > Full API reference → [SDK usage guide](./docs/sdk/usage.md)
-
-> **End-to-end example →** The [NASA Near-Earth Object Watch](./docs/getting-started.md) is a complete, copy-paste-ready workflow: a live NASA API call, an XOR gateway routing on the result, and an astronomer review task that goes through the worklist — all wired up in a single file with every external concept implemented concretely.
 
 ---
 
