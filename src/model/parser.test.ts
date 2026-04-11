@@ -96,6 +96,38 @@ describe('parseBpmnXml', () => {
     expect(graph.flows['Flow_1']?.conditionExpression).toBe('from nested');
   });
 
+  it('inherits tri:roleId from participant pool when no lanes exist', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">
+  <bpmn:collaboration id="Collab_1">
+    <bpmn:participant id="Participant_1" name="Vertrieb" processRef="Process_1" tri:roleId="69da58263687e7062705b6b3"/>
+  </bpmn:collaboration>
+  <bpmn:process id="Process_1" isExecutable="false">
+    <bpmn:startEvent id="Start_1">
+      <bpmn:outgoing>Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="Task_S" name="Service">
+      <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:userTask id="Task_U" name="Review">
+      <bpmn:incoming>Flow_2</bpmn:incoming>
+      <bpmn:outgoing>Flow_3</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="End_1">
+      <bpmn:incoming>Flow_3</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Task_S"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_S" targetRef="Task_U"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_U" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.nodes['Task_U']?.laneRef).toBe('Vertrieb');
+    expect(graph.nodes['Task_U']?.roleId).toBe('69da58263687e7062705b6b3');
+    expect(graph.nodes['Task_S']?.roleId).toBe('69da58263687e7062705b6b3');
+  });
+
   it('parses tri:roleId from lanes', async () => {
     const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://example.com/tri">

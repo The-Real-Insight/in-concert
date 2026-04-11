@@ -141,6 +141,21 @@ function parseLanesFromXml(xml: string): { id: string; name?: string; roleId?: s
   return result;
 }
 
+/** Parse participant (pool) elements from BPMN XML to extract id, name, processRef, tri:roleId. */
+function parseParticipantsFromXml(xml: string): { id: string; name?: string; processRef?: string; roleId?: string }[] {
+  const result: { id: string; name?: string; processRef?: string; roleId?: string }[] = [];
+  const participantRe = /<bpmn:participant\s+id="([^"]+)"([^>]*)\/?>/gi;
+  let m;
+  while ((m = participantRe.exec(xml))) {
+    const attrs = m[2] ?? '';
+    const name = attrs.match(/name="([^"]*)"/)?.[1]?.trim();
+    const processRef = attrs.match(/processRef="([^"]*)"/)?.[1]?.trim();
+    const roleId = attrs.match(/tri:roleId="([^"]*)"/)?.[1]?.trim();
+    result.push({ id: m[1]!, name, processRef, roleId });
+  }
+  return result;
+}
+
 /** Extract custom extension attributes (ns:attr) from task nodes. Generic—no tri-specific logic. */
 function parseExtensionAttributesByNode(xml: string): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {};
@@ -201,6 +216,16 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
     }
   }
 
+  // Fallback: when no lanes exist, inherit tri:roleId from the participant (pool) whose processRef matches this process.
+  const participantsParsed = parseParticipantsFromXml(xml);
+  let participantFallbackRole: { roleName: string; roleId?: string } | undefined;
+  if (Object.keys(nodeIdToLaneRole).length === 0) {
+    const participant = participantsParsed.find((p) => p.processRef === process.id && p.roleId);
+    if (participant) {
+      participantFallbackRole = { roleName: participant.name ?? participant.id, roleId: participant.roleId };
+    }
+  }
+
   const flowElements = process.flowElements ?? [];
   const nodes: Record<string, NodeDef> = {};
   const flows: Record<string, FlowDef> = {};
@@ -245,7 +270,7 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       const incoming = resolveIncoming(el as { incoming?: { id: string }[] });
       const outgoing = resolveOutgoing(el as { outgoing?: { id: string }[] });
 
-      const laneRole = nodeIdToLaneRole[flowEl.id];
+      const laneRole = nodeIdToLaneRole[flowEl.id] ?? participantFallbackRole;
       const node: NodeDef = {
         id: flowEl.id,
         type: getNodeType(type),
