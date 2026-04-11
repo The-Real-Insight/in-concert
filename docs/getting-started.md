@@ -388,6 +388,69 @@ npx tsx neo-watch.ts
 
 ---
 
+## Running the process in the test portal
+
+The **test portal** is a browser UI that ships with the engine. It lets you deploy, start, and work through processes manually — no code required. It is the fastest way to see a process in motion and verify routing before wiring up integrations.
+
+### 1. Start the demo server
+
+```bash
+npm run server
+```
+
+Then open **[http://localhost:9100/](http://localhost:9100/)**.
+
+*(screenshot — portal landing page)*
+
+### 2. Set your test user
+
+Fill in the **User** fields in the header (email, first name, last name). These are attached to task completions and the process audit trail so the history looks realistic.
+
+*(screenshot — user fields in header)*
+
+### 3. Load and start the NEO Watch process
+
+1. In the **Start process** panel, choose **Local** as the model source.
+2. Select **neo-watch** from the list — it is loaded from `test/bpmn/neo-watch.bpmn`.
+3. Click **Start process**.
+
+The engine deploys the definition (if not already deployed) and starts a new instance. The service tasks — *Fetch NEO data*, *File hazard alert*, and *Log all-clear* — are handled automatically by the demo server's built-in service task runner.
+
+*(screenshot — Start process panel with neo-watch selected)*
+
+### 4. Watch the service tasks complete
+
+After start, the engine advances through the automated steps:
+
+- **Fetch NEO data** fires and completes.
+- The XOR gateway evaluates and routes the token — either to **Review threat** (hazardous path) or straight to **Log all-clear** (all-clear path).
+
+If the all-clear path is taken, the process completes immediately. Check the **Process history** panel to see the full event trail.
+
+*(screenshot — process history showing completed all-clear run)*
+
+### 5. Work the human task (hazardous path)
+
+If a hazardous object was detected, the process pauses at **Review threat** and a task appears in the **Worklist**.
+
+1. Click **Refresh** in the Worklist panel to load open tasks.
+2. Select the **Review threat** task and click **Claim**.
+3. Fill in your assessment and click **Complete**.
+
+The engine resumes, advances to *File hazard alert*, and reaches **End**.
+
+*(screenshot — worklist showing Review threat task)*
+
+*(screenshot — task detail / completion form)*
+
+### 6. Inspect the audit trail
+
+Select the completed instance in the **Process history** panel to review the full sequence of events — which tasks ran, who completed the human task, and what result was submitted.
+
+*(screenshot — process history / audit trail)*
+
+---
+
 ## Authoring the BPMN visually
 
 Draw and export at **[demo.bpmn.io](https://demo.bpmn.io/)** — the open-source browser modeler. Open `neo-watch.bpmn` there to see the diagram, or start from scratch and export BPMN 2.0 XML.
