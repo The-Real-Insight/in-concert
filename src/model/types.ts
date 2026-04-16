@@ -19,6 +19,8 @@ export type NodeDef = {
   extensions?: Record<string, string>;
   /** Multi-instance metadata when tri:multiInstanceData is present. */
   multiInstance?: { data?: string };
+  /** Connector config from bpmn:message tri: extensions (e.g. graph-mailbox polling). */
+  connectorConfig?: { connectorType: string; [key: string]: string };
 };
 
 export type FlowDef = {

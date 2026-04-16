@@ -536,3 +536,185 @@ button:disabled {
   font-size: 12px;
   color: var(--text-muted);
 }
+
+/* Timer row */
+.timer-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.timer-row #scheduleBtn {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.timer-row #scheduleBtn:hover {
+  background: rgba(88, 166, 255, 0.1);
+}
+
+/* Recurrence dialog */
+.recurrence-dialog {
+  max-width: 520px;
+}
+
+.rec-section {
+  margin-bottom: 1rem;
+}
+
+.rec-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+}
+
+.rec-tabs {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.rec-tab {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+}
+.rec-tab + .rec-tab { border-left: 1px solid var(--border); }
+.rec-tab.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+.rec-tab:hover:not(.active) {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.rec-freq-panel {
+  padding: 0.75rem 0;
+}
+
+.rec-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+}
+
+.rec-num {
+  width: 60px;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: center;
+}
+
+.rec-input {
+  padding: 0.35rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+.rec-input-sm { width: 150px; }
+
+.rec-select {
+  padding: 0.35rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.rec-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.75rem;
+  margin-top: 0.5rem;
+}
+.rec-days label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rec-days input { cursor: pointer; }
+
+.rec-monthly-mode,
+.rec-yearly-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.rec-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rec-radio input[type="radio"] { cursor: pointer; }
+
+.rec-end { border-top: 1px solid var(--border); padding-top: 1rem; }
+.rec-end-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rec-preview {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--accent);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.rec-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  font-style: italic;
+}
+
+.rec-footer {
+  display: flex;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border);
+  justify-content: flex-end;
+}
+.rec-btn-cancel {
+  background: transparent;
+  color: var(--text-muted);
+}
+.rec-btn-cancel:hover {
+  background: var(--surface);
+  color: var(--text);
+}

@@ -24,6 +24,7 @@ import { getInstance } from '../instance/service';
 import { addBotMessage } from './conversation';
 import { emitEngineAttributionNoticeOnce } from '../attribution';
 import { processOneTimer } from '../timers/worker';
+import { processOneConnector } from '../connectors/worker';
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -208,6 +209,19 @@ function createServiceTaskHandler() {
 
 const POLL_MS = 500;
 const TIMER_POLL_MS = 1_000;
+const CONNECTOR_POLL_MS = 2_000;
+
+async function connectorLoop() {
+  const db = getDb();
+  while (true) {
+    try {
+      await processOneConnector(db);
+    } catch (err) {
+      console.error('Connector worker error:', err);
+    }
+    await new Promise((r) => setTimeout(r, CONNECTOR_POLL_MS));
+  }
+}
 
 async function timerLoop() {
   const db = getDb();
@@ -267,6 +281,7 @@ async function main() {
 
   workerLoop();
   timerLoop();
+  connectorLoop();
 
   process.on('SIGTERM', async () => {
     httpServer.close();

@@ -53,4 +53,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db
     .collection(COLLECTION_NAMES.TimerSchedule)
     .createIndex({ definitionId: 1, nodeId: 1 }, { unique: true });
+
+  await db
+    .collection(COLLECTION_NAMES.ConnectorSchedule)
+    .createIndex({ status: 1 });
+
+  await db
+    .collection(COLLECTION_NAMES.ConnectorSchedule)
+    .createIndex({ definitionId: 1, nodeId: 1 }, { unique: true });
 }

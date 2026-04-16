@@ -158,6 +158,27 @@ function parseParticipantsFromXml(xml: string): { id: string; name?: string; pro
   return result;
 }
 
+/** Parse bpmn:message elements from XML for tri: extension attributes (e.g. tri:connectorType, tri:mailbox). */
+function parseMessageConnectors(xml: string): Record<string, Record<string, string>> {
+  const result: Record<string, Record<string, string>> = {};
+  const msgRe = /<bpmn:message\s+id="([^"]+)"([^>]*)\/?>/gi;
+  let m;
+  while ((m = msgRe.exec(xml))) {
+    const msgId = m[1]!;
+    const attrs = m[2] ?? '';
+    const ext: Record<string, string> = {};
+    const attrRe = /tri:(\w+)="([^"]*)"/g;
+    let am;
+    while ((am = attrRe.exec(attrs))) {
+      ext[am[1]!] = am[2]!.trim();
+    }
+    if (ext.connectorType) {
+      result[attrs.match(/name="([^"]*)"/)?.[1] ?? msgId] = ext;
+    }
+  }
+  return result;
+}
+
 /** Extract custom extension attributes (ns:attr) from task nodes. Generic—no tri-specific logic. */
 function parseExtensionAttributesByNode(xml: string): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {};
@@ -234,6 +255,7 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   const startNodeIds: string[] = [];
   const subprocessStartNodeIds: Record<string, string[]> = {};
   const conditionByFlow = parseConditionExpressionsByFlow(xml);
+  const messageConnectors = parseMessageConnectors(xml);
   const extensionByNode = parseExtensionAttributesByNode(xml);
 
   function processFlowElements(
@@ -288,6 +310,12 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
 
       if (type === 'bpmn:StartEvent') {
         node.timerDefinition = getTimerDefinition(el as { eventDefinitions?: unknown[] });
+        node.messageRef = getMessageRef(el as { messageRef?: { name?: string }; eventDefinitions?: unknown[] });
+        node.eventDefinition = getEventDefinition(el as { eventDefinitions?: { $type?: string }[] });
+        if (node.messageRef && messageConnectors[node.messageRef]) {
+          const mc = messageConnectors[node.messageRef];
+          node.connectorConfig = { connectorType: mc.connectorType!, ...mc };
+        }
         if (parentSubprocessId) {
           if (!subprocessStartNodeIds[parentSubprocessId])
             subprocessStartNodeIds[parentSubprocessId] = [];

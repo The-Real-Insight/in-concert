@@ -4,6 +4,7 @@ import type { NormalizedGraph } from './types';
 import type { Db } from 'mongodb';
 import { getCollections } from '../db/collections';
 import { classifyTimer, computeNextFire, parseRepeat } from '../timers/expressions';
+import { config } from '../config';
 
 export type DeployResult = {
   definitionId: string;
@@ -69,6 +70,50 @@ async function syncTimerSchedules(db: Db, definitionId: string, graph: Normalize
   }
 }
 
+async function syncConnectorSchedules(db: Db, definitionId: string, graph: NormalizedGraph): Promise<void> {
+  const { ConnectorSchedules } = getCollections(db);
+  const now = new Date();
+
+  const connectorStartNodes = graph.startNodeIds
+    .map(id => graph.nodes[id])
+    .filter(n => n?.type === 'startEvent' && n.connectorConfig?.connectorType);
+
+  const activeNodeIds = connectorStartNodes.map(n => n.id);
+  await ConnectorSchedules.deleteMany({
+    definitionId,
+    ...(activeNodeIds.length > 0
+      ? { nodeId: { $nin: activeNodeIds } }
+      : {}),
+  });
+
+  for (const node of connectorStartNodes) {
+    const cc = node.connectorConfig!;
+    const { connectorType, ...restConfig } = cc;
+    const pollingIntervalMs =
+      connectorType === 'graph-mailbox' ? config.graph.pollingIntervalMs : 10_000;
+
+    await ConnectorSchedules.updateOne(
+      { definitionId, nodeId: node.id },
+      {
+        $set: {
+          connectorType,
+          config: restConfig,
+          pollingIntervalMs,
+          status: 'ACTIVE',
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          _id: uuidv4(),
+          definitionId,
+          nodeId: node.id,
+          createdAt: now,
+        },
+      },
+      { upsert: true },
+    );
+  }
+}
+
 export async function deployDefinition(
   db: Db,
   params: DeployParams
@@ -105,6 +150,7 @@ export async function deployDefinition(
       }
     );
     await syncTimerSchedules(db, existing._id, graph);
+    await syncConnectorSchedules(db, existing._id, graph);
     return { definitionId: existing._id };
   }
 
@@ -122,6 +168,7 @@ export async function deployDefinition(
   });
 
   await syncTimerSchedules(db, definitionId, graph);
+  await syncConnectorSchedules(db, definitionId, graph);
 
   return { definitionId };
 }

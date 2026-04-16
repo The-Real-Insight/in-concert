@@ -7,4 +7,15 @@ export const config = {
   port: parseInt(process.env.PORT ?? '3000', 10),
   /** Expose The Real Insight model source in the portal. Set TRI_TESTING=true in .env. */
   triTesting: process.env.TRI_TESTING === 'true',
+
+  /** Microsoft Graph connector settings. Required for graph-mailbox polling. */
+  graph: {
+    tenantId: process.env.GRAPH_TENANT_ID ?? '',
+    clientId: process.env.GRAPH_CLIENT_ID ?? '',
+    clientSecret: process.env.GRAPH_CLIENT_SECRET ?? '',
+    /** Default polling interval for graph-mailbox connectors (ms). */
+    pollingIntervalMs: parseInt(process.env.GRAPH_POLLING_INTERVAL_MS ?? '10000', 10),
+    /** Only fetch emails received within this many minutes. Default 1440 (24h). */
+    sinceMinutes: parseInt(process.env.GRAPH_SINCE_MINUTES ?? '1440', 10),
+  },
 };

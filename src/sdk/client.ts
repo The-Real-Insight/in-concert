@@ -727,6 +727,62 @@ export class BpmnEngineClient {
     if (!result) throw new Error('Timer schedule not found or not PAUSED');
   }
 
+  // ── Connector schedules ─────────────────────────────────────────────────────
+
+  async listConnectorSchedules(params?: {
+    definitionId?: string;
+    status?: string;
+    connectorType?: string;
+  }): Promise<import('../db/collections').ConnectorScheduleDoc[]> {
+    if (this.config.mode === 'rest') {
+      const q = new URLSearchParams();
+      if (params?.definitionId) q.set('definitionId', params.definitionId);
+      if (params?.status) q.set('status', params.status);
+      if (params?.connectorType) q.set('connectorType', params.connectorType);
+      const res = await fetch(`${this.config.baseUrl}/v1/connector-schedules?${q}`);
+      if (!res.ok) throw new Error(`List connector schedules failed: ${res.status}`);
+      const json = (await res.json()) as { items: import('../db/collections').ConnectorScheduleDoc[] };
+      return json.items;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { ConnectorSchedules } = getCollections(this.config.db);
+    const filter: Record<string, unknown> = {};
+    if (params?.definitionId) filter.definitionId = params.definitionId;
+    if (params?.status) filter.status = params.status;
+    if (params?.connectorType) filter.connectorType = params.connectorType;
+    return ConnectorSchedules.find(filter).sort({ createdAt: -1 }).toArray();
+  }
+
+  async pauseConnectorSchedule(scheduleId: string): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/connector-schedules/${scheduleId}/pause`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Pause connector failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { ConnectorSchedules } = getCollections(this.config.db);
+    const result = await ConnectorSchedules.findOneAndUpdate(
+      { _id: scheduleId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: new Date() } },
+    );
+    if (!result) throw new Error('Connector schedule not found or not ACTIVE');
+  }
+
+  async resumeConnectorSchedule(scheduleId: string): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/connector-schedules/${scheduleId}/resume`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Resume connector failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { ConnectorSchedules } = getCollections(this.config.db);
+    const result = await ConnectorSchedules.findOneAndUpdate(
+      { _id: scheduleId, status: 'PAUSED' },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+    );
+    if (!result) throw new Error('Connector schedule not found or not PAUSED');
+  }
+
   /**
    * Close connections. No-op; caller manages DB/connection lifecycle.
    */

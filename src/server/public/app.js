@@ -547,4 +547,197 @@
       autoInterval = null;
     }
   };
+
+  // ── Recurrence dialog (Outlook-style) ──────────────────────────────────────
+
+  const recModal = document.getElementById('recurrenceModal');
+  const recPreview = document.getElementById('recPreview');
+  const recSummary = document.getElementById('recSummary');
+  let activeFreq = 'DAILY';
+
+  function pad2(n) { return String(n).padStart(2, '0'); }
+
+  function initRecDefaults() {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 60 - (now.getMinutes() % 15)); // next rounded quarter-hour
+    now.setSeconds(0, 0);
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    document.getElementById('recDtstart').value = local.toISOString().slice(0, 16);
+    const endDate = new Date(now);
+    endDate.setFullYear(endDate.getFullYear() + 1);
+    const endLocal = new Date(endDate.getTime() - endDate.getTimezoneOffset() * 60000);
+    document.getElementById('recEndDate').value = endLocal.toISOString().slice(0, 10);
+  }
+
+  function setActiveFreq(freq) {
+    activeFreq = freq;
+    document.querySelectorAll('.rec-tab').forEach(t => t.classList.toggle('active', t.dataset.freq === freq));
+    document.querySelectorAll('.rec-freq-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'recPanel' + freq));
+    updateRecPreview();
+  }
+
+  document.querySelectorAll('.rec-tab').forEach(t => {
+    t.onclick = () => setActiveFreq(t.dataset.freq);
+  });
+
+  function buildRRule() {
+    const dtstartInput = document.getElementById('recDtstart').value;
+    if (!dtstartInput) return { rrule: '', summary: 'Set a start time' };
+
+    const dt = new Date(dtstartInput);
+    const dtStr = dt.getUTCFullYear().toString() +
+      pad2(dt.getUTCMonth() + 1) + pad2(dt.getUTCDate()) + 'T' +
+      pad2(dt.getUTCHours()) + pad2(dt.getUTCMinutes()) + pad2(dt.getUTCSeconds()) + 'Z';
+
+    const parts = ['FREQ=' + activeFreq];
+    let summary = '';
+
+    if (activeFreq === 'DAILY') {
+      const interval = parseInt(document.getElementById('recDailyInterval').value) || 1;
+      if (interval > 1) parts.push('INTERVAL=' + interval);
+      summary = interval === 1 ? 'Every day' : `Every ${interval} days`;
+    }
+
+    if (activeFreq === 'WEEKLY') {
+      const interval = parseInt(document.getElementById('recWeeklyInterval').value) || 1;
+      if (interval > 1) parts.push('INTERVAL=' + interval);
+      const days = Array.from(document.querySelectorAll('#recPanelWEEKLY .rec-days input:checked')).map(c => c.value);
+      if (days.length > 0) parts.push('BYDAY=' + days.join(','));
+      const dayNames = { MO: 'Mon', TU: 'Tue', WE: 'Wed', TH: 'Thu', FR: 'Fri', SA: 'Sat', SU: 'Sun' };
+      const dayStr = days.map(d => dayNames[d] || d).join(', ');
+      summary = (interval === 1 ? 'Every week' : `Every ${interval} weeks`) + ' on ' + (dayStr || 'no days selected');
+    }
+
+    if (activeFreq === 'MONTHLY') {
+      const interval = parseInt(document.getElementById('recMonthlyInterval').value) || 1;
+      if (interval > 1) parts.push('INTERVAL=' + interval);
+      const mode = document.querySelector('input[name="monthlyMode"]:checked')?.value || 'day';
+      if (mode === 'day') {
+        const day = parseInt(document.getElementById('recMonthlyDay').value) || 1;
+        parts.push('BYMONTHDAY=' + day);
+        summary = (interval === 1 ? 'Every month' : `Every ${interval} months`) + ` on the ${ordinal(day)}`;
+      } else {
+        const pos = document.getElementById('recMonthlyPos').value;
+        const weekday = document.getElementById('recMonthlyWeekday').value;
+        parts.push('BYDAY=' + weekday);
+        parts.push('BYSETPOS=' + pos);
+        const posNames = { '1': 'first', '2': 'second', '3': 'third', '4': 'fourth', '-1': 'last' };
+        const wdOpt = document.getElementById('recMonthlyWeekday').selectedOptions[0];
+        summary = (interval === 1 ? 'Every month' : `Every ${interval} months`) +
+          ` on the ${posNames[pos] || pos} ${wdOpt.text}`;
+      }
+    }
+
+    if (activeFreq === 'YEARLY') {
+      const mode = document.querySelector('input[name="yearlyMode"]:checked')?.value || 'date';
+      if (mode === 'date') {
+        const month = document.getElementById('recYearlyMonth').value;
+        const day = parseInt(document.getElementById('recYearlyDay').value) || 1;
+        parts.push('BYMONTH=' + month);
+        parts.push('BYMONTHDAY=' + day);
+        const monthOpt = document.getElementById('recYearlyMonth').selectedOptions[0];
+        summary = `Every year on ${monthOpt.text} ${ordinal(day)}`;
+      } else {
+        const pos = document.getElementById('recYearlyPos').value;
+        const weekday = document.getElementById('recYearlyWeekday').value;
+        const month = document.getElementById('recYearlyMonth2').value;
+        parts.push('BYMONTH=' + month);
+        parts.push('BYDAY=' + weekday);
+        parts.push('BYSETPOS=' + pos);
+        const posNames = { '1': 'first', '2': 'second', '3': 'third', '4': 'fourth', '-1': 'last' };
+        const wdOpt = document.getElementById('recYearlyWeekday').selectedOptions[0];
+        const monthOpt = document.getElementById('recYearlyMonth2').selectedOptions[0];
+        summary = `Every year on the ${posNames[pos] || pos} ${wdOpt.text} of ${monthOpt.text}`;
+      }
+    }
+
+    // End condition
+    const endMode = document.querySelector('input[name="recEnd"]:checked')?.value || 'never';
+    if (endMode === 'count') {
+      const count = parseInt(document.getElementById('recEndCount').value) || 10;
+      parts.push('COUNT=' + count);
+      summary += `, ${count} times`;
+    } else if (endMode === 'until') {
+      const untilDate = document.getElementById('recEndDate').value;
+      if (untilDate) {
+        const ud = new Date(untilDate + 'T23:59:59Z');
+        const untilStr = ud.getUTCFullYear().toString() +
+          pad2(ud.getUTCMonth() + 1) + pad2(ud.getUTCDate()) + 'T235959Z';
+        parts.push('UNTIL=' + untilStr);
+        summary += `, until ${untilDate}`;
+      }
+    }
+
+    const timeStr = pad2(dt.getHours()) + ':' + pad2(dt.getMinutes());
+    summary += ` at ${timeStr}`;
+
+    const rrule = 'DTSTART:' + dtStr + '\nRRULE:' + parts.join(';');
+    return { rrule, summary };
+  }
+
+  function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+
+  function updateRecPreview() {
+    const { rrule, summary } = buildRRule();
+    recPreview.textContent = rrule || '(configure a schedule)';
+    recSummary.textContent = summary || '';
+  }
+
+  // Bind all inputs to live-update the preview
+  recModal.addEventListener('input', updateRecPreview);
+  recModal.addEventListener('change', updateRecPreview);
+
+  document.getElementById('scheduleBtn').onclick = () => {
+    if (!modelSelect.value) {
+      startStatus.textContent = 'Select a model first.';
+      startStatus.className = 'status error';
+      return;
+    }
+    initRecDefaults();
+    updateRecPreview();
+    recModal.classList.remove('hidden');
+  };
+
+  document.getElementById('closeRecurrenceBtn').onclick = () => recModal.classList.add('hidden');
+  document.getElementById('recCancelBtn').onclick = () => recModal.classList.add('hidden');
+  recModal.querySelector('.modal-backdrop').onclick = () => recModal.classList.add('hidden');
+
+  document.getElementById('recApplyBtn').onclick = async () => {
+    const { rrule } = buildRRule();
+    if (!rrule) return;
+    const modelId = modelSelect.value;
+    if (!modelId) return;
+
+    recModal.classList.add('hidden');
+    startStatus.textContent = 'Deploying with schedule...';
+    startStatus.className = 'status';
+
+    try {
+      const deployRes = await api(DEMO + '/deploy', {
+        method: 'POST',
+        body: JSON.stringify({ modelId, source: getModelSource(), timerCycle: rrule }),
+      });
+      const { definitionId, roles } = deployRes;
+      addRolesFromDeploy(roles);
+
+      // Fetch the created schedule
+      const { items } = await api('/v1/timer-schedules?definitionId=' + encodeURIComponent(definitionId));
+      if (items.length > 0) {
+        const s = items[0];
+        const nextFire = new Date(s.nextFireAt).toLocaleString();
+        startStatus.textContent = `Scheduled (${s.kind}). Next fire: ${nextFire}`;
+        startStatus.className = 'status success';
+      } else {
+        startStatus.textContent = 'Deployed with schedule. Definition: ' + definitionId;
+        startStatus.className = 'status success';
+      }
+    } catch (e) {
+      startStatus.textContent = 'Error: ' + e.message;
+      startStatus.className = 'status error';
+    }
+  };
 })();

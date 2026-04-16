@@ -126,9 +126,31 @@ serverRouter.get('/demo/models', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Inject a timerEventDefinition into the first <bpmn:startEvent> in the XML.
+ * Used by the portal's "Schedule..." button to add a timer cycle to any process.
+ */
+function injectTimerCycle(bpmnXml: string, timerCycle: string): string {
+  // Escape XML special chars in the expression
+  const escaped = timerCycle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const timerDef = `<bpmn:timerEventDefinition><bpmn:timeCycle>${escaped}</bpmn:timeCycle></bpmn:timerEventDefinition>`;
+
+  // Replace self-closing startEvent: <bpmn:startEvent id="..."/>
+  const selfClose = /(<bpmn:startEvent\s[^>]*?)\s*\/>/;
+  if (selfClose.test(bpmnXml)) {
+    return bpmnXml.replace(selfClose, `$1>${timerDef}</bpmn:startEvent>`);
+  }
+  // Replace open startEvent: <bpmn:startEvent id="...">...</bpmn:startEvent>
+  const openTag = /(<bpmn:startEvent\s[^>]*?>)/;
+  if (openTag.test(bpmnXml)) {
+    return bpmnXml.replace(openTag, `$1${timerDef}`);
+  }
+  return bpmnXml;
+}
+
 serverRouter.post('/demo/deploy', async (req: Request, res: Response) => {
   try {
-    const { modelId, source } = req.body as { modelId: string; source?: ModelSource };
+    const { modelId, source, timerCycle } = req.body as { modelId: string; source?: ModelSource; timerCycle?: string };
     const effectiveSource = source ?? 'local';
     let bpmnXml: string;
     let deployName: string;
@@ -155,6 +177,10 @@ serverRouter.post('/demo/deploy', async (req: Request, res: Response) => {
       bpmnXml = readFileSync(getBpmnPath(model.bpmnFile), 'utf8');
       deployName = model.id;
       deployId = modelId;
+    }
+
+    if (timerCycle) {
+      bpmnXml = injectTimerCycle(bpmnXml, timerCycle);
     }
 
     const db = getDb();

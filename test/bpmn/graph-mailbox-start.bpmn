@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  id="Defs_GraphMailbox"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:message id="Msg_Inbox" name="inbox-poll"
+    tri:connectorType="graph-mailbox"
+    tri:mailbox="ada@the-real-insight.com" />
+
+  <bpmn:process id="Process_GraphMailbox" isExecutable="true">
+
+    <bpmn:startEvent id="Start" name="Email received">
+      <bpmn:messageEventDefinition messageRef="Msg_Inbox" />
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="Task_Process" name="Process email"
+      tri:toolId="process-email"/>
+
+    <bpmn:endEvent id="End"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="Task_Process"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_Process" targetRef="End"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

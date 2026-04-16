@@ -35,6 +35,7 @@ MongoDB **collection names** are PascalCase **singular**. [`getCollections()`](.
 | `Outbox` | `Outbox` | **Outbound callbacks** to integrators (work, decisions, events, multi-instance). |
 | `HumanTask` | `HumanTasks` | **Worklist projection** for user tasks (OPEN / CLAIMED / COMPLETED / CANCELED). |
 | `TimerSchedule` | `TimerSchedules` | **Timer start event schedules** — one per timer start event per deployed definition. |
+| `ConnectorSchedule` | `ConnectorSchedules` | **Connector polling schedules** — one per message start event with `tri:connectorType` per deployed definition. |
 
 Collections are created on **first insert**. There is no separate migration beyond `ensureIndexes`.
 
@@ -420,6 +421,51 @@ Persistent schedule for BPMN **timer start events**. Created or updated on `depl
 
 ---
 
+## `ConnectorSchedule` collection
+
+Persistent polling schedule for BPMN **message start events** with a `tri:connectorType` extension. Created or updated on `deployDefinition` when a process has a `<bpmn:startEvent>` with a `<bpmn:messageEventDefinition>` referencing a `<bpmn:message>` that carries `tri:connectorType`.
+
+Currently supported connector types: `graph-mailbox` (Microsoft Graph API mailbox polling).
+
+| Field | Type | Semantics |
+|-------|------|-----------|
+| `_id` | string | Schedule id. |
+| `definitionId` | string | Process definition to start when a message arrives. |
+| `nodeId` | string | BPMN start event node id. |
+| `connectorType` | string | Connector adapter identifier (e.g. `graph-mailbox`). |
+| `config` | object | Connector-specific settings from BPMN `tri:` extensions (e.g. `{ mailbox: "ada@..." }`). |
+| `pollingIntervalMs` | number | How often to poll (ms). Defaults from engine config. |
+| `lastPolledAt` | Date \| omitted | Last successful poll time. |
+| `cursor` | string \| omitted | Deduplication cursor (e.g. last processed message hash). |
+| `status` | enum | `ACTIVE` \| `PAUSED` \| `DISABLED`. |
+| `ownerId` | string \| omitted | Worker id holding a lease. |
+| `leaseUntil` | Date \| omitted | Lease expiry. |
+| `createdAt` | Date | Insert time. |
+| `updatedAt` | Date | Last update time. |
+
+**BPMN example:**
+
+```xml
+<bpmn:message id="Msg_Inbox" name="inbox-poll"
+  tri:connectorType="graph-mailbox"
+  tri:mailbox="ada@the-real-insight.com" />
+
+<bpmn:startEvent id="Start">
+  <bpmn:messageEventDefinition messageRef="Msg_Inbox" />
+</bpmn:startEvent>
+```
+
+**Engine config** (environment variables for Graph API credentials):
+
+```
+GRAPH_TENANT_ID=...
+GRAPH_CLIENT_ID=...
+GRAPH_CLIENT_SECRET=...
+GRAPH_POLLING_INTERVAL_MS=10000
+```
+
+---
+
 ## Indexes
 
 Created by **`ensureIndexes(db)`** in [`src/db/indexes.ts`](../src/db/indexes.ts).
@@ -439,6 +485,8 @@ Created by **`ensureIndexes(db)`** in [`src/db/indexes.ts`](../src/db/indexes.ts
 | `ProcessInstanceHistory` | `instanceId` ascending, `seq` ascending | non-unique | Ordered history reads per instance. |
 | `TimerSchedule` | `status` ascending, `nextFireAt` ascending | non-unique | Worker claims **active** timers in due order. |
 | `TimerSchedule` | `definitionId` ascending, `nodeId` ascending | **unique** | One schedule per timer start event per definition. |
+| `ConnectorSchedule` | `status` ascending | non-unique | Worker finds active connectors to poll. |
+| `ConnectorSchedule` | `definitionId` ascending, `nodeId` ascending | **unique** | One schedule per connector start event per definition. |
 
 ---
 

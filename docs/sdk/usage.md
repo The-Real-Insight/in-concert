@@ -1320,6 +1320,71 @@ ACTIVE ──▶ fires repeatedly (cycle/cron/rrule) or once (date/duration) ─
 
 ---
 
+## Message start events — Graph mailbox connector
+
+BPMN message start events with `tri:connectorType="graph-mailbox"` automatically poll a Microsoft 365 mailbox for unread emails. When an email arrives, the engine starts a new process instance.
+
+### BPMN definition
+
+```xml
+<bpmn:message id="Msg_Inbox" name="inbox-poll"
+  tri:connectorType="graph-mailbox"
+  tri:mailbox="ada@the-real-insight.com" />
+
+<bpmn:startEvent id="Start" name="Email received">
+  <bpmn:messageEventDefinition messageRef="Msg_Inbox" />
+</bpmn:startEvent>
+```
+
+Two `tri:` extension attributes on `<bpmn:message>`:
+- `tri:connectorType` — the connector adapter (`graph-mailbox`)
+- `tri:mailbox` — the mailbox to poll (user principal name)
+
+### Engine configuration
+
+Graph API credentials are set once as environment variables — they never appear in BPMN:
+
+```
+GRAPH_TENANT_ID=your-azure-tenant-id
+GRAPH_CLIENT_ID=your-app-client-id
+GRAPH_CLIENT_SECRET=your-client-secret
+GRAPH_POLLING_INTERVAL_MS=10000       # default: 10 seconds
+GRAPH_SINCE_MINUTES=1440              # default: 24 hours lookback
+```
+
+The Azure AD app registration needs the `Mail.ReadWrite` application permission (not delegated) for the target mailbox.
+
+### How it works
+
+1. **Deploy** — the engine detects the message start event with `tri:connectorType` and creates a `ConnectorSchedule` document.
+2. **Connector worker** — a background loop polls active connector schedules. For `graph-mailbox`, it calls the Graph API `/users/{mailbox}/messages` endpoint, filtering for unread emails.
+3. **Email arrives** — the worker calls `startInstance(definitionId)` with the email ID as `businessKey`, then marks the email as read.
+4. **Process runs normally** — service tasks, decisions, and user tasks fire as usual. Use the `businessKey` to correlate external email data.
+
+### SDK methods
+
+```typescript
+// List all connector schedules
+const schedules = await client.listConnectorSchedules({ connectorType: 'graph-mailbox' });
+
+// Pause polling
+await client.pauseConnectorSchedule(scheduleId);
+
+// Resume polling
+await client.resumeConnectorSchedule(scheduleId);
+```
+
+### REST API
+
+```
+GET    /v1/connector-schedules                      List (query: ?definitionId=&status=&connectorType=)
+GET    /v1/connector-schedules/:id                  Get one
+POST   /v1/connector-schedules/:id/pause            Pause (ACTIVE → PAUSED)
+POST   /v1/connector-schedules/:id/resume           Resume (PAUSED → ACTIVE)
+```
+
+---
+
 ## Prerequisites
 
 - Node.js 18+

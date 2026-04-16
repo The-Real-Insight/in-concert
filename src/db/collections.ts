@@ -10,6 +10,7 @@ export const COLLECTION_NAMES = {
   Outbox: 'Outbox',
   HumanTask: 'HumanTask',
   TimerSchedule: 'TimerSchedule',
+  ConnectorSchedule: 'ConnectorSchedule',
 } as const;
 
 /** Audit trail: one row per task/instance lifecycle event. */
@@ -277,6 +278,26 @@ export type TimerScheduleDoc = {
   updatedAt: Date;
 };
 
+export type ConnectorScheduleStatus = 'ACTIVE' | 'PAUSED' | 'DISABLED';
+
+export type ConnectorScheduleDoc = {
+  _id: string;
+  definitionId: string;
+  nodeId: string;
+  connectorType: string;
+  /** Connector-specific config from BPMN tri: extensions (e.g. mailbox address). */
+  config: Record<string, string>;
+  pollingIntervalMs: number;
+  lastPolledAt?: Date;
+  /** Dedup: last processed message ID or delta token. */
+  cursor?: string;
+  status: ConnectorScheduleStatus;
+  ownerId?: string;
+  leaseUntil?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type NodeDef = {
   id: string;
   type: string;
@@ -335,6 +356,9 @@ export function getCollections(database: Db) {
     ),
     TimerSchedules: database.collection<TimerScheduleDoc>(
       COLLECTION_NAMES.TimerSchedule
+    ),
+    ConnectorSchedules: database.collection<ConnectorScheduleDoc>(
+      COLLECTION_NAMES.ConnectorSchedule
     ),
   };
 }

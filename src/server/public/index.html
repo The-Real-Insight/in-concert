@@ -55,7 +55,10 @@
           <input type="file" id="startFileInput" multiple hidden />
         </div>
         <div id="startFileList" class="file-list"></div>
-        <button id="startBtn">Start process</button>
+        <div class="timer-row">
+          <button id="startBtn">Start process</button>
+          <button id="scheduleBtn" type="button" title="Schedule recurring process start">Schedule...</button>
+        </div>
         <p id="startStatus" class="status"></p>
       </section>
 
@@ -128,6 +131,191 @@
       </div>
     </div>
   </div>
+  <!-- Recurrence modal (Outlook-style) -->
+  <div id="recurrenceModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content recurrence-dialog">
+      <div class="modal-header">
+        <h3>Schedule Recurrence</h3>
+        <button id="closeRecurrenceBtn" type="button">&times;</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="rec-section">
+          <label class="rec-label">Start time</label>
+          <input type="datetime-local" id="recDtstart" class="rec-input" />
+        </div>
+
+        <div class="rec-section">
+          <label class="rec-label">Frequency</label>
+          <div class="rec-tabs">
+            <button type="button" class="rec-tab active" data-freq="DAILY">Daily</button>
+            <button type="button" class="rec-tab" data-freq="WEEKLY">Weekly</button>
+            <button type="button" class="rec-tab" data-freq="MONTHLY">Monthly</button>
+            <button type="button" class="rec-tab" data-freq="YEARLY">Yearly</button>
+          </div>
+        </div>
+
+        <!-- Daily -->
+        <div class="rec-freq-panel" id="recPanelDAILY">
+          <label class="rec-label">Repeat every</label>
+          <div class="rec-inline">
+            <input type="number" id="recDailyInterval" value="1" min="1" max="365" class="rec-num" />
+            <span>day(s)</span>
+          </div>
+        </div>
+
+        <!-- Weekly -->
+        <div class="rec-freq-panel hidden" id="recPanelWEEKLY">
+          <label class="rec-label">Repeat every</label>
+          <div class="rec-inline">
+            <input type="number" id="recWeeklyInterval" value="1" min="1" max="52" class="rec-num" />
+            <span>week(s) on</span>
+          </div>
+          <div class="rec-days">
+            <label><input type="checkbox" value="MO" checked /> Mon</label>
+            <label><input type="checkbox" value="TU" /> Tue</label>
+            <label><input type="checkbox" value="WE" /> Wed</label>
+            <label><input type="checkbox" value="TH" /> Thu</label>
+            <label><input type="checkbox" value="FR" /> Fri</label>
+            <label><input type="checkbox" value="SA" /> Sat</label>
+            <label><input type="checkbox" value="SU" /> Sun</label>
+          </div>
+        </div>
+
+        <!-- Monthly -->
+        <div class="rec-freq-panel hidden" id="recPanelMONTHLY">
+          <label class="rec-label">Repeat every</label>
+          <div class="rec-inline">
+            <input type="number" id="recMonthlyInterval" value="1" min="1" max="12" class="rec-num" />
+            <span>month(s)</span>
+          </div>
+          <div class="rec-monthly-mode">
+            <label class="rec-radio">
+              <input type="radio" name="monthlyMode" value="day" checked />
+              On day
+              <input type="number" id="recMonthlyDay" value="1" min="1" max="31" class="rec-num" />
+            </label>
+            <label class="rec-radio">
+              <input type="radio" name="monthlyMode" value="relative" />
+              On the
+              <select id="recMonthlyPos" class="rec-select">
+                <option value="1">first</option>
+                <option value="2">second</option>
+                <option value="3">third</option>
+                <option value="4">fourth</option>
+                <option value="-1">last</option>
+              </select>
+              <select id="recMonthlyWeekday" class="rec-select">
+                <option value="MO">Monday</option>
+                <option value="TU">Tuesday</option>
+                <option value="WE">Wednesday</option>
+                <option value="TH">Thursday</option>
+                <option value="FR">Friday</option>
+                <option value="SA">Saturday</option>
+                <option value="SU">Sunday</option>
+                <option value="MO,TU,WE,TH,FR">Weekday</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- Yearly -->
+        <div class="rec-freq-panel hidden" id="recPanelYEARLY">
+          <div class="rec-yearly-mode">
+            <label class="rec-radio">
+              <input type="radio" name="yearlyMode" value="date" checked />
+              Every
+              <select id="recYearlyMonth" class="rec-select">
+                <option value="1">January</option>
+                <option value="2">February</option>
+                <option value="3">March</option>
+                <option value="4">April</option>
+                <option value="5">May</option>
+                <option value="6">June</option>
+                <option value="7">July</option>
+                <option value="8">August</option>
+                <option value="9">September</option>
+                <option value="10">October</option>
+                <option value="11">November</option>
+                <option value="12">December</option>
+              </select>
+              <input type="number" id="recYearlyDay" value="1" min="1" max="31" class="rec-num" />
+            </label>
+            <label class="rec-radio">
+              <input type="radio" name="yearlyMode" value="relative" />
+              The
+              <select id="recYearlyPos" class="rec-select">
+                <option value="1">first</option>
+                <option value="2">second</option>
+                <option value="3">third</option>
+                <option value="4">fourth</option>
+                <option value="-1">last</option>
+              </select>
+              <select id="recYearlyWeekday" class="rec-select">
+                <option value="MO">Monday</option>
+                <option value="TU">Tuesday</option>
+                <option value="WE">Wednesday</option>
+                <option value="TH">Thursday</option>
+                <option value="FR">Friday</option>
+                <option value="SA">Saturday</option>
+                <option value="SU">Sunday</option>
+                <option value="MO,TU,WE,TH,FR">Weekday</option>
+              </select>
+              of
+              <select id="recYearlyMonth2" class="rec-select">
+                <option value="1">January</option>
+                <option value="2">February</option>
+                <option value="3">March</option>
+                <option value="4">April</option>
+                <option value="5">May</option>
+                <option value="6">June</option>
+                <option value="7">July</option>
+                <option value="8">August</option>
+                <option value="9">September</option>
+                <option value="10">October</option>
+                <option value="11">November</option>
+                <option value="12">December</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- End condition -->
+        <div class="rec-section rec-end">
+          <label class="rec-label">End</label>
+          <div class="rec-end-options">
+            <label class="rec-radio"><input type="radio" name="recEnd" value="never" checked /> No end date</label>
+            <label class="rec-radio">
+              <input type="radio" name="recEnd" value="count" />
+              After <input type="number" id="recEndCount" value="10" min="1" max="999" class="rec-num" /> occurrences
+            </label>
+            <label class="rec-radio">
+              <input type="radio" name="recEnd" value="until" />
+              By <input type="date" id="recEndDate" class="rec-input rec-input-sm" />
+            </label>
+          </div>
+        </div>
+
+        <!-- Preview -->
+        <div class="rec-section">
+          <label class="rec-label">RRULE preview</label>
+          <pre id="recPreview" class="rec-preview"></pre>
+        </div>
+
+        <div class="rec-section">
+          <label class="rec-label">Human-readable</label>
+          <p id="recSummary" class="rec-summary"></p>
+        </div>
+
+      </div>
+      <div class="rec-footer">
+        <button id="recApplyBtn" type="button">Deploy with schedule</button>
+        <button id="recCancelBtn" type="button" class="rec-btn-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

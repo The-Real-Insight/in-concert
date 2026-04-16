@@ -5,7 +5,7 @@ import { config } from '../config';
 import { deployDefinition } from '../model/service';
 import { startInstance, getInstance } from '../instance/service';
 import { getProcessHistory } from '../history/service';
-import { getCollections, COLLECTION_NAMES, type TimerScheduleStatus } from '../db/collections';
+import { getCollections, COLLECTION_NAMES, type TimerScheduleStatus, type ConnectorScheduleStatus } from '../db/collections';
 import { claimContinuation, processContinuation } from '../workers/processor';
 
 export const apiRouter = Router();
@@ -367,6 +367,76 @@ apiRouter.post('/v1/timer-schedules/:scheduleId/resume', async (req: Request, re
     );
     if (!result) {
       res.status(404).json({ error: 'Timer schedule not found or not PAUSED' });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Resume failed' });
+  }
+});
+
+// ── Connector schedules ──────────────────────────────────────────────────────
+
+apiRouter.get('/v1/connector-schedules', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { ConnectorSchedules } = getCollections(db);
+    const filter: Record<string, unknown> = {};
+    if (req.query.definitionId) filter.definitionId = req.query.definitionId;
+    if (req.query.status) filter.status = req.query.status;
+    if (req.query.connectorType) filter.connectorType = req.query.connectorType;
+    const items = await ConnectorSchedules.find(filter).sort({ createdAt: -1 }).toArray();
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: 'List connector schedules failed' });
+  }
+});
+
+apiRouter.get('/v1/connector-schedules/:scheduleId', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { ConnectorSchedules } = getCollections(db);
+    const doc = await ConnectorSchedules.findOne({ _id: req.params.scheduleId });
+    if (!doc) {
+      res.status(404).json({ error: 'Connector schedule not found' });
+      return;
+    }
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: 'Get connector schedule failed' });
+  }
+});
+
+apiRouter.post('/v1/connector-schedules/:scheduleId/pause', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { ConnectorSchedules } = getCollections(db);
+    const result = await ConnectorSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED' as ConnectorScheduleStatus, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!result) {
+      res.status(404).json({ error: 'Connector schedule not found or not ACTIVE' });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Pause failed' });
+  }
+});
+
+apiRouter.post('/v1/connector-schedules/:scheduleId/resume', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { ConnectorSchedules } = getCollections(db);
+    const result = await ConnectorSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId, status: 'PAUSED' },
+      { $set: { status: 'ACTIVE' as ConnectorScheduleStatus, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!result) {
+      res.status(404).json({ error: 'Connector schedule not found or not PAUSED' });
       return;
     }
     res.json(result);

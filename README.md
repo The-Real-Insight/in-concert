@@ -57,6 +57,26 @@ No polling. No Lambda triggers. No third-party scheduling service. Just BPMN.
 
 [Full documentation](./docs/sdk/usage.md#timer-start-events) | [Getting started](./docs/getting-started.md)
 
+### Microsoft 365 mailbox connector — email-driven processes
+
+**Start a process when an email arrives.** Deploy a BPMN with a message start event pointing at a Microsoft 365 mailbox, and the engine polls it for you — no Azure Functions, no Power Automate, no webhook plumbing.
+
+```xml
+<bpmn:message id="Msg_Inbox" name="inbox-poll"
+  tri:connectorType="graph-mailbox"
+  tri:mailbox="support@your-company.com" />
+
+<bpmn:startEvent id="Start">
+  <bpmn:messageEventDefinition messageRef="Msg_Inbox" />
+</bpmn:startEvent>
+```
+
+Set your Azure AD credentials once as environment variables. Every unread email becomes a process instance — automatically started, deduplicated, and marked as read. Pause and resume polling at any time via the SDK or REST API.
+
+Standard BPMN message start event. Standard Microsoft Graph API. **Zero glue code.**
+
+[Full documentation](./docs/sdk/usage.md#message-start-events--graph-mailbox-connector)
+
 ---
 
 ## What is this?
@@ -282,6 +302,9 @@ GET    /v1/tasks                                    Worklist query
 GET    /v1/timer-schedules                          List timer schedules
 POST   /v1/timer-schedules/:id/pause                Pause a timer
 POST   /v1/timer-schedules/:id/resume               Resume a timer
+GET    /v1/connector-schedules                      List connector schedules
+POST   /v1/connector-schedules/:id/pause            Pause a connector
+POST   /v1/connector-schedules/:id/resume           Resume a connector
 WS     /ws                                          Push callbacks (REST mode)
 ```
 
@@ -313,7 +336,7 @@ Design & internals:
 
 in-concert implements a curated BPMN 2.0 subset. See the full [conformance matrix](./readme/TEST.md) for details. Unsupported elements fail fast and loudly — never silently.
 
-**Supported:** Start/End events · Timer start events (cron, ISO 8601, RRULE) · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
+**Supported:** Start/End events · Timer start events (cron, ISO 8601, RRULE) · Message start events (Graph mailbox polling) · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
 
 **Not in scope (yet):** Compensation · Complex gateways · Choreography · Conversation
 
