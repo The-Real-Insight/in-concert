@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import { getCollections, type ConnectorScheduleDoc } from '../db/collections';
 import { startInstance } from '../instance/service';
-import { pollMailbox, markAsRead, type GraphEmail } from './graph';
+import { pollMailbox, markAsRead, listAttachments, getAttachmentContent, type GraphEmail } from './graph';
 import type { MailReceivedEvent, MailReceivedResult } from '../sdk/types';
 
 export type OnMailReceivedFn = (event: MailReceivedEvent) => Promise<MailReceivedResult>;
@@ -51,7 +51,13 @@ function emailDedupeKey(email: GraphEmail): string {
     .slice(0, 16);
 }
 
-function toMailEvent(mailbox: string, email: GraphEmail, instanceId: string, definitionId: string): MailReceivedEvent {
+function toMailEvent(
+  mailbox: string,
+  email: GraphEmail,
+  instanceId: string,
+  definitionId: string,
+  attachmentMeta: Array<{ id: string; name: string; contentType: string; size: number }>,
+): MailReceivedEvent {
   return {
     mailbox,
     instanceId,
@@ -65,7 +71,10 @@ function toMailEvent(mailbox: string, email: GraphEmail, instanceId: string, def
       bodyPreview: email.bodyPreview,
       body: email.body,
       hasAttachments: email.hasAttachments,
+      attachments: attachmentMeta,
     },
+    getAttachmentContent: (attachmentId: string) =>
+      getAttachmentContent(mailbox, email.id, attachmentId),
   };
 }
 
@@ -100,12 +109,22 @@ async function handleGraphMailbox(
         ` → instance ${instanceId}`
       );
 
-      // 2. Call onMailReceived — caller stores domain data, fetches attachments, etc.
+      // 2. List attachment metadata (no content downloaded yet)
+      let attachmentMeta: Array<{ id: string; name: string; contentType: string; size: number }> = [];
+      if (email.hasAttachments) {
+        try {
+          attachmentMeta = await listAttachments(mailbox, email.id);
+        } catch (err) {
+          console.error(`[Connector] Failed to list attachments for ${email.id}:`, err);
+        }
+      }
+
+      // 3. Call onMailReceived — caller stores domain data, downloads attachments on demand
       let skip = false;
       if (onMailReceived) {
         try {
           const result = await onMailReceived(
-            toMailEvent(mailbox, email, instanceId, schedule.definitionId),
+            toMailEvent(mailbox, email, instanceId, schedule.definitionId, attachmentMeta),
           );
           if (result && result.skip) {
             skip = true;
@@ -116,7 +135,7 @@ async function handleGraphMailbox(
         }
       }
 
-      // 3. If skipped, terminate the instance; otherwise the START continuation
+      // 4. If skipped, terminate the instance; otherwise the START continuation
       //    (already inserted by startInstance) will advance the process
       if (skip) {
         const { ProcessInstances, ProcessInstanceState } = getCollections(db);

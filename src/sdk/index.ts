@@ -41,6 +41,7 @@ export type {
   CallbackDecisionPayload,
   ListTasksParams,
   GraphConnectorConfig,
+  MailAttachment,
   MailReceivedEvent,
   MailReceivedResult,
 } from './types';

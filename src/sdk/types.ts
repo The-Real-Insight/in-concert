@@ -229,6 +229,14 @@ export type GraphConnectorConfig = {
   sinceMinutes?: number;
 };
 
+export type MailAttachment = {
+  id: string;
+  name: string;
+  contentType: string;
+  /** Size in bytes. */
+  size: number;
+};
+
 export type MailReceivedEvent = {
   mailbox: string;
   instanceId: string;
@@ -242,7 +250,15 @@ export type MailReceivedEvent = {
     bodyPreview: string;
     body: { contentType: string; content: string };
     hasAttachments: boolean;
+    /** Attachment metadata (name, size, contentType). Content is NOT pre-loaded. */
+    attachments: MailAttachment[];
   };
+  /**
+   * Download a single attachment's content on demand.
+   * Returns a Buffer — only loads the attachment you ask for.
+   * Use attachment.size to decide whether to download (e.g. skip files > 50 MB).
+   */
+  getAttachmentContent: (attachmentId: string) => Promise<Buffer>;
 };
 
 export type MailReceivedResult = {

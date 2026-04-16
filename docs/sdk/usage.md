@@ -1393,16 +1393,21 @@ client.init({
     'graph-mailbox': { tenantId: '...', clientId: '...', clientSecret: '...' },
   },
 
-  onMailReceived: async ({ mailbox, email, instanceId, definitionId }) => {
-    // email.id, email.subject, email.from, email.body, email.hasAttachments, ...
+  onMailReceived: async ({ mailbox, email, instanceId, definitionId, getAttachmentContent }) => {
+    // email.id, email.subject, email.from, email.body, email.attachments (metadata only)
 
     // Store the email in your domain, bound to the process instance
     await myStore.saveEmail(instanceId, email);
 
-    // Fetch and store attachments if needed
-    if (email.hasAttachments) {
-      const attachments = await myGraphClient.getAttachments(mailbox, email.id);
-      await myStore.saveAttachments(instanceId, attachments);
+    // Attachments are metadata-only — download content on demand per attachment.
+    // Use attachment.size to skip large files or apply per-type logic.
+    for (const att of email.attachments) {
+      if (att.size > 50_000_000) {
+        console.log(`Skipping ${att.name} (${att.size} bytes)`);
+        continue;
+      }
+      const buffer = await getAttachmentContent(att.id);
+      await myStorage.upload(instanceId, att.name, buffer, att.contentType);
     }
 
     // Create a conversation for the process
@@ -1434,7 +1439,11 @@ The callback receives a `MailReceivedEvent`:
 | `email.body` | `{ contentType, content }` | Full body (HTML or text) |
 | `email.bodyPreview` | string | Truncated plaintext preview |
 | `email.hasAttachments` | boolean | Whether attachments exist |
+| `email.attachments` | `MailAttachment[]` | Attachment metadata only (no content pre-loaded) |
 | `email.receivedDateTime` | string | ISO 8601 timestamp |
+| `getAttachmentContent(id)` | `(id: string) => Promise<Buffer>` | Download a single attachment's content on demand |
+
+Each `MailAttachment` has: `id`, `name`, `contentType`, `size` (bytes). Content is **not** pre-loaded — call `getAttachmentContent(att.id)` to download individually. This keeps memory safe when emails carry large attachments (ZIPs, PDFs, images). Use `att.size` to decide what to download.
 
 ### SDK methods
 

@@ -98,6 +98,73 @@ export async function pollMailbox(
   return json.value ?? [];
 }
 
+// ── Attachments ──────────────────────────────────────────────────────────────
+
+export interface GraphAttachmentMeta {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+}
+
+/**
+ * List attachment metadata for a message (no content downloaded).
+ * Uses $select to exclude contentBytes — safe for any attachment size.
+ */
+export async function listAttachments(mailbox: string, messageId: string): Promise<GraphAttachmentMeta[]> {
+  const token = await getAccessToken();
+  const url =
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}` +
+    `/messages/${messageId}/attachments?$select=id,name,contentType,size`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Graph list attachments failed (${res.status}): ${text}`);
+  }
+
+  const json = (await res.json()) as { value: Array<Record<string, unknown>> };
+  return (json.value ?? [])
+    .filter(a => a['@odata.type'] === '#microsoft.graph.fileAttachment')
+    .map(a => ({
+      id: String(a.id),
+      name: String(a.name ?? ''),
+      contentType: String(a.contentType ?? 'application/octet-stream'),
+      size: Number(a.size ?? 0),
+    }));
+}
+
+/**
+ * Download a single attachment's content as a Buffer.
+ * Fetches only the requested attachment — no bulk loading.
+ */
+export async function getAttachmentContent(
+  mailbox: string,
+  messageId: string,
+  attachmentId: string,
+): Promise<Buffer> {
+  const token = await getAccessToken();
+  const url =
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}` +
+    `/messages/${messageId}/attachments/${attachmentId}`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Graph attachment download failed (${res.status}): ${text}`);
+  }
+
+  const json = (await res.json()) as { contentBytes?: string };
+  if (!json.contentBytes) throw new Error(`Attachment ${attachmentId} has no content`);
+  return Buffer.from(json.contentBytes, 'base64');
+}
+
 // ── Mark as read ─────────────────────────────────────────────────────────────
 
 export async function markAsRead(mailbox: string, messageId: string): Promise<void> {
