@@ -1342,7 +1342,9 @@ Two `tri:` extension attributes on `<bpmn:message>`:
 
 ### Engine configuration
 
-Graph API credentials are set once as environment variables — they never appear in BPMN:
+Graph API credentials never appear in BPMN. Configure them in one of two ways:
+
+**Option A — Environment variables** (server mode):
 
 ```
 GRAPH_TENANT_ID=your-azure-tenant-id
@@ -1352,14 +1354,87 @@ GRAPH_POLLING_INTERVAL_MS=10000       # default: 10 seconds
 GRAPH_SINCE_MINUTES=1440              # default: 24 hours lookback
 ```
 
+**Option B — SDK `init()`** (local mode, or when credentials come from a vault/database):
+
+```typescript
+client.init({
+  connectors: {
+    'graph-mailbox': {
+      tenantId: 'your-azure-tenant-id',
+      clientId: 'your-app-client-id',
+      clientSecret: 'your-client-secret',
+      pollingIntervalMs: 10_000,
+      sinceMinutes: 1440,
+    },
+  },
+  onServiceCall: async (item) => { ... },
+});
+```
+
+`init()` settings override environment variables. This lets you pull credentials from Azure Key Vault, AWS Secrets Manager, or a database at startup without touching `.env` files.
+
 The Azure AD app registration needs the `Mail.ReadWrite` application permission (not delegated) for the target mailbox.
 
 ### How it works
 
 1. **Deploy** — the engine detects the message start event with `tri:connectorType` and creates a `ConnectorSchedule` document.
 2. **Connector worker** — a background loop polls active connector schedules. For `graph-mailbox`, it calls the Graph API `/users/{mailbox}/messages` endpoint, filtering for unread emails.
-3. **Email arrives** — the worker calls `startInstance(definitionId)` with the email ID as `businessKey`, then marks the email as read.
-4. **Process runs normally** — service tasks, decisions, and user tasks fire as usual. Use the `businessKey` to correlate external email data.
+3. **Email arrives** — the worker creates a process instance (`instanceId` exists, no tokens advancing yet), then calls your `onMailReceived` callback.
+4. **Your callback** stores domain data (email content, attachments, conversation) against the `instanceId`. Return `{ skip: true }` to terminate the instance (e.g. spam filtering). Return nothing or `{ skip: false }` to let the process run.
+5. **Process runs** — the engine advances the first token. Service tasks, decisions, and user tasks fire as usual.
+
+### onMailReceived callback
+
+Register in `init()` alongside your other handlers:
+
+```typescript
+client.init({
+  connectors: {
+    'graph-mailbox': { tenantId: '...', clientId: '...', clientSecret: '...' },
+  },
+
+  onMailReceived: async ({ mailbox, email, instanceId, definitionId }) => {
+    // email.id, email.subject, email.from, email.body, email.hasAttachments, ...
+
+    // Store the email in your domain, bound to the process instance
+    await myStore.saveEmail(instanceId, email);
+
+    // Fetch and store attachments if needed
+    if (email.hasAttachments) {
+      const attachments = await myGraphClient.getAttachments(mailbox, email.id);
+      await myStore.saveAttachments(instanceId, attachments);
+    }
+
+    // Create a conversation for the process
+    await myConversations.create(instanceId, {
+      subject: email.subject,
+      from: email.from.address,
+    });
+
+    // Return { skip: true } to terminate the instance without running
+    // (e.g. spam, duplicate, out-of-scope sender)
+    if (isSpam(email)) return { skip: true };
+  },
+
+  onServiceCall: async (item) => { ... },
+});
+```
+
+The callback receives a `MailReceivedEvent`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mailbox` | string | The polled mailbox address |
+| `instanceId` | string | The already-created process instance |
+| `definitionId` | string | The process definition |
+| `email.id` | string | Graph message ID |
+| `email.subject` | string | Email subject |
+| `email.from` | `{ name?, address }` | Sender |
+| `email.toRecipients` | `{ name?, address }[]` | Recipients |
+| `email.body` | `{ contentType, content }` | Full body (HTML or text) |
+| `email.bodyPreview` | string | Truncated plaintext preview |
+| `email.hasAttachments` | boolean | Whether attachments exist |
+| `email.receivedDateTime` | string | ISO 8601 timestamp |
 
 ### SDK methods
 

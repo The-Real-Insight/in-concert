@@ -10,6 +10,9 @@ import type { Db } from 'mongodb';
 import { getCollections, type ConnectorScheduleDoc } from '../db/collections';
 import { startInstance } from '../instance/service';
 import { pollMailbox, markAsRead, type GraphEmail } from './graph';
+import type { MailReceivedEvent, MailReceivedResult } from '../sdk/types';
+
+export type OnMailReceivedFn = (event: MailReceivedEvent) => Promise<MailReceivedResult>;
 
 const LEASE_MS = 60_000;
 
@@ -22,7 +25,7 @@ export async function claimDueConnector(db: Db): Promise<ConnectorScheduleDoc | 
       status: 'ACTIVE',
       $or: [
         { lastPolledAt: { $exists: false } },
-        { lastPolledAt: { $lte: new Date(now.getTime() - 1) } }, // will be refined per-schedule below
+        { lastPolledAt: { $lte: new Date(now.getTime() - 1) } },
       ],
     },
     {
@@ -48,9 +51,28 @@ function emailDedupeKey(email: GraphEmail): string {
     .slice(0, 16);
 }
 
+function toMailEvent(mailbox: string, email: GraphEmail, instanceId: string, definitionId: string): MailReceivedEvent {
+  return {
+    mailbox,
+    instanceId,
+    definitionId,
+    email: {
+      id: email.id,
+      subject: email.subject,
+      from: email.from.emailAddress,
+      toRecipients: email.toRecipients.map(r => r.emailAddress),
+      receivedDateTime: email.receivedDateTime,
+      bodyPreview: email.bodyPreview,
+      body: email.body,
+      hasAttachments: email.hasAttachments,
+    },
+  };
+}
+
 async function handleGraphMailbox(
   db: Db,
   schedule: ConnectorScheduleDoc,
+  onMailReceived?: OnMailReceivedFn,
 ): Promise<number> {
   const mailbox = schedule.config.mailbox;
   if (!mailbox) {
@@ -63,11 +85,10 @@ async function handleGraphMailbox(
 
   for (const email of emails) {
     const dedupeKey = emailDedupeKey(email);
-
-    // Skip if we've already processed this email (cursor tracks last processed key)
     if (schedule.cursor && schedule.cursor >= dedupeKey) continue;
 
     try {
+      // 1. Create the instance (exists but no tokens advancing yet)
       const { instanceId } = await startInstance(db, {
         commandId: uuidv4(),
         definitionId: schedule.definitionId,
@@ -78,6 +99,37 @@ async function handleGraphMailbox(
         `[Connector] graph-mailbox: "${email.subject}" from ${email.from.emailAddress.address}` +
         ` → instance ${instanceId}`
       );
+
+      // 2. Call onMailReceived — caller stores domain data, fetches attachments, etc.
+      let skip = false;
+      if (onMailReceived) {
+        try {
+          const result = await onMailReceived(
+            toMailEvent(mailbox, email, instanceId, schedule.definitionId),
+          );
+          if (result && result.skip) {
+            skip = true;
+          }
+        } catch (err) {
+          console.error(`[Connector] onMailReceived failed for ${email.id}:`, err);
+          skip = true;
+        }
+      }
+
+      // 3. If skipped, terminate the instance; otherwise the START continuation
+      //    (already inserted by startInstance) will advance the process
+      if (skip) {
+        const { ProcessInstances, ProcessInstanceState } = getCollections(db);
+        await ProcessInstances.updateOne(
+          { _id: instanceId },
+          { $set: { status: 'TERMINATED', endedAt: new Date() } },
+        );
+        await ProcessInstanceState.updateOne(
+          { _id: instanceId },
+          { $set: { status: 'TERMINATED' } },
+        );
+        console.log(`[Connector] Skipped instance ${instanceId} (onMailReceived returned skip)`);
+      }
 
       await markAsRead(mailbox, email.id);
       started++;
@@ -100,18 +152,20 @@ async function releaseSchedule(db: Db, schedule: ConnectorScheduleDoc): Promise<
   );
 }
 
-export async function processOneConnector(db: Db): Promise<boolean> {
+export async function processOneConnector(
+  db: Db,
+  onMailReceived?: OnMailReceivedFn,
+): Promise<boolean> {
   const schedule = await claimDueConnector(db);
   if (!schedule) return false;
   if (!isDue(schedule)) {
-    // Claimed but not yet due — release immediately
     await releaseSchedule(db, schedule);
     return false;
   }
 
   try {
     if (schedule.connectorType === 'graph-mailbox') {
-      await handleGraphMailbox(db, schedule);
+      await handleGraphMailbox(db, schedule, onMailReceived);
     } else {
       console.warn(`[Connector] Unknown connector type: ${schedule.connectorType}`);
     }

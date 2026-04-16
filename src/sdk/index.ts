@@ -40,4 +40,7 @@ export type {
   CallbackWorkPayload,
   CallbackDecisionPayload,
   ListTasksParams,
+  GraphConnectorConfig,
+  MailReceivedEvent,
+  MailReceivedResult,
 } from './types';

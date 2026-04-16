@@ -219,13 +219,55 @@ export type CallbackHandlers = {
  * Engine init config. Register once at server start.
  * Defines how to process interruptions (work items, decisions) and optional service vocabulary.
  */
+export type GraphConnectorConfig = {
+  tenantId: string;
+  clientId: string;
+  clientSecret: string;
+  /** Default polling interval for graph-mailbox connectors (ms). Default: 10000. */
+  pollingIntervalMs?: number;
+  /** Only fetch emails received within this many minutes. Default: 1440 (24h). */
+  sinceMinutes?: number;
+};
+
+export type MailReceivedEvent = {
+  mailbox: string;
+  instanceId: string;
+  definitionId: string;
+  email: {
+    id: string;
+    subject: string;
+    from: { name?: string; address: string };
+    toRecipients: Array<{ name?: string; address: string }>;
+    receivedDateTime: string;
+    bodyPreview: string;
+    body: { contentType: string; content: string };
+    hasAttachments: boolean;
+  };
+};
+
+export type MailReceivedResult = {
+  /** Set to true to cancel the instance (e.g. spam, duplicate, wrong mailbox). */
+  skip?: boolean;
+} | void;
+
 export type EngineInitConfig = {
   onWorkItem?: CallbackHandlers['onWorkItem'];
   onServiceCall?: CallbackHandlers['onServiceCall'];
   onDecision?: CallbackHandlers['onDecision'];
   onMultiInstanceResolve?: CallbackHandlers['onMultiInstanceResolve'];
+  /**
+   * Called when the graph-mailbox connector receives an email.
+   * The instance is already created (you have instanceId) but no token has advanced yet.
+   * Store domain data, fetch attachments, create conversations — then return.
+   * Return { skip: true } to terminate the instance without running the process.
+   */
+  onMailReceived?: (event: MailReceivedEvent) => Promise<MailReceivedResult>;
   /** Service/tool registry (e.g. tri:toolId → implementation). Handlers use this to resolve and invoke. */
   serviceVocabulary?: Record<string, unknown>;
+  /** Connector credentials. Overrides environment variables when provided. */
+  connectors?: {
+    'graph-mailbox'?: GraphConnectorConfig;
+  };
 };
 
 export type CallbackItem =

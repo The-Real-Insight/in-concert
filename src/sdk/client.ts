@@ -34,6 +34,7 @@ export class BpmnEngineClient {
   private config: SdkConfig;
   private initHandlers: CallbackHandlers | null = null;
   private serviceVocabulary: Record<string, unknown> | null = null;
+  private _onMailReceived: EngineInitConfig['onMailReceived'] | null = null;
 
   constructor(config: SdkConfig) {
     emitEngineAttributionNoticeOnce();
@@ -52,11 +53,28 @@ export class BpmnEngineClient {
       onMultiInstanceResolve: config.onMultiInstanceResolve,
     };
     this.serviceVocabulary = config.serviceVocabulary ?? null;
+    this._onMailReceived = config.onMailReceived ?? null;
+
+    // Apply connector credentials to global config (overrides env vars)
+    if (config.connectors?.['graph-mailbox']) {
+      const gc = config.connectors['graph-mailbox'];
+      const { config: engineConfig } = require('../config');
+      if (gc.tenantId) engineConfig.graph.tenantId = gc.tenantId;
+      if (gc.clientId) engineConfig.graph.clientId = gc.clientId;
+      if (gc.clientSecret) engineConfig.graph.clientSecret = gc.clientSecret;
+      if (gc.pollingIntervalMs != null) engineConfig.graph.pollingIntervalMs = gc.pollingIntervalMs;
+      if (gc.sinceMinutes != null) engineConfig.graph.sinceMinutes = gc.sinceMinutes;
+    }
   }
 
   /** Get the service vocabulary from init. Handlers can use this to resolve toolId → implementation. */
   getServiceVocabulary(): Record<string, unknown> | null {
     return this.serviceVocabulary;
+  }
+
+  /** Get the onMailReceived handler from init. Used by the connector worker. */
+  getOnMailReceived(): EngineInitConfig['onMailReceived'] | null {
+    return this._onMailReceived;
   }
 
   /**
