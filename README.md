@@ -28,6 +28,28 @@
 
 ---
 
+## What's new
+
+**Timer start events are here.** Deploy a BPMN process with a timer start event and the engine takes care of the rest — no external scheduler, no cron daemon, no infrastructure to manage. ISO 8601 durations, repeating intervals, date-times, and full 5-field cron expressions are all supported out of the box.
+
+One line in your BPMN and your process launches itself:
+
+```xml
+<bpmn:startEvent id="TimerStart">
+  <bpmn:timerEventDefinition>
+    <bpmn:timeCycle>R/PT1H</bpmn:timeCycle>
+  </bpmn:timerEventDefinition>
+</bpmn:startEvent>
+```
+
+Every hour. Every day at midnight. Every weekday at 8:30. Three times at 10-minute intervals then stop. A one-shot on a specific date. **You define the schedule in standard BPMN — the engine runs it, persists it, survives restarts, and scales across nodes.** Pause and resume schedules via the SDK or REST API at any time.
+
+No polling. No Lambda triggers. No third-party scheduling service. Just BPMN.
+
+[Full documentation](./docs/sdk/usage.md#timer-start-events) | [Getting started](./docs/getting-started.md)
+
+---
+
 ## What is this?
 
 **in-concert** executes **BPMN 2.0 process definitions** in Node.js. It is not a visual modeler or a full Camunda/Flowable replacement — it is a focused, embeddable runtime that covers the BPMN subset most production workflows actually need.
@@ -248,6 +270,9 @@ GET    /v1/instances/:id/state                      Get execution state
 POST   /v1/instances/:id/work-items/:wid/complete   Complete a work item
 POST   /v1/instances/:id/decisions/:did             Resolve an XOR gateway
 GET    /v1/tasks                                    Worklist query
+GET    /v1/timer-schedules                          List timer schedules
+POST   /v1/timer-schedules/:id/pause                Pause a timer
+POST   /v1/timer-schedules/:id/resume               Resume a timer
 WS     /ws                                          Push callbacks (REST mode)
 ```
 
@@ -279,7 +304,7 @@ Design & internals:
 
 in-concert implements a curated BPMN 2.0 subset. See the full [conformance matrix](./readme/TEST.md) for details. Unsupported elements fail fast and loudly — never silently.
 
-**Supported:** Start/End events · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
+**Supported:** Start/End events · Timer start events · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
 
 **Not in scope (yet):** Compensation · Complex gateways · Choreography · Conversation
 

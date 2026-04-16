@@ -3,6 +3,7 @@ import { parseBpmnXml } from './parser';
 import type { NormalizedGraph } from './types';
 import type { Db } from 'mongodb';
 import { getCollections } from '../db/collections';
+import { classifyTimer, computeNextFire, parseRepeat } from '../timers/expressions';
 
 export type DeployResult = {
   definitionId: string;
@@ -16,6 +17,57 @@ export type DeployParams = {
   overwrite?: boolean;
   tenantId?: string;
 };
+
+async function syncTimerSchedules(db: Db, definitionId: string, graph: NormalizedGraph): Promise<void> {
+  const { TimerSchedules } = getCollections(db);
+  const now = new Date();
+
+  // Find all timer start events in the graph
+  const timerStartNodes = graph.startNodeIds
+    .map(id => graph.nodes[id])
+    .filter(n => n?.type === 'startEvent' && n.timerDefinition);
+
+  // Remove schedules for start events that no longer have timers
+  const activeNodeIds = timerStartNodes.map(n => n.id);
+  await TimerSchedules.deleteMany({
+    definitionId,
+    ...(activeNodeIds.length > 0
+      ? { nodeId: { $nin: activeNodeIds } }
+      : {}),
+  });
+
+  // Upsert a schedule for each timer start event
+  for (const node of timerStartNodes) {
+    const expr = classifyTimer(node.timerDefinition!);
+    const nextFireAt = computeNextFire(expr, now);
+    let remainingReps: number | null = null;
+    if (expr.kind === 'cycle') {
+      const rep = parseRepeat(expr.raw);
+      remainingReps = rep.repetitions;
+    }
+
+    await TimerSchedules.updateOne(
+      { definitionId, nodeId: node.id },
+      {
+        $set: {
+          kind: expr.kind,
+          expression: expr.raw,
+          nextFireAt,
+          remainingReps,
+          status: 'ACTIVE',
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          _id: uuidv4(),
+          definitionId,
+          nodeId: node.id,
+          createdAt: now,
+        },
+      },
+      { upsert: true },
+    );
+  }
+}
 
 export async function deployDefinition(
   db: Db,
@@ -52,6 +104,7 @@ export async function deployDefinition(
         },
       }
     );
+    await syncTimerSchedules(db, existing._id, graph);
     return { definitionId: existing._id };
   }
 
@@ -67,6 +120,8 @@ export async function deployDefinition(
     createdAt: now,
     deployedAt: now,
   });
+
+  await syncTimerSchedules(db, definitionId, graph);
 
   return { definitionId };
 }

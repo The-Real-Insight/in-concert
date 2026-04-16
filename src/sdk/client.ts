@@ -674,6 +674,59 @@ export class BpmnEngineClient {
     return () => ws.close();
   }
 
+  // ── Timer schedules ───────────────────────────────────────────────────────
+
+  async listTimerSchedules(params?: {
+    definitionId?: string;
+    status?: string;
+  }): Promise<import('../db/collections').TimerScheduleDoc[]> {
+    if (this.config.mode === 'rest') {
+      const q = new URLSearchParams();
+      if (params?.definitionId) q.set('definitionId', params.definitionId);
+      if (params?.status) q.set('status', params.status);
+      const res = await fetch(`${this.config.baseUrl}/v1/timer-schedules?${q}`);
+      if (!res.ok) throw new Error(`List timer schedules failed: ${res.status}`);
+      const json = (await res.json()) as { items: import('../db/collections').TimerScheduleDoc[] };
+      return json.items;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TimerSchedules } = getCollections(this.config.db);
+    const filter: Record<string, unknown> = {};
+    if (params?.definitionId) filter.definitionId = params.definitionId;
+    if (params?.status) filter.status = params.status;
+    return TimerSchedules.find(filter).sort({ nextFireAt: 1 }).toArray();
+  }
+
+  async pauseTimerSchedule(scheduleId: string): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/timer-schedules/${scheduleId}/pause`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Pause timer failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TimerSchedules } = getCollections(this.config.db);
+    const result = await TimerSchedules.findOneAndUpdate(
+      { _id: scheduleId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: new Date() } },
+    );
+    if (!result) throw new Error('Timer schedule not found or not ACTIVE');
+  }
+
+  async resumeTimerSchedule(scheduleId: string): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/timer-schedules/${scheduleId}/resume`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Resume timer failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TimerSchedules } = getCollections(this.config.db);
+    const result = await TimerSchedules.findOneAndUpdate(
+      { _id: scheduleId, status: 'PAUSED' },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+    );
+    if (!result) throw new Error('Timer schedule not found or not PAUSED');
+  }
+
   /**
    * Close connections. No-op; caller manages DB/connection lifecycle.
    */

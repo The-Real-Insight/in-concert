@@ -45,4 +45,12 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db
     .collection(COLLECTION_NAMES.ProcessInstanceHistory)
     .createIndex({ instanceId: 1, seq: 1 });
+
+  await db
+    .collection(COLLECTION_NAMES.TimerSchedule)
+    .createIndex({ status: 1, nextFireAt: 1 });
+
+  await db
+    .collection(COLLECTION_NAMES.TimerSchedule)
+    .createIndex({ definitionId: 1, nodeId: 1 }, { unique: true });
 }

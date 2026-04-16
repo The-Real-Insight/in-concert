@@ -9,6 +9,7 @@ export const COLLECTION_NAMES = {
   Continuation: 'Continuation',
   Outbox: 'Outbox',
   HumanTask: 'HumanTask',
+  TimerSchedule: 'TimerSchedule',
 } as const;
 
 /** Audit trail: one row per task/instance lifecycle event. */
@@ -258,6 +259,24 @@ export type OutboxDoc = {
   updatedAt: Date;
 };
 
+export type TimerScheduleStatus = 'ACTIVE' | 'PAUSED' | 'EXHAUSTED';
+
+export type TimerScheduleDoc = {
+  _id: string;
+  definitionId: string;
+  nodeId: string;
+  kind: 'cycle' | 'date' | 'duration' | 'cron';
+  expression: string;
+  nextFireAt: Date;
+  lastFiredAt?: Date;
+  remainingReps: number | null;
+  status: TimerScheduleStatus;
+  ownerId?: string;
+  leaseUntil?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type NodeDef = {
   id: string;
   type: string;
@@ -313,6 +332,9 @@ export function getCollections(database: Db) {
     HumanTasks: database.collection<HumanTaskDoc>(COLLECTION_NAMES.HumanTask),
     ProcessInstanceHistory: database.collection<ProcessInstanceHistoryDoc>(
       COLLECTION_NAMES.ProcessInstanceHistory
+    ),
+    TimerSchedules: database.collection<TimerScheduleDoc>(
+      COLLECTION_NAMES.TimerSchedule
     ),
   };
 }

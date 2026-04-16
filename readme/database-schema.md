@@ -34,6 +34,7 @@ MongoDB **collection names** are PascalCase **singular**. [`getCollections()`](.
 | `Continuation` | `Continuations` | **Work queue** for the continuation processor (START, token at node, work completed, …). |
 | `Outbox` | `Outbox` | **Outbound callbacks** to integrators (work, decisions, events, multi-instance). |
 | `HumanTask` | `HumanTasks` | **Worklist projection** for user tasks (OPEN / CLAIMED / COMPLETED / CANCELED). |
+| `TimerSchedule` | `TimerSchedules` | **Timer start event schedules** — one per timer start event per deployed definition. |
 
 Collections are created on **first insert**. There is no separate migration beyond `ensureIndexes`.
 
@@ -395,6 +396,30 @@ Application-level callback shapes are described in [`docs/sdk/usage.md`](../docs
 
 ---
 
+## `TimerSchedule` collection
+
+Persistent schedule for BPMN **timer start events**. Created or updated on `deployDefinition` when a process has a `<bpmn:startEvent>` with a `<bpmn:timerEventDefinition>`. The timer worker polls this collection and starts a new process instance whenever `nextFireAt` is due.
+
+| Field | Type | Semantics |
+|-------|------|-----------|
+| `_id` | string | Schedule id. |
+| `definitionId` | string | Process definition to start when the timer fires. |
+| `nodeId` | string | BPMN start event node id. |
+| `kind` | enum | `cycle` \| `date` \| `duration` \| `cron`. |
+| `expression` | string | Timer expression: ISO 8601 duration (`PT30M`), repeating interval (`R/PT1H`, `R3/PT10M`), date-time (`2026-04-16T09:00:00Z`), or cron (`0 * * * *`). |
+| `nextFireAt` | Date | Next scheduled fire time. |
+| `lastFiredAt` | Date \| omitted | Last time the timer fired. |
+| `remainingReps` | number \| null | For bounded cycles (`R3/PT10M`): decrements each fire. `null` for unbounded or non-cycle. |
+| `status` | enum | `ACTIVE` \| `PAUSED` \| `EXHAUSTED`. |
+| `ownerId` | string \| omitted | Worker id holding a lease (same pattern as `Continuation`). |
+| `leaseUntil` | Date \| omitted | Lease expiry. |
+| `createdAt` | Date | Insert time. |
+| `updatedAt` | Date | Last update time. |
+
+**Lifecycle:** `ACTIVE` → timer fires repeatedly (cycle/cron) or once (date/duration) → `EXHAUSTED` when no more fires remain. `PAUSED` stops the worker from claiming it; `resume` sets it back to `ACTIVE`.
+
+---
+
 ## Indexes
 
 Created by **`ensureIndexes(db)`** in [`src/db/indexes.ts`](../src/db/indexes.ts).
@@ -412,6 +437,8 @@ Created by **`ensureIndexes(db)`** in [`src/db/indexes.ts`](../src/db/indexes.ts
 | `HumanTask` | `status`, `assigneeUserId`, `roleId`, `createdAt` (desc) | non-unique | Combined assignee + role listing. |
 | `HumanTask` | `instanceId` ascending | non-unique | Tasks for one instance. |
 | `ProcessInstanceHistory` | `instanceId` ascending, `seq` ascending | non-unique | Ordered history reads per instance. |
+| `TimerSchedule` | `status` ascending, `nextFireAt` ascending | non-unique | Worker claims **active** timers in due order. |
+| `TimerSchedule` | `definitionId` ascending, `nodeId` ascending | **unique** | One schedule per timer start event per definition. |
 
 ---
 

@@ -54,9 +54,11 @@ function getTimerDefinition(el: { eventDefinitions?: unknown[] }): string | unde
   if (!defs?.length) return undefined;
   const timer = defs.find((d) => (d as { $type?: string }).$type === 'bpmn:TimerEventDefinition');
   if (!timer) return undefined;
-  return (timer as { timeCycle?: string; timeDuration?: string }).timeCycle
-    ?? (timer as { timeDuration?: string }).timeDuration
-    ?? undefined;
+  type TimerChild = string | { body?: string } | undefined;
+  const t = timer as { timeCycle?: TimerChild; timeDuration?: TimerChild; timeDate?: TimerChild };
+  const raw = t.timeCycle ?? t.timeDuration ?? t.timeDate;
+  if (raw == null) return undefined;
+  return typeof raw === 'string' ? raw : raw.body;
 }
 
 function getMessageRef(el: { messageRef?: { name?: string }; eventDefinitions?: unknown[] }): string | undefined {
@@ -285,6 +287,7 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       }
 
       if (type === 'bpmn:StartEvent') {
+        node.timerDefinition = getTimerDefinition(el as { eventDefinitions?: unknown[] });
         if (parentSubprocessId) {
           if (!subprocessStartNodeIds[parentSubprocessId])
             subprocessStartNodeIds[parentSubprocessId] = [];

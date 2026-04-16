@@ -1212,6 +1212,70 @@ Token reaches USER_TASK → Engine creates workItem → Engine emits CALLBACK_WO
 
 ---
 
+## Timer start events
+
+BPMN timer start events automatically create new process instances on a schedule. The engine handles this end-to-end — no application code is needed beyond deploying the process.
+
+### BPMN definition
+
+Add a `<bpmn:timerEventDefinition>` to a `<bpmn:startEvent>`:
+
+```xml
+<bpmn:startEvent id="TimerStart" name="Every hour">
+  <bpmn:timerEventDefinition>
+    <bpmn:timeCycle>R/PT1H</bpmn:timeCycle>
+  </bpmn:timerEventDefinition>
+</bpmn:startEvent>
+```
+
+### Supported expressions
+
+| Element | Format | Example | Behaviour |
+|---------|--------|---------|-----------|
+| `timeCycle` | ISO 8601 repeating interval | `R/PT1H` (unbounded), `R3/PT10M` (3 times) | Recurring. Fires repeatedly until exhausted or paused. |
+| `timeCycle` | Cron (5-field) | `0 * * * *`, `30 8 * * 1-5` | Recurring. Standard cron schedule (minute, hour, day, month, weekday). |
+| `timeDate` | ISO 8601 date-time | `2026-04-16T09:00:00Z` | One-shot. Fires once at the specified time. |
+| `timeDuration` | ISO 8601 duration | `PT30M` | One-shot. Fires once, offset from deploy time. |
+
+### How it works
+
+1. **Deploy** — `deployDefinition` scans the process graph for timer start events. For each one, a `TimerSchedule` document is created (or updated on redeploy) with the computed `nextFireAt`.
+2. **Timer worker** — a background loop polls `TimerSchedule` for due timers (`status: ACTIVE`, `nextFireAt <= now`). When found, it claims the schedule (optimistic lease), calls `startInstance`, then advances `nextFireAt` or marks the schedule `EXHAUSTED`.
+3. **Process runs normally** — the started instance is identical to one started via the API. All callbacks (service tasks, decisions, user tasks) fire as usual.
+
+### SDK methods
+
+```typescript
+// List all timer schedules (optionally filter by definition or status)
+const schedules = await client.listTimerSchedules({ definitionId, status: 'ACTIVE' });
+
+// Pause a timer (stops firing until resumed)
+await client.pauseTimerSchedule(scheduleId);
+
+// Resume a paused timer
+await client.resumeTimerSchedule(scheduleId);
+```
+
+### REST API
+
+```
+GET    /v1/timer-schedules                          List schedules (query: ?definitionId=&status=)
+GET    /v1/timer-schedules/:id                      Get one schedule
+POST   /v1/timer-schedules/:id/pause                Pause (ACTIVE → PAUSED)
+POST   /v1/timer-schedules/:id/resume               Resume (PAUSED → ACTIVE)
+```
+
+### TimerSchedule status lifecycle
+
+```
+ACTIVE ──▶ fires repeatedly (cycle/cron) or once (date/duration) ──▶ EXHAUSTED
+   │                                                                      │
+   └──▶ PAUSED (manual) ──▶ ACTIVE (resume)                              │
+                                                                     (terminal)
+```
+
+---
+
 ## Prerequisites
 
 - Node.js 18+
