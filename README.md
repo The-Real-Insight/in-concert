@@ -30,19 +30,28 @@
 
 ## What's new
 
-**Timer start events are here.** Deploy a BPMN process with a timer start event and the engine takes care of the rest — no external scheduler, no cron daemon, no infrastructure to manage. ISO 8601 durations, repeating intervals, date-times, and full 5-field cron expressions are all supported out of the box.
+### RRULE recurrence — full calendar-style scheduling
 
-One line in your BPMN and your process launches itself:
+Timer start events now support **RFC 5545 RRULE expressions**, bringing Outlook-style recurrence patterns to BPMN process scheduling. Define schedules that cron simply cannot express:
 
 ```xml
-<bpmn:startEvent id="TimerStart">
+<bpmn:startEvent id="TimerStart" name="Last Friday of every month">
   <bpmn:timerEventDefinition>
-    <bpmn:timeCycle>R/PT1H</bpmn:timeCycle>
+    <bpmn:timeCycle>DTSTART:20260130T090000Z
+RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1</bpmn:timeCycle>
   </bpmn:timerEventDefinition>
 </bpmn:startEvent>
 ```
 
-Every hour. Every day at midnight. Every weekday at 8:30. Three times at 10-minute intervals then stop. A one-shot on a specific date. **You define the schedule in standard BPMN — the engine runs it, persists it, survives restarts, and scales across nodes.** Pause and resume schedules via the SDK or REST API at any time.
+Every 3 days. Every 2 weeks on Monday and Friday. The second Tuesday of every month. The last weekday of each quarter. **Any pattern you can define in a calendar invitation, you can now use to schedule a process.** `FREQ`, `INTERVAL`, `BYDAY`, `BYMONTHDAY`, `BYMONTH`, `BYSETPOS`, `COUNT`, and `UNTIL` are all supported — zero external dependencies.
+
+RRULE joins the existing timer expressions (ISO 8601 intervals, cron, date-times, durations) so nothing breaks. [Full RRULE documentation](./docs/sdk/usage.md#rrule-recurrence-rules-rfc-5545)
+
+### Timer start events
+
+Deploy a BPMN process with a timer start event and the engine takes care of the rest — no external scheduler, no cron daemon, no infrastructure to manage. ISO 8601 durations, repeating intervals, date-times, 5-field cron, and now RRULE expressions are all supported out of the box.
+
+**You define the schedule in standard BPMN — the engine runs it, persists it, survives restarts, and scales across nodes.** Pause and resume schedules via the SDK or REST API at any time.
 
 No polling. No Lambda triggers. No third-party scheduling service. Just BPMN.
 
@@ -304,7 +313,7 @@ Design & internals:
 
 in-concert implements a curated BPMN 2.0 subset. See the full [conformance matrix](./readme/TEST.md) for details. Unsupported elements fail fast and loudly — never silently.
 
-**Supported:** Start/End events · Timer start events · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
+**Supported:** Start/End events · Timer start events (cron, ISO 8601, RRULE) · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
 
 **Not in scope (yet):** Compensation · Complex gateways · Choreography · Conversation
 

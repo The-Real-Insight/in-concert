@@ -7,6 +7,14 @@ Versions are published to npm automatically on push to `main`.
 
 ---
 
+## [0.1.20] — 2026-04-16
+
+### Added
+- **RRULE recurrence rules (RFC 5545)** for timer start events. Supports `FREQ` (DAILY, WEEKLY, MONTHLY, YEARLY), `INTERVAL`, `BYDAY`, `BYMONTHDAY`, `BYMONTH`, `BYSETPOS`, `COUNT`, and `UNTIL` — enabling calendar-style schedules that cron cannot express (e.g. "last Friday of every month", "every 2 weeks on Mon/Wed/Fri", "second Tuesday of November").
+- Participant-level `tri:roleId` inheritance in BPMN parser. When a process has no lanes, nodes inherit the role from their participant pool — fixing worklist visibility for single-pool processes.
+
+---
+
 ## [0.1.18] — 2026-04-11
 
 ### Added

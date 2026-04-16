@@ -1234,8 +1234,52 @@ Add a `<bpmn:timerEventDefinition>` to a `<bpmn:startEvent>`:
 |---------|--------|---------|-----------|
 | `timeCycle` | ISO 8601 repeating interval | `R/PT1H` (unbounded), `R3/PT10M` (3 times) | Recurring. Fires repeatedly until exhausted or paused. |
 | `timeCycle` | Cron (5-field) | `0 * * * *`, `30 8 * * 1-5` | Recurring. Standard cron schedule (minute, hour, day, month, weekday). |
+| `timeCycle` | RRULE (RFC 5545) | `DTSTART:20260416T090000Z`<br>`RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR` | Recurring. Calendar-style recurrence rules — see below. |
 | `timeDate` | ISO 8601 date-time | `2026-04-16T09:00:00Z` | One-shot. Fires once at the specified time. |
 | `timeDuration` | ISO 8601 duration | `PT30M` | One-shot. Fires once, offset from deploy time. |
+
+### RRULE recurrence rules (RFC 5545)
+
+For schedules that go beyond what cron can express — every N days, every 2 weeks, the last Friday of each month, the second Tuesday of November — use RRULE expressions. The engine implements the RFC 5545 recurrence rule subset directly, with no external dependencies.
+
+An RRULE expression consists of a `DTSTART` line (anchor date/time in UTC) and an `RRULE` line:
+
+```xml
+<bpmn:startEvent id="TimerStart" name="Last Friday of every month">
+  <bpmn:timerEventDefinition>
+    <bpmn:timeCycle>DTSTART:20260130T090000Z
+RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1</bpmn:timeCycle>
+  </bpmn:timerEventDefinition>
+</bpmn:startEvent>
+```
+
+#### Supported RRULE parameters
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `FREQ` | `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY` | Recurrence frequency (required). |
+| `INTERVAL` | integer (default: 1) | Repeat every N periods (e.g. every 3 days, every 2 months). |
+| `BYDAY` | `MO`,`TU`,`WE`,`TH`,`FR`,`SA`,`SU` | Specific weekdays. Combine with `BYSETPOS` for "Nth weekday of month." |
+| `BYMONTHDAY` | 1–31 | Specific day(s) of month. Months without the specified day are skipped. |
+| `BYMONTH` | 1–12 | Restrict to specific month(s). Used with `YEARLY` frequency. |
+| `BYSETPOS` | integer (1–4, -1) | Select the Nth (-1 = last) occurrence from the `BYDAY` set within a period. |
+| `COUNT` | integer | Stop after N occurrences. |
+| `UNTIL` | ISO date-time | Stop after this date. |
+
+#### RRULE examples
+
+| Schedule | Expression |
+|----------|------------|
+| Every 3 days at 09:00 | `DTSTART:20260416T090000Z`<br>`RRULE:FREQ=DAILY;INTERVAL=3` |
+| Every 2 weeks on Mon, Wed, Fri | `DTSTART:20260413T083000Z`<br>`RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE,FR` |
+| 15th of every month at 10:00 | `DTSTART:20260115T100000Z`<br>`RRULE:FREQ=MONTHLY;BYMONTHDAY=15` |
+| Last Friday of every month | `DTSTART:20260130T090000Z`<br>`RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1` |
+| Second Tuesday of every month | `DTSTART:20260113T090000Z`<br>`RRULE:FREQ=MONTHLY;BYDAY=TU;BYSETPOS=2` |
+| First weekday of every month | `DTSTART:20260101T090000Z`<br>`RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1` |
+| Every 2 months on the 15th | `DTSTART:20260115T100000Z`<br>`RRULE:FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=15` |
+| Every year on March 15 | `DTSTART:20260315T090000Z`<br>`RRULE:FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15` |
+| Second Tuesday of November, yearly | `DTSTART:20261110T090000Z`<br>`RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=TU;BYSETPOS=2` |
+| Every weekday at 08:30, stop after 100 | `DTSTART:20260416T083000Z`<br>`RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;COUNT=100` |
 
 ### How it works
 
@@ -1268,7 +1312,7 @@ POST   /v1/timer-schedules/:id/resume               Resume (PAUSED → ACTIVE)
 ### TimerSchedule status lifecycle
 
 ```
-ACTIVE ──▶ fires repeatedly (cycle/cron) or once (date/duration) ──▶ EXHAUSTED
+ACTIVE ──▶ fires repeatedly (cycle/cron/rrule) or once (date/duration) ──▶ EXHAUSTED
    │                                                                      │
    └──▶ PAUSED (manual) ──▶ ACTIVE (resume)                              │
                                                                      (terminal)

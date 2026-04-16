@@ -165,9 +165,260 @@ export function nextCronFire(cron: ParsedCron, after: Date): Date {
   throw new Error('No matching cron fire time within 2 years');
 }
 
+// ── RRULE (RFC 5545 subset) ──────────────────────────────────────────────────
+
+export interface ParsedRRule {
+  dtstart: Date;
+  freq: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+  interval: number;
+  byDay: string[] | null;       // ['MO','WE','FR']
+  byMonthDay: number[] | null;  // [15]
+  byMonth: number[] | null;     // [1..12]
+  bySetPos: number[] | null;    // [1], [-1], [2]
+  count: number | null;
+  until: Date | null;
+}
+
+const RRULE_DAY_MAP: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+
+export function parseRRule(expr: string): ParsedRRule {
+  // Accept newline or semicolon between DTSTART and RRULE
+  const lines = expr.replace(/\r/g, '').split(/\n|;(?=RRULE:)/);
+  let dtstartStr = '';
+  let rruleLine = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('DTSTART:')) dtstartStr = trimmed.slice(8);
+    else if (trimmed.startsWith('RRULE:')) rruleLine = trimmed.slice(6);
+  }
+  if (!rruleLine) throw new Error(`Invalid RRULE expression: ${expr}`);
+
+  const dtstart = dtstartStr ? new Date(
+    dtstartStr.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/, '$1-$2-$3T$4:$5:$6Z')
+  ) : new Date();
+
+  const params: Record<string, string> = {};
+  for (const part of rruleLine.split(';')) {
+    const [k, v] = part.split('=');
+    if (k && v) params[k] = v;
+  }
+
+  const freq = params.FREQ as ParsedRRule['freq'];
+  if (!freq || !['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(freq))
+    throw new Error(`Unsupported RRULE FREQ: ${params.FREQ}`);
+
+  return {
+    dtstart,
+    freq,
+    interval: params.INTERVAL ? parseInt(params.INTERVAL, 10) : 1,
+    byDay: params.BYDAY ? params.BYDAY.split(',') : null,
+    byMonthDay: params.BYMONTHDAY ? params.BYMONTHDAY.split(',').map(Number) : null,
+    byMonth: params.BYMONTH ? params.BYMONTH.split(',').map(Number) : null,
+    bySetPos: params.BYSETPOS ? params.BYSETPOS.split(',').map(Number) : null,
+    count: params.COUNT ? parseInt(params.COUNT, 10) : null,
+    until: params.UNTIL ? new Date(
+      params.UNTIL.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/, '$1-$2-$3T$4:$5:$6Z')
+    ) : null,
+  };
+}
+
+/** Get all days in a month (1-based) matching specific weekdays. */
+function weekdayOccurrencesInMonth(year: number, month0: number, dayNums: number[]): number[] {
+  const days: number[] = [];
+  const d = new Date(Date.UTC(year, month0, 1));
+  while (d.getUTCMonth() === month0) {
+    if (dayNums.includes(d.getUTCDay())) days.push(d.getUTCDate());
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return days;
+}
+
+/** Resolve BYDAY strings to day-of-week numbers. Handles special 'weekday'/'weekend day' groups. */
+function resolveDayNums(byDay: string[]): number[] {
+  const result: number[] = [];
+  for (const d of byDay) {
+    const upper = d.toUpperCase();
+    if (RRULE_DAY_MAP[upper] != null) result.push(RRULE_DAY_MAP[upper]);
+    // Support weekday/weekend day groups if encoded
+  }
+  return result;
+}
+
+/**
+ * Find the next fire time strictly after `after` for an RRULE schedule.
+ * Returns null if exhausted (COUNT/UNTIL).
+ */
+export function nextRRuleFire(rrule: ParsedRRule, after: Date): Date | null {
+  const { dtstart, freq, interval, byDay, byMonthDay, byMonth, bySetPos, count, until } = rrule;
+  const h = dtstart.getUTCHours(), m = dtstart.getUTCMinutes(), s = dtstart.getUTCSeconds();
+
+  // Generate candidate dates forward from dtstart, yield the first one strictly after `after`.
+  // Safety limit: 1500 iterations (covers >4 years of daily, >28 years of monthly).
+  let occurrenceCount = 0;
+
+  // ── DAILY ──
+  if (freq === 'DAILY') {
+    const d = new Date(dtstart);
+    // Jump ahead close to `after`
+    if (d <= after) {
+      const diffDays = Math.floor((after.getTime() - d.getTime()) / 86400000);
+      const periods = Math.floor(diffDays / interval);
+      d.setUTCDate(d.getUTCDate() + periods * interval);
+    }
+    for (let i = 0; i < 1500; i++) {
+      if (d > after) {
+        occurrenceCount++;
+        if (count != null && occurrenceCount > count) return null;
+        if (until && d > until) return null;
+        return d;
+      }
+      d.setUTCDate(d.getUTCDate() + interval);
+      // Count from dtstart for COUNT
+      occurrenceCount = Math.floor((d.getTime() - dtstart.getTime()) / (interval * 86400000));
+    }
+    return null;
+  }
+
+  // ── WEEKLY ──
+  if (freq === 'WEEKLY') {
+    const dayNums = byDay ? resolveDayNums(byDay) : [dtstart.getUTCDay()];
+    // Start from dtstart, advance week by week
+    const weekStart = new Date(dtstart);
+    // Jump ahead
+    if (weekStart <= after) {
+      const diffWeeks = Math.floor((after.getTime() - weekStart.getTime()) / (7 * 86400000 * interval));
+      weekStart.setUTCDate(weekStart.getUTCDate() + diffWeeks * interval * 7);
+    }
+    occurrenceCount = 0;
+    for (let w = 0; w < 1500; w++) {
+      // Generate all matching days in this week-window
+      for (let dayOff = 0; dayOff < 7; dayOff++) {
+        const candidate = new Date(weekStart);
+        candidate.setUTCDate(candidate.getUTCDate() + dayOff);
+        candidate.setUTCHours(h, m, s, 0);
+        if (dayNums.includes(candidate.getUTCDay()) && candidate > after) {
+          occurrenceCount++;
+          if (count != null && occurrenceCount > count) return null;
+          if (until && candidate > until) return null;
+          return candidate;
+        }
+      }
+      weekStart.setUTCDate(weekStart.getUTCDate() + interval * 7);
+    }
+    return null;
+  }
+
+  // ── MONTHLY ──
+  if (freq === 'MONTHLY') {
+    let year = dtstart.getUTCFullYear();
+    let month0 = dtstart.getUTCMonth();
+    // Jump ahead
+    if (new Date(Date.UTC(year, month0 + 1, 0, h, m, s)) <= after) {
+      const dtMonth = dtstart.getUTCFullYear() * 12 + dtstart.getUTCMonth();
+      const afterMonth = after.getUTCFullYear() * 12 + after.getUTCMonth();
+      const diff = afterMonth - dtMonth;
+      const periods = Math.floor(diff / interval);
+      month0 += periods * interval;
+      year = dtstart.getUTCFullYear() + Math.floor(month0 / 12);
+      month0 = month0 % 12;
+    }
+    occurrenceCount = 0;
+    for (let i = 0; i < 1500; i++) {
+      const daysInMonth = new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate();
+
+      let candidateDays: number[] = [];
+      if (byDay && bySetPos) {
+        // Relative: "the Nth [weekday] of the month"
+        const dayNums = resolveDayNums(byDay);
+        const allOccurrences = weekdayOccurrencesInMonth(year, month0, dayNums);
+        for (const pos of bySetPos) {
+          const idx = pos > 0 ? pos - 1 : allOccurrences.length + pos;
+          if (idx >= 0 && idx < allOccurrences.length) candidateDays.push(allOccurrences[idx]);
+        }
+      } else if (byMonthDay) {
+        // Absolute: specific day(s) of month
+        for (const d of byMonthDay) {
+          if (d <= daysInMonth) candidateDays.push(d);
+        }
+      } else {
+        // Default: same day as dtstart
+        const dd = dtstart.getUTCDate();
+        if (dd <= daysInMonth) candidateDays.push(dd);
+      }
+
+      candidateDays.sort((a, b) => a - b);
+      for (const day of candidateDays) {
+        const candidate = new Date(Date.UTC(year, month0, day, h, m, s));
+        if (candidate.getUTCMonth() !== month0) continue; // overflow guard
+        if (candidate > after) {
+          occurrenceCount++;
+          if (count != null && occurrenceCount > count) return null;
+          if (until && candidate > until) return null;
+          return candidate;
+        }
+      }
+
+      month0 += interval;
+      year += Math.floor(month0 / 12);
+      month0 = month0 % 12;
+    }
+    return null;
+  }
+
+  // ── YEARLY ──
+  if (freq === 'YEARLY') {
+    let year = dtstart.getUTCFullYear();
+    if (new Date(Date.UTC(year, 11, 31, h, m, s)) <= after) {
+      const diff = after.getUTCFullYear() - year;
+      const periods = Math.floor(diff / interval);
+      year += periods * interval;
+    }
+    const months = byMonth ? byMonth.map(m0 => m0 - 1) : [dtstart.getUTCMonth()];
+    occurrenceCount = 0;
+    for (let i = 0; i < 1500; i++) {
+      for (const month0 of months) {
+        const daysInMonth = new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate();
+
+        let candidateDays: number[] = [];
+        if (byDay && bySetPos) {
+          const dayNums = resolveDayNums(byDay);
+          const allOccurrences = weekdayOccurrencesInMonth(year, month0, dayNums);
+          for (const pos of bySetPos) {
+            const idx = pos > 0 ? pos - 1 : allOccurrences.length + pos;
+            if (idx >= 0 && idx < allOccurrences.length) candidateDays.push(allOccurrences[idx]);
+          }
+        } else if (byMonthDay) {
+          for (const d of byMonthDay) {
+            if (d <= daysInMonth) candidateDays.push(d);
+          }
+        } else {
+          const dd = dtstart.getUTCDate();
+          if (dd <= daysInMonth) candidateDays.push(dd);
+        }
+
+        candidateDays.sort((a, b) => a - b);
+        for (const day of candidateDays) {
+          const candidate = new Date(Date.UTC(year, month0, day, h, m, s));
+          if (candidate.getUTCMonth() !== month0) continue;
+          if (candidate > after) {
+            occurrenceCount++;
+            if (count != null && occurrenceCount > count) return null;
+            if (until && candidate > until) return null;
+            return candidate;
+          }
+        }
+      }
+      year += interval;
+    }
+    return null;
+  }
+
+  return null;
+}
+
 // ── Timer expression classification ──────────────────────────────────────────
 
-export type TimerKind = 'cycle' | 'date' | 'duration' | 'cron';
+export type TimerKind = 'cycle' | 'date' | 'duration' | 'cron' | 'rrule';
 
 export interface TimerExpression {
   kind: TimerKind;
@@ -179,6 +430,7 @@ export interface TimerExpression {
  */
 export function classifyTimer(expr: string): TimerExpression {
   const s = expr.trim();
+  if (s.includes('RRULE:') || s.startsWith('DTSTART:')) return { kind: 'rrule', raw: s };
   if (REPEAT_RE.test(s)) return { kind: 'cycle', raw: s };
   if (ISO_DURATION_RE.test(s)) return { kind: 'duration', raw: s };
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return { kind: 'date', raw: s };
@@ -207,6 +459,13 @@ export function computeNextFire(expr: TimerExpression, referenceTime: Date): Dat
     case 'cron':
       return nextCronFire(parseCron(expr.raw), referenceTime);
 
+    case 'rrule': {
+      const parsed = parseRRule(expr.raw);
+      const next = nextRRuleFire(parsed, referenceTime);
+      if (!next) throw new Error('RRULE schedule is already exhausted');
+      return next;
+    }
+
     default:
       throw new Error(`Unknown timer kind: ${(expr as TimerExpression).kind}`);
   }
@@ -234,6 +493,11 @@ export function computeNextFireAfter(
 
     case 'cron':
       return nextCronFire(parseCron(expr.raw), firedAt);
+
+    case 'rrule': {
+      const parsed = parseRRule(expr.raw);
+      return nextRRuleFire(parsed, firedAt);
+    }
 
     default:
       return null;

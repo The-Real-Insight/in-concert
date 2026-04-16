@@ -4,6 +4,8 @@ import {
   parseRepeat,
   parseCron,
   nextCronFire,
+  parseRRule,
+  nextRRuleFire,
   classifyTimer,
   computeNextFire,
   computeNextFireAfter,
@@ -191,5 +193,164 @@ describe('computeNextFireAfter', () => {
     const fired = new Date('2026-04-16T10:00:00Z');
     const next = computeNextFireAfter(expr, fired, null);
     expect(next!.toISOString()).toBe('2026-04-16T11:00:00.000Z');
+  });
+
+  it('rrule: returns next fire', () => {
+    const expr = classifyTimer('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY;INTERVAL=1');
+    const fired = new Date('2026-04-16T09:00:00Z');
+    const next = computeNextFireAfter(expr, fired, null);
+    expect(next!.toISOString()).toBe('2026-04-17T09:00:00.000Z');
+  });
+});
+
+// ── RRULE ────────────────────────────────────────────────────────────────────
+
+describe('parseRRule', () => {
+  it('parses basic daily rule', () => {
+    const r = parseRRule('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY;INTERVAL=3');
+    expect(r.freq).toBe('DAILY');
+    expect(r.interval).toBe(3);
+    expect(r.dtstart.toISOString()).toBe('2026-04-16T09:00:00.000Z');
+  });
+
+  it('parses weekly with BYDAY', () => {
+    const r = parseRRule('DTSTART:20260413T083000Z\nRRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE,FR');
+    expect(r.freq).toBe('WEEKLY');
+    expect(r.interval).toBe(2);
+    expect(r.byDay).toEqual(['MO', 'WE', 'FR']);
+  });
+
+  it('parses monthly with BYSETPOS', () => {
+    const r = parseRRule('DTSTART:20260424T090000Z\nRRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1');
+    expect(r.freq).toBe('MONTHLY');
+    expect(r.byDay).toEqual(['FR']);
+    expect(r.bySetPos).toEqual([-1]);
+  });
+
+  it('accepts semicolon separator between DTSTART and RRULE', () => {
+    const r = parseRRule('DTSTART:20260416T090000Z;RRULE:FREQ=DAILY;INTERVAL=1');
+    expect(r.freq).toBe('DAILY');
+  });
+
+  it('parses COUNT', () => {
+    const r = parseRRule('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY;COUNT=5');
+    expect(r.count).toBe(5);
+  });
+
+  it('parses UNTIL', () => {
+    const r = parseRRule('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY;UNTIL=20261231T235959Z');
+    expect(r.until!.toISOString()).toBe('2026-12-31T23:59:59.000Z');
+  });
+});
+
+describe('nextRRuleFire', () => {
+  it('DAILY every 3 days', () => {
+    const r = parseRRule('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY;INTERVAL=3');
+    const after = new Date('2026-04-16T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    expect(next!.toISOString()).toBe('2026-04-19T09:00:00.000Z');
+  });
+
+  it('DAILY every 1 day, first fire is dtstart if after < dtstart', () => {
+    const r = parseRRule('DTSTART:20260420T100000Z\nRRULE:FREQ=DAILY;INTERVAL=1');
+    const after = new Date('2026-04-16T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    expect(next!.toISOString()).toBe('2026-04-20T10:00:00.000Z');
+  });
+
+  it('WEEKLY every 2 weeks on MO,WE,FR', () => {
+    const r = parseRRule('DTSTART:20260413T083000Z\nRRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE,FR');
+    // 2026-04-13 is a Monday. After that Monday at 08:30:
+    const after = new Date('2026-04-13T08:30:00Z');
+    const next = nextRRuleFire(r, after);
+    // Next in same week: Wednesday 2026-04-15
+    expect(next!.toISOString()).toBe('2026-04-15T08:30:00.000Z');
+  });
+
+  it('WEEKLY skips to next interval week', () => {
+    const r = parseRRule('DTSTART:20260413T090000Z\nRRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO');
+    // After the first Monday (2026-04-13), next should be 2 weeks later
+    const after = new Date('2026-04-13T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    expect(next!.toISOString()).toBe('2026-04-27T09:00:00.000Z');
+  });
+
+  it('MONTHLY on the 15th', () => {
+    const r = parseRRule('DTSTART:20260115T100000Z\nRRULE:FREQ=MONTHLY;BYMONTHDAY=15');
+    const after = new Date('2026-04-16T00:00:00Z');
+    const next = nextRRuleFire(r, after);
+    expect(next!.toISOString()).toBe('2026-05-15T10:00:00.000Z');
+  });
+
+  it('MONTHLY last Friday (BYSETPOS=-1)', () => {
+    const r = parseRRule('DTSTART:20260130T090000Z\nRRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1');
+    const after = new Date('2026-04-01T00:00:00Z');
+    const next = nextRRuleFire(r, after);
+    // Last Friday of April 2026 = April 24
+    expect(next!.toISOString()).toBe('2026-04-24T09:00:00.000Z');
+  });
+
+  it('MONTHLY second Tuesday (BYSETPOS=2)', () => {
+    const r = parseRRule('DTSTART:20260113T090000Z\nRRULE:FREQ=MONTHLY;BYDAY=TU;BYSETPOS=2');
+    const after = new Date('2026-04-14T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    // Second Tuesday of May 2026 = May 12
+    expect(next!.toISOString()).toBe('2026-05-12T09:00:00.000Z');
+  });
+
+  it('MONTHLY first weekday (MO-FR, BYSETPOS=1)', () => {
+    const r = parseRRule('DTSTART:20260101T090000Z\nRRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1');
+    const after = new Date('2026-04-30T00:00:00Z');
+    const next = nextRRuleFire(r, after);
+    // First weekday of May 2026 = May 1 (Friday)
+    expect(next!.toISOString()).toBe('2026-05-01T09:00:00.000Z');
+  });
+
+  it('MONTHLY on 31st skips short months', () => {
+    const r = parseRRule('DTSTART:20260131T090000Z\nRRULE:FREQ=MONTHLY;BYMONTHDAY=31');
+    const after = new Date('2026-01-31T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    // Feb has no 31st, March has 31st
+    expect(next!.toISOString()).toBe('2026-03-31T09:00:00.000Z');
+  });
+
+  it('YEARLY on March 15', () => {
+    const r = parseRRule('DTSTART:20260315T090000Z\nRRULE:FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=15');
+    const after = new Date('2026-03-15T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    expect(next!.toISOString()).toBe('2027-03-15T09:00:00.000Z');
+  });
+
+  it('YEARLY second Tuesday of November', () => {
+    const r = parseRRule('DTSTART:20261110T090000Z\nRRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=TU;BYSETPOS=2');
+    const after = new Date('2026-01-01T00:00:00Z');
+    const next = nextRRuleFire(r, after);
+    // Second Tuesday of November 2026 = Nov 10
+    expect(next!.toISOString()).toBe('2026-11-10T09:00:00.000Z');
+  });
+
+  it('COUNT exhaustion', () => {
+    const r = parseRRule('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY;INTERVAL=1;COUNT=3');
+    // After the 3rd occurrence (Apr 18), should be null
+    const after = new Date('2026-04-18T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    expect(next).toBeNull();
+  });
+
+  it('UNTIL exhaustion', () => {
+    const r = parseRRule('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY;INTERVAL=1;UNTIL=20260418T235959Z');
+    const after = new Date('2026-04-18T09:00:00Z');
+    const next = nextRRuleFire(r, after);
+    expect(next).toBeNull();
+  });
+});
+
+describe('classifyTimer - rrule', () => {
+  it('classifies RRULE expression', () => {
+    expect(classifyTimer('DTSTART:20260416T090000Z\nRRULE:FREQ=DAILY').kind).toBe('rrule');
+  });
+
+  it('classifies inline RRULE expression', () => {
+    expect(classifyTimer('DTSTART:20260416T090000Z;RRULE:FREQ=WEEKLY;BYDAY=MO').kind).toBe('rrule');
   });
 });

@@ -265,7 +265,7 @@ export type TimerScheduleDoc = {
   _id: string;
   definitionId: string;
   nodeId: string;
-  kind: 'cycle' | 'date' | 'duration' | 'cron';
+  kind: 'cycle' | 'date' | 'duration' | 'cron' | 'rrule';
   expression: string;
   nextFireAt: Date;
   lastFiredAt?: Date;
