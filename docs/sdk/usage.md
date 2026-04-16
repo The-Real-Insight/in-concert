@@ -1399,11 +1399,11 @@ client.init({
     // Store the email in your domain, bound to the process instance
     await myStore.saveEmail(instanceId, email);
 
-    // Attachments are metadata-only — download content on demand per attachment.
-    // Use attachment.size to skip large files or apply per-type logic.
+    // Attachments are metadata-only — download each one on demand.
+    // att.size lets you skip oversized files before downloading.
     for (const att of email.attachments) {
-      if (att.size > 50_000_000) {
-        console.log(`Skipping ${att.name} (${att.size} bytes)`);
+      if (att.size > 50 * 1024 * 1024) { // 50 MB
+        console.log(`Skipping ${att.name} — ${Math.round(att.size / 1024 / 1024)} MB`);
         continue;
       }
       const buffer = await getAttachmentContent(att.id);
