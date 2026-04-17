@@ -52,20 +52,24 @@ describe('Graph mailbox message start event', () => {
     expect(schedules).toHaveLength(1);
     expect(schedules[0].connectorType).toBe('graph-mailbox');
     expect(schedules[0].config.mailbox).toBe('ada@the-real-insight.com');
-    expect(schedules[0].status).toBe('ACTIVE');
+    expect(schedules[0].status).toBe('PAUSED'); // deployed as PAUSED — admin must resume
   });
 
-  it('redeploy replaces the connector schedule', async () => {
+  it('redeploy preserves existing schedule status', async () => {
     const bpmnXml = loadBpmn('graph-mailbox-start.bpmn');
-    await client.deploy({ id: 'graph-mailbox', name: 'Graph Mailbox', version: '1', bpmnXml });
+    const { definitionId } = await client.deploy({ id: 'graph-mailbox', name: 'Graph Mailbox', version: '1', bpmnXml });
+
+    // Activate, then redeploy
+    const schedules = await client.listConnectorSchedules({ definitionId });
+    await client.resumeConnectorSchedule(schedules[0]._id);
     await client.deploy({ id: 'graph-mailbox', name: 'Graph Mailbox', version: '1', bpmnXml, overwrite: true });
 
-    const schedules = await client.listConnectorSchedules();
-    expect(schedules).toHaveLength(1);
-    expect(schedules[0].status).toBe('ACTIVE');
+    const after = await client.listConnectorSchedules({ definitionId });
+    expect(after).toHaveLength(1);
+    expect(after[0].status).toBe('ACTIVE'); // redeploy preserved ACTIVE status
   });
 
-  it('pause and resume a connector schedule', async () => {
+  it('deploy → set credentials → resume lifecycle', async () => {
     const bpmnXml = loadBpmn('graph-mailbox-start.bpmn');
     const { definitionId } = await client.deploy({
       id: 'graph-mailbox',
@@ -76,14 +80,30 @@ describe('Graph mailbox message start event', () => {
 
     const schedules = await client.listConnectorSchedules({ definitionId });
     const id = schedules[0]._id;
+    expect(schedules[0].status).toBe('PAUSED');
 
+    // Set credentials
+    await client.setConnectorCredentials(id, {
+      tenantId: 'test-tenant',
+      clientId: 'test-client',
+      clientSecret: 'test-secret',
+    });
+
+    // Verify credentials stored
+    const updated = (await client.listConnectorSchedules({ definitionId }))[0];
+    expect(updated.config.tenantId).toBe('test-tenant');
+    expect(updated.config.clientId).toBe('test-client');
+    expect(updated.config.clientSecret).toBe('test-secret');
+
+    // Resume — now polling starts with credentials
+    await client.resumeConnectorSchedule(id);
+    const active = (await client.listConnectorSchedules({ definitionId }))[0];
+    expect(active.status).toBe('ACTIVE');
+
+    // Pause again
     await client.pauseConnectorSchedule(id);
     const paused = (await client.listConnectorSchedules({ definitionId }))[0];
     expect(paused.status).toBe('PAUSED');
-
-    await client.resumeConnectorSchedule(id);
-    const resumed = (await client.listConnectorSchedules({ definitionId }))[0];
-    expect(resumed.status).toBe('ACTIVE');
   });
 
   it('parser extracts connectorConfig on the start event node', async () => {

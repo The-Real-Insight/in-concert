@@ -11,6 +11,37 @@ Same API in both modes; switch with config.
 
 ---
 
+## Table of contents
+
+- [Install](#install)
+- [Quick Start](#quick-start)
+  - [REST mode](#rest-mode-server-running)
+  - [Demo server (browser UI)](#demo-server-browser-ui)
+  - [Local mode](#local-mode-no-server)
+- [Core APIs (Server Programming Model)](#core-apis-server-programming-model)
+- [SDK API Reference](#sdk-api-reference)
+  - [Constructor](#constructor) · [init](#initconfig) · [getServiceVocabulary](#getservicevocabulary) · [extractEvents](#extractevents-bpmnxml-) · [deploy](#deployparams) · [startInstance](#startinstanceparams) · [getInstance](#getinstanceinstanceid) · [getState](#getstateinstanceid)
+  - [completeUserTask](#completeusertaskinstanceid-workitemid-options) · [completeExternalTask](#completeexternaltaskinstanceid-workitemid-options) · [completeWorkItem](#completeworkiteminstanceid-workitemid-options)
+  - [activateSchedules](#activateschedulesdefinitionid-options) · [deactivateSchedules](#deactivateschedulesdefinitionid) · [recover](#recoveroptions)
+- [Callbacks for User Tasks and Service Tasks](#callbacks-for-user-tasks-and-service-tasks)
+  - [User Tasks](#user-tasks) · [Service Tasks](#service-tasks-push-based-no-polling)
+  - [submitDecision](#submitdecisioninstanceid-decisionid-options) · [processUntilComplete](#processuntilcompleteinstanceid-handlers-options) · [subscribeToCallbacks](#subscribetocallbackscallback)
+- [Example: Linear Process](#example-linear-process-local-mode)
+- [Example: XOR Gateway](#example-xor-gateway-local-mode)
+- [When to Use Each Mode](#when-to-use-each-mode)
+- [End-to-End Example: Case Processing](#end-to-end-example-case-processing)
+- [End-to-End Example: Worklist Flow](#end-to-end-example-worklist-flow)
+- [Interactive CLI Example](#interactive-cli-example)
+- [Worklist reference](#worklist-reference)
+- [Timer start events](#timer-start-events)
+  - [Supported expressions](#supported-expressions) · [RRULE recurrence](#rrule-recurrence-rules-rfc-5545) · [SDK methods](#sdk-methods) · [REST API](#rest-api)
+- [Message start events — Graph mailbox connector](#message-start-events--graph-mailbox-connector)
+  - [Engine configuration](#engine-configuration) · [onMailReceived callback](#onmailreceived-callback)
+  - [End-to-end example: email-triggered agentic workflow](#end-to-end-example-email-triggered-agentic-workflow)
+- [Prerequisites](#prerequisites)
+
+---
+
 ## Install
 
 ```bash
@@ -225,6 +256,19 @@ const impl = vocab?.[item.payload.extensions?.['tri:toolId'] ?? ''];
 
 ---
 
+### extractEvents({ bpmnXml })
+
+Inspect a BPMN model for timer and connector start events without deploying. Pure function — no database, no side effects. Returns an array of event descriptors (see [return type reference](#end-to-end-example-email-triggered-agentic-workflow) in the end-to-end example).
+
+```typescript
+const events = await client.extractEvents({ bpmnXml });
+// [{ type: 'connector', nodeId: 'Start', connectorType: 'graph-mailbox', config: { mailbox: '...' } }]
+// [{ type: 'timer', nodeId: 'TimerStart', expression: 'R/PT1H' }]
+// [] — no start events
+```
+
+---
+
 ### deploy(params)
 
 Deploy a BPMN process definition.
@@ -318,6 +362,32 @@ await client.completeWorkItem(instanceId, workItemId, {
 ```
 
 In REST mode, the server worker will pick it up. In local mode, `processUntilComplete` or `recover` continues automatically.
+
+---
+
+### activateSchedules(definitionId, options?)
+
+Activate all schedules (timers + connectors) for a definition in one call. Optionally sets Graph credentials on connector schedules. Moves all schedules from `PAUSED` to `ACTIVE`.
+
+```typescript
+// With Graph credentials (first activation)
+await client.activateSchedules(definitionId, {
+  graphCredentials: { tenantId: '...', clientId: '...', clientSecret: '...' },
+});
+
+// Without credentials (restart — credentials already stored from previous activation)
+await client.activateSchedules(definitionId);
+```
+
+---
+
+### deactivateSchedules(definitionId)
+
+Pause all schedules (timers + connectors) for a definition. No more polling or firing until `activateSchedules` is called again.
+
+```typescript
+await client.deactivateSchedules(definitionId);
+```
 
 ---
 
@@ -1589,11 +1659,56 @@ client.init({
 });
 ```
 
-**3. Deploy the process**
+**3. Inspect the model before deploying**
+
+`extractEvents()` parses the BPMN and returns all timer and connector start events — without deploying, without touching the database. It is a pure read-only inspection call. Use it to display what a model requires before the user decides to activate it.
 
 ```typescript
 const bpmnXml = readFileSync('./support-process.bpmn', 'utf8');
 
+const events = await client.extractEvents({ bpmnXml });
+```
+
+Returns an array of event descriptors:
+
+```typescript
+[
+  {
+    type: 'connector',            // 'timer' | 'connector'
+    nodeId: 'Start',              // BPMN start event node ID
+    connectorType: 'graph-mailbox', // only for type: 'connector'
+    config: {                     // only for type: 'connector' — tri: extensions from bpmn:message
+      mailbox: 'support@your-company.com',
+    },
+  },
+]
+```
+
+For a model with a timer start event, the entry looks like:
+
+```typescript
+{
+  type: 'timer',
+  nodeId: 'TimerStart',
+  expression: 'R/PT1H',          // only for type: 'timer' — the raw timer expression
+}
+```
+
+**Return type reference:**
+
+| Field | Type | Present when | Description |
+|-------|------|-------------|-------------|
+| `type` | `'timer'` \| `'connector'` | always | Kind of start event |
+| `nodeId` | string | always | BPMN node ID of the start event |
+| `expression` | string | `type: 'timer'` | Timer expression (ISO 8601, cron, or RRULE) |
+| `connectorType` | string | `type: 'connector'` | Connector adapter (e.g. `graph-mailbox`) |
+| `config` | `Record<string, string>` | `type: 'connector'` | Connector-specific settings from `tri:` extensions (e.g. `{ mailbox: '...' }`) |
+
+A model with no timer or connector start events returns an empty array.
+
+**4. Deploy the process**
+
+```typescript
 const { definitionId } = await client.deploy({
   id: 'support-process',
   name: 'Support Email Handler',
@@ -1602,24 +1717,25 @@ const { definitionId } = await client.deploy({
 });
 ```
 
-At this point, the engine has created a `ConnectorSchedule` for `support@your-company.com`. It begins polling immediately using the global credentials from `init()`.
+The engine creates a `ConnectorSchedule` for `support@your-company.com` in `PAUSED` state. It does not poll yet.
 
-**4. (Optional) Set per-schedule credentials for a different tenant**
+**5. Activate with credentials**
 
-If this mailbox requires different Azure AD credentials than the global default:
+One call: sets Graph credentials on all connector schedules for this definition and resumes all schedules (timers + connectors). You only need the `definitionId` — no schedule IDs required.
 
 ```typescript
-const schedules = await client.listConnectorSchedules({ definitionId });
-await client.setConnectorCredentials(schedules[0]._id, {
-  tenantId: 'customer-specific-tenant',
-  clientId: 'customer-specific-client',
-  clientSecret: 'customer-specific-secret',
+await client.activateSchedules(definitionId, {
+  graphCredentials: {
+    tenantId: myConfigStore.get('support-process', 'graph.tenantId'),
+    clientId: myConfigStore.get('support-process', 'graph.clientId'),
+    clientSecret: myConfigStore.get('support-process', 'graph.clientSecret'),
+  },
 });
 ```
 
-The credentials are persisted in MongoDB. The worker uses them on the next poll cycle.
+If you configured global credentials in `init()` and they apply, call `activateSchedules(definitionId)` without `graphCredentials`.
 
-**5. An email arrives**
+**6. An email arrives**
 
 The connector worker detects an unread email in `support@your-company.com`. Here is what happens:
 
@@ -1634,19 +1750,31 @@ The connector worker detects an unread email in `support@your-company.com`. Here
 8. End → instance COMPLETED
 ```
 
-**6. Manage the schedule at runtime**
+**7. Manage at runtime**
 
 ```typescript
-// Check status
-const schedules = await client.listConnectorSchedules({ definitionId });
-console.log(schedules[0].status);       // 'ACTIVE'
-console.log(schedules[0].lastPolledAt); // last poll timestamp
+// Stop all schedules for this definition
+await client.deactivateSchedules(definitionId);
 
-// Pause during maintenance
-await client.pauseConnectorSchedule(schedules[0]._id);
+// Restart
+await client.activateSchedules(definitionId);
 
-// Resume
-await client.resumeConnectorSchedule(schedules[0]._id);
+// Or manage individually
+const connectors = await client.listConnectorSchedules({ definitionId });
+const timers = await client.listTimerSchedules({ definitionId });
+```
+
+Schedule lifecycle:
+
+```
+Deploy → PAUSED
+  → activateSchedules(definitionId, { graphCredentials }) → ACTIVE (polling)
+     ↕
+  deactivateSchedules(definitionId) → PAUSED (stopped)
+     ↕
+  activateSchedules(definitionId) → ACTIVE (polling)
+
+Redeploy (overwrite) → preserves current status
 ```
 
 The process model never changes. Credentials, polling state, and lifecycle are all managed at runtime through the SDK or REST API.

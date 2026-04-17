@@ -67,6 +67,41 @@ export class BpmnEngineClient {
     }
   }
 
+  /**
+   * Extract timer and connector events from a BPMN model without deploying.
+   * Pure function — no DB, no server. Use to inspect what a model needs before deploy.
+   */
+  async extractEvents(params: { bpmnXml: string }): Promise<Array<{
+    type: 'timer' | 'connector';
+    nodeId: string;
+    expression?: string;
+    connectorType?: string;
+    config?: Record<string, string>;
+  }>> {
+    const { parseBpmnXml } = await import('../model/parser');
+    const graph = await parseBpmnXml(params.bpmnXml);
+    const events: Array<{
+      type: 'timer' | 'connector';
+      nodeId: string;
+      expression?: string;
+      connectorType?: string;
+      config?: Record<string, string>;
+    }> = [];
+
+    for (const startId of graph.startNodeIds) {
+      const node = graph.nodes[startId];
+      if (!node || node.type !== 'startEvent') continue;
+      if (node.timerDefinition) {
+        events.push({ type: 'timer', nodeId: node.id, expression: node.timerDefinition });
+      }
+      if (node.connectorConfig?.connectorType) {
+        const { connectorType, ...rest } = node.connectorConfig;
+        events.push({ type: 'connector', nodeId: node.id, connectorType, config: rest });
+      }
+    }
+    return events;
+  }
+
   /** Get the service vocabulary from init. Handlers can use this to resolve toolId → implementation. */
   getServiceVocabulary(): Record<string, unknown> | null {
     return this.serviceVocabulary;
@@ -836,6 +871,88 @@ export class BpmnEngineClient {
       },
     );
     if (!result) throw new Error('Connector schedule not found');
+  }
+
+  // ── Bulk schedule management ────────────────────────────────────────────────
+
+  /**
+   * Activate all schedules (timers + connectors) for a definition.
+   * Sets Graph credentials on all connector schedules and resumes everything.
+   * One call to go from PAUSED (after deploy) to ACTIVE (polling/firing).
+   */
+  async activateSchedules(
+    definitionId: string,
+    options?: { graphCredentials?: { tenantId: string; clientId: string; clientSecret: string } },
+  ): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/definitions/${definitionId}/schedules/activate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options ?? {}),
+        },
+      );
+      if (!res.ok) throw new Error(`Activate schedules failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TimerSchedules, ConnectorSchedules } = getCollections(this.config.db);
+    const now = new Date();
+
+    // Set credentials + resume all connector schedules
+    if (options?.graphCredentials) {
+      const gc = options.graphCredentials;
+      await ConnectorSchedules.updateMany(
+        { definitionId },
+        {
+          $set: {
+            'config.tenantId': gc.tenantId,
+            'config.clientId': gc.clientId,
+            'config.clientSecret': gc.clientSecret,
+            status: 'ACTIVE',
+            updatedAt: now,
+          },
+        },
+      );
+    } else {
+      await ConnectorSchedules.updateMany(
+        { definitionId },
+        { $set: { status: 'ACTIVE', updatedAt: now } },
+      );
+    }
+
+    // Resume all timer schedules
+    await TimerSchedules.updateMany(
+      { definitionId, status: { $ne: 'EXHAUSTED' } },
+      { $set: { status: 'ACTIVE', updatedAt: now } },
+    );
+  }
+
+  /**
+   * Deactivate all schedules (timers + connectors) for a definition.
+   * Pauses everything — no more polling or firing until activateSchedules is called.
+   */
+  async deactivateSchedules(definitionId: string): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/definitions/${definitionId}/schedules/deactivate`,
+        { method: 'POST' },
+      );
+      if (!res.ok) throw new Error(`Deactivate schedules failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TimerSchedules, ConnectorSchedules } = getCollections(this.config.db);
+    const now = new Date();
+    await ConnectorSchedules.updateMany(
+      { definitionId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: now } },
+    );
+    await TimerSchedules.updateMany(
+      { definitionId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: now } },
+    );
   }
 
   /**

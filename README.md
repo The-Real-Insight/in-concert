@@ -306,6 +306,8 @@ GET    /v1/connector-schedules                      List connector schedules
 POST   /v1/connector-schedules/:id/pause            Pause a connector
 POST   /v1/connector-schedules/:id/resume           Resume a connector
 PUT    /v1/connector-schedules/:id/credentials      Set per-schedule credentials
+POST   /v1/definitions/:id/schedules/activate       Activate all schedules for a definition
+POST   /v1/definitions/:id/schedules/deactivate     Deactivate all schedules for a definition
 WS     /ws                                          Push callbacks (REST mode)
 ```
 

@@ -477,3 +477,68 @@ apiRouter.put('/v1/connector-schedules/:scheduleId/credentials', async (req: Req
     res.status(500).json({ error: 'Set credentials failed' });
   }
 });
+
+// ── Bulk schedule management ─────────────────────────────────────────────────
+
+apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: Request, res: Response) => {
+  try {
+    const { definitionId } = req.params;
+    const { graphCredentials } = req.body as {
+      graphCredentials?: { tenantId: string; clientId: string; clientSecret: string };
+    };
+    const db = getDb();
+    const { TimerSchedules, ConnectorSchedules } = getCollections(db);
+    const now = new Date();
+
+    if (graphCredentials) {
+      await ConnectorSchedules.updateMany(
+        { definitionId },
+        {
+          $set: {
+            'config.tenantId': graphCredentials.tenantId,
+            'config.clientId': graphCredentials.clientId,
+            'config.clientSecret': graphCredentials.clientSecret,
+            status: 'ACTIVE' as ConnectorScheduleStatus,
+            updatedAt: now,
+          },
+        },
+      );
+    } else {
+      await ConnectorSchedules.updateMany(
+        { definitionId },
+        { $set: { status: 'ACTIVE' as ConnectorScheduleStatus, updatedAt: now } },
+      );
+    }
+
+    await TimerSchedules.updateMany(
+      { definitionId, status: { $ne: 'EXHAUSTED' } },
+      { $set: { status: 'ACTIVE', updatedAt: now } },
+    );
+
+    res.json({ accepted: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Activate schedules failed' });
+  }
+});
+
+apiRouter.post('/v1/definitions/:definitionId/schedules/deactivate', async (req: Request, res: Response) => {
+  try {
+    const { definitionId } = req.params;
+    const db = getDb();
+    const { TimerSchedules, ConnectorSchedules } = getCollections(db);
+    const now = new Date();
+
+    await ConnectorSchedules.updateMany(
+      { definitionId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED' as ConnectorScheduleStatus, updatedAt: now } },
+    );
+    await TimerSchedules.updateMany(
+      { definitionId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: now } },
+    );
+
+    res.json({ accepted: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Deactivate schedules failed' });
+  }
+});

@@ -86,6 +86,11 @@ async function deployMailboxProcess(): Promise<string> {
     version: '1',
     bpmnXml,
   });
+  // Connector schedules deploy as PAUSED — resume for worker tests
+  const schedules = await client.listConnectorSchedules({ definitionId });
+  if (schedules.length > 0) {
+    await client.resumeConnectorSchedule(schedules[0]._id);
+  }
   return definitionId;
 }
 
