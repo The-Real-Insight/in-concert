@@ -305,6 +305,7 @@ POST   /v1/timer-schedules/:id/resume               Resume a timer
 GET    /v1/connector-schedules                      List connector schedules
 POST   /v1/connector-schedules/:id/pause            Pause a connector
 POST   /v1/connector-schedules/:id/resume           Resume a connector
+PUT    /v1/connector-schedules/:id/credentials      Set per-schedule credentials
 WS     /ws                                          Push callbacks (REST mode)
 ```
 

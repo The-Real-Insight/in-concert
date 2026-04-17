@@ -444,3 +444,36 @@ apiRouter.post('/v1/connector-schedules/:scheduleId/resume', async (req: Request
     res.status(500).json({ error: 'Resume failed' });
   }
 });
+
+apiRouter.put('/v1/connector-schedules/:scheduleId/credentials', async (req: Request, res: Response) => {
+  try {
+    const { tenantId, clientId, clientSecret } = req.body as {
+      tenantId?: string; clientId?: string; clientSecret?: string;
+    };
+    if (!tenantId || !clientId || !clientSecret) {
+      res.status(400).json({ error: 'tenantId, clientId, and clientSecret are required' });
+      return;
+    }
+    const db = getDb();
+    const { ConnectorSchedules } = getCollections(db);
+    const result = await ConnectorSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId },
+      {
+        $set: {
+          'config.tenantId': tenantId,
+          'config.clientId': clientId,
+          'config.clientSecret': clientSecret,
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: 'after' },
+    );
+    if (!result) {
+      res.status(404).json({ error: 'Connector schedule not found' });
+      return;
+    }
+    res.json({ accepted: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Set credentials failed' });
+  }
+});

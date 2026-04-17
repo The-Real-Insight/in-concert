@@ -802,6 +802,43 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Set or update credentials on a connector schedule.
+   * Stored in ConnectorSchedule.config — persisted in MongoDB, survives restarts.
+   * The worker reads them at poll time, falling back to global config.graph.
+   */
+  async setConnectorCredentials(
+    scheduleId: string,
+    credentials: { tenantId: string; clientId: string; clientSecret: string },
+  ): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/connector-schedules/${scheduleId}/credentials`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credentials),
+        },
+      );
+      if (!res.ok) throw new Error(`Set connector credentials failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { ConnectorSchedules } = getCollections(this.config.db);
+    const result = await ConnectorSchedules.findOneAndUpdate(
+      { _id: scheduleId },
+      {
+        $set: {
+          'config.tenantId': credentials.tenantId,
+          'config.clientId': credentials.clientId,
+          'config.clientSecret': credentials.clientSecret,
+          updatedAt: new Date(),
+        },
+      },
+    );
+    if (!result) throw new Error('Connector schedule not found');
+  }
+
+  /**
    * Close connections. No-op; caller manages DB/connection lifecycle.
    */
   async close(): Promise<void> {

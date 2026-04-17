@@ -1375,26 +1375,34 @@ client.init({
 
 **Option C — Per-schedule credentials** (multi-tenant):
 
-When different mailboxes belong to different Azure AD tenants, store credentials directly in the `ConnectorSchedule.config`. The engine reads `tenantId`, `clientId`, `clientSecret` from `schedule.config` and uses them for that schedule's polling — falling back to the global config if not present.
+When different mailboxes belong to different Azure AD tenants, register credentials against a specific connector schedule after deploy. Credentials are stored in `ConnectorSchedule.config` in MongoDB — persisted, survives restarts, never in BPMN.
 
-This is set at deploy time. For example, when deploying from an external system (like tri-server), the deployer writes the tenant-specific credentials into the BPMN message's `tri:` extensions:
-
-```xml
-<bpmn:message id="Msg_Inbox" name="inbox-poll"
-  tri:connectorType="graph-mailbox"
-  tri:mailbox="support@customer-a.com"
-  tri:tenantId="customer-a-tenant-id"
-  tri:clientId="customer-a-client-id"
-  tri:clientSecret="customer-a-client-secret" />
+```typescript
+// After deploying, set credentials for a specific schedule
+const schedules = await client.listConnectorSchedules({ definitionId });
+await client.setConnectorCredentials(schedules[0]._id, {
+  tenantId: 'customer-a-tenant-id',
+  clientId: 'customer-a-client-id',
+  clientSecret: 'customer-a-client-secret',
+});
 ```
 
-The engine stores all `tri:` attributes in `ConnectorSchedule.config` and uses per-schedule credentials when present. Token caching is keyed by `tenantId:clientId`, so multiple tenants each get their own token lifecycle.
+Or via REST:
 
-| schedule.config has credentials | Global config has credentials | Result |
+```
+PUT /v1/connector-schedules/:id/credentials
+{ "tenantId": "...", "clientId": "...", "clientSecret": "..." }
+```
+
+The worker reads per-schedule credentials at poll time, falling back to global config if none are set. Token caching is keyed by `tenantId:clientId`, so multiple tenants each get their own token lifecycle.
+
+| Schedule has credentials | Global config has credentials | Result |
 |-|-|-|
 | Yes | Yes or No | Per-schedule credentials used |
 | No | Yes | Global credentials used |
 | No | No | Error: "Graph connector not configured" |
+
+Credentials never appear in BPMN. The model only declares *what* to poll (`tri:mailbox`). *How* to authenticate is a runtime concern.
 
 The Azure AD app registration needs the `Mail.ReadWrite` application permission (not delegated) for the target mailbox.
 
@@ -1488,7 +1496,160 @@ GET    /v1/connector-schedules                      List (query: ?definitionId=&
 GET    /v1/connector-schedules/:id                  Get one
 POST   /v1/connector-schedules/:id/pause            Pause (ACTIVE → PAUSED)
 POST   /v1/connector-schedules/:id/resume           Resume (PAUSED → ACTIVE)
+PUT    /v1/connector-schedules/:id/credentials      Set per-schedule Graph credentials
 ```
+
+### End-to-end example: email-triggered agentic workflow
+
+This example walks through the complete lifecycle — from BPMN authoring to a running process that starts itself when an email arrives.
+
+**1. Author the BPMN**
+
+The process model declares *what* to poll — not *how* to authenticate. The `tri:mailbox` on the `<bpmn:message>` is the only connector-specific attribute.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:tri="http://tri.com/schema/bpmn"
+                  id="Defs" targetNamespace="http://example.com/bpmn">
+
+  <bpmn:message id="Msg_Support" name="support-inbox"
+    tri:connectorType="graph-mailbox"
+    tri:mailbox="support@your-company.com" />
+
+  <bpmn:process id="SupportProcess" isExecutable="true">
+    <bpmn:startEvent id="Start" name="Email received">
+      <bpmn:messageEventDefinition messageRef="Msg_Support" />
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="Triage" name="Triage email" tri:toolId="triage-email" />
+    <bpmn:userTask id="Review" name="Review triage" />
+    <bpmn:serviceTask id="Reply" name="Send reply" tri:toolId="send-reply" />
+    <bpmn:endEvent id="End" />
+    <bpmn:sequenceFlow id="f1" sourceRef="Start" targetRef="Triage" />
+    <bpmn:sequenceFlow id="f2" sourceRef="Triage" targetRef="Review" />
+    <bpmn:sequenceFlow id="f3" sourceRef="Review" targetRef="Reply" />
+    <bpmn:sequenceFlow id="f4" sourceRef="Reply" targetRef="End" />
+  </bpmn:process>
+</bpmn:definitions>
+```
+
+**2. Initialize the engine**
+
+```typescript
+import { readFileSync } from 'node:fs';
+import { BpmnEngineClient } from '@the-real-insight/in-concert/sdk';
+import { connectDb, ensureIndexes } from '@the-real-insight/in-concert/db';
+
+const db = await connectDb('mongodb://localhost:27017/in-concert');
+await ensureIndexes(db);
+
+const client = new BpmnEngineClient({ mode: 'local', db });
+
+client.init({
+  // Global Graph credentials (fallback for all mailbox connectors)
+  connectors: {
+    'graph-mailbox': {
+      tenantId: process.env.GRAPH_TENANT_ID!,
+      clientId: process.env.GRAPH_CLIENT_ID!,
+      clientSecret: process.env.GRAPH_CLIENT_SECRET!,
+    },
+  },
+
+  // Called when an email arrives — store domain data before the process runs
+  onMailReceived: async ({ email, instanceId, getAttachmentContent }) => {
+    console.log(`Email: "${email.subject}" from ${email.from.address}`);
+
+    // Store email in your domain
+    await myStore.saveEmail(instanceId, email);
+
+    // Download attachments on demand
+    for (const att of email.attachments) {
+      const buffer = await getAttachmentContent(att.id);
+      await myStorage.upload(instanceId, att.name, buffer, att.contentType);
+    }
+
+    // Skip spam
+    if (email.from.address.endsWith('@spam.com')) return { skip: true };
+  },
+
+  // Service task handlers
+  onServiceCall: async ({ instanceId, payload }) => {
+    const toolId = payload.extensions?.['tri:toolId'];
+    if (toolId === 'triage-email') {
+      const email = await myStore.getEmail(instanceId);
+      const triage = await myLLM.classify(email.subject, email.body);
+      await myStore.saveTriage(instanceId, triage);
+    }
+    if (toolId === 'send-reply') {
+      const triage = await myStore.getTriage(instanceId);
+      await myMailer.reply(instanceId, triage.suggestedResponse);
+    }
+    await client.completeExternalTask(instanceId, payload.workItemId);
+  },
+});
+```
+
+**3. Deploy the process**
+
+```typescript
+const bpmnXml = readFileSync('./support-process.bpmn', 'utf8');
+
+const { definitionId } = await client.deploy({
+  id: 'support-process',
+  name: 'Support Email Handler',
+  version: '1',
+  bpmnXml,
+});
+```
+
+At this point, the engine has created a `ConnectorSchedule` for `support@your-company.com`. It begins polling immediately using the global credentials from `init()`.
+
+**4. (Optional) Set per-schedule credentials for a different tenant**
+
+If this mailbox requires different Azure AD credentials than the global default:
+
+```typescript
+const schedules = await client.listConnectorSchedules({ definitionId });
+await client.setConnectorCredentials(schedules[0]._id, {
+  tenantId: 'customer-specific-tenant',
+  clientId: 'customer-specific-client',
+  clientSecret: 'customer-specific-secret',
+});
+```
+
+The credentials are persisted in MongoDB. The worker uses them on the next poll cycle.
+
+**5. An email arrives**
+
+The connector worker detects an unread email in `support@your-company.com`. Here is what happens:
+
+```
+1. Worker polls Graph API → unread email found
+2. startInstance() → instance created (RUNNING, no tokens advanced)
+3. onMailReceived() called → your code stores email + attachments
+4. onMailReceived returns → engine advances first token
+5. "Triage email" service task fires → onServiceCall → LLM classifies
+6. "Review triage" user task → appears in worklist → human reviews
+7. Human completes → "Send reply" service task → onServiceCall → reply sent
+8. End → instance COMPLETED
+```
+
+**6. Manage the schedule at runtime**
+
+```typescript
+// Check status
+const schedules = await client.listConnectorSchedules({ definitionId });
+console.log(schedules[0].status);       // 'ACTIVE'
+console.log(schedules[0].lastPolledAt); // last poll timestamp
+
+// Pause during maintenance
+await client.pauseConnectorSchedule(schedules[0]._id);
+
+// Resume
+await client.resumeConnectorSchedule(schedules[0]._id);
+```
+
+The process model never changes. Credentials, polling state, and lifecycle are all managed at runtime through the SDK or REST API.
 
 ---
 
