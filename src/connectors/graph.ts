@@ -3,23 +3,45 @@
  *
  * Uses OAuth2 client credentials flow (no MSAL dependency).
  * Polls /users/{mailbox}/messages for unread emails.
+ *
+ * All functions accept optional credential overrides so that each connector
+ * schedule can carry its own tenant/client. Falls back to global config.graph.
  */
 import { config } from '../config';
 
-// ── Token cache ──────────────────────────────────────────────────────────────
+// ── Credential overrides ─────────────────────────────────────────────────────
 
-let cachedToken: { accessToken: string; expiresAt: number } | null = null;
+export type GraphCredentials = {
+  tenantId?: string;
+  clientId?: string;
+  clientSecret?: string;
+};
 
-export async function getAccessToken(): Promise<string> {
-  const { tenantId, clientId, clientSecret } = config.graph;
+function resolveCredentials(overrides?: GraphCredentials) {
+  const tenantId = overrides?.tenantId || config.graph.tenantId;
+  const clientId = overrides?.clientId || config.graph.clientId;
+  const clientSecret = overrides?.clientSecret || config.graph.clientSecret;
   if (!tenantId || !clientId || !clientSecret) {
     throw new Error(
-      'Graph connector not configured. Set GRAPH_TENANT_ID, GRAPH_CLIENT_ID, and GRAPH_CLIENT_SECRET.'
+      'Graph connector not configured. Set GRAPH_TENANT_ID, GRAPH_CLIENT_ID, and GRAPH_CLIENT_SECRET ' +
+      '(or provide per-schedule credentials in ConnectorSchedule.config).'
     );
   }
+  return { tenantId, clientId, clientSecret };
+}
 
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
-    return cachedToken.accessToken;
+// ── Token cache (keyed by tenant+client) ─────────────────────────────────────
+
+type CachedToken = { accessToken: string; expiresAt: number };
+const tokenCache = new Map<string, CachedToken>();
+
+export async function getAccessToken(overrides?: GraphCredentials): Promise<string> {
+  const { tenantId, clientId, clientSecret } = resolveCredentials(overrides);
+  const cacheKey = `${tenantId}:${clientId}`;
+
+  const cached = tokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return cached.accessToken;
   }
 
   const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
@@ -42,11 +64,12 @@ export async function getAccessToken(): Promise<string> {
   }
 
   const json = (await res.json()) as { access_token: string; expires_in: number };
-  cachedToken = {
+  const entry: CachedToken = {
     accessToken: json.access_token,
     expiresAt: Date.now() + json.expires_in * 1000,
   };
-  return cachedToken.accessToken;
+  tokenCache.set(cacheKey, entry);
+  return entry.accessToken;
 }
 
 // ── Email types ──────────────────────────────────────────────────────────────
@@ -66,9 +89,9 @@ export interface GraphEmail {
 
 export async function pollMailbox(
   mailbox: string,
-  options?: { sinceMinutes?: number; top?: number }
+  options?: { sinceMinutes?: number; top?: number; credentials?: GraphCredentials }
 ): Promise<GraphEmail[]> {
-  const token = await getAccessToken();
+  const token = await getAccessToken(options?.credentials);
   const sinceMinutes = options?.sinceMinutes ?? config.graph.sinceMinutes;
   const top = options?.top ?? 10;
 
@@ -111,8 +134,12 @@ export interface GraphAttachmentMeta {
  * List attachment metadata for a message (no content downloaded).
  * Uses $select to exclude contentBytes — safe for any attachment size.
  */
-export async function listAttachments(mailbox: string, messageId: string): Promise<GraphAttachmentMeta[]> {
-  const token = await getAccessToken();
+export async function listAttachments(
+  mailbox: string,
+  messageId: string,
+  credentials?: GraphCredentials,
+): Promise<GraphAttachmentMeta[]> {
+  const token = await getAccessToken(credentials);
   const url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}` +
     `/messages/${messageId}/attachments?$select=id,name,contentType,size`;
@@ -145,8 +172,9 @@ export async function getAttachmentContent(
   mailbox: string,
   messageId: string,
   attachmentId: string,
+  credentials?: GraphCredentials,
 ): Promise<Buffer> {
-  const token = await getAccessToken();
+  const token = await getAccessToken(credentials);
   const url =
     `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}` +
     `/messages/${messageId}/attachments/${attachmentId}`;
@@ -167,8 +195,12 @@ export async function getAttachmentContent(
 
 // ── Mark as read ─────────────────────────────────────────────────────────────
 
-export async function markAsRead(mailbox: string, messageId: string): Promise<void> {
-  const token = await getAccessToken();
+export async function markAsRead(
+  mailbox: string,
+  messageId: string,
+  credentials?: GraphCredentials,
+): Promise<void> {
+  const token = await getAccessToken(credentials);
   const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages/${messageId}`;
   const res = await fetch(url, {
     method: 'PATCH',

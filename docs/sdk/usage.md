@@ -1373,6 +1373,29 @@ client.init({
 
 `init()` settings override environment variables. This lets you pull credentials from Azure Key Vault, AWS Secrets Manager, or a database at startup without touching `.env` files.
 
+**Option C — Per-schedule credentials** (multi-tenant):
+
+When different mailboxes belong to different Azure AD tenants, store credentials directly in the `ConnectorSchedule.config`. The engine reads `tenantId`, `clientId`, `clientSecret` from `schedule.config` and uses them for that schedule's polling — falling back to the global config if not present.
+
+This is set at deploy time. For example, when deploying from an external system (like tri-server), the deployer writes the tenant-specific credentials into the BPMN message's `tri:` extensions:
+
+```xml
+<bpmn:message id="Msg_Inbox" name="inbox-poll"
+  tri:connectorType="graph-mailbox"
+  tri:mailbox="support@customer-a.com"
+  tri:tenantId="customer-a-tenant-id"
+  tri:clientId="customer-a-client-id"
+  tri:clientSecret="customer-a-client-secret" />
+```
+
+The engine stores all `tri:` attributes in `ConnectorSchedule.config` and uses per-schedule credentials when present. Token caching is keyed by `tenantId:clientId`, so multiple tenants each get their own token lifecycle.
+
+| schedule.config has credentials | Global config has credentials | Result |
+|-|-|-|
+| Yes | Yes or No | Per-schedule credentials used |
+| No | Yes | Global credentials used |
+| No | No | Error: "Graph connector not configured" |
+
 The Azure AD app registration needs the `Mail.ReadWrite` application permission (not delegated) for the target mailbox.
 
 ### How it works

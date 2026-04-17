@@ -433,7 +433,7 @@ Currently supported connector types: `graph-mailbox` (Microsoft Graph API mailbo
 | `definitionId` | string | Process definition to start when a message arrives. |
 | `nodeId` | string | BPMN start event node id. |
 | `connectorType` | string | Connector adapter identifier (e.g. `graph-mailbox`). |
-| `config` | object | Connector-specific settings from BPMN `tri:` extensions (e.g. `{ mailbox: "ada@..." }`). |
+| `config` | object | Connector-specific settings from BPMN `tri:` extensions (e.g. `{ mailbox: "ada@..." }`). May include per-schedule credentials (`tenantId`, `clientId`, `clientSecret`) for multi-tenant setups. |
 | `pollingIntervalMs` | number | How often to poll (ms). Defaults from engine config. |
 | `lastPolledAt` | Date \| omitted | Last successful poll time. |
 | `cursor` | string \| omitted | Deduplication cursor (e.g. last processed message hash). |

@@ -9,10 +9,17 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import { getCollections, type ConnectorScheduleDoc } from '../db/collections';
 import { startInstance } from '../instance/service';
-import { pollMailbox, markAsRead, listAttachments, getAttachmentContent, type GraphEmail } from './graph';
+import { pollMailbox, markAsRead, listAttachments, getAttachmentContent, type GraphEmail, type GraphCredentials } from './graph';
 import type { MailReceivedEvent, MailReceivedResult } from '../sdk/types';
 
 export type OnMailReceivedFn = (event: MailReceivedEvent) => Promise<MailReceivedResult>;
+
+/** Extract per-schedule Graph credentials if present. Returns undefined if none set. */
+function extractCredentials(config: Record<string, string>): GraphCredentials | undefined {
+  const { tenantId, clientId, clientSecret } = config;
+  if (!tenantId && !clientId && !clientSecret) return undefined;
+  return { tenantId, clientId, clientSecret };
+}
 
 const LEASE_MS = 60_000;
 
@@ -57,6 +64,7 @@ function toMailEvent(
   instanceId: string,
   definitionId: string,
   attachmentMeta: Array<{ id: string; name: string; contentType: string; size: number }>,
+  credentials?: GraphCredentials,
 ): MailReceivedEvent {
   return {
     mailbox,
@@ -74,7 +82,7 @@ function toMailEvent(
       attachments: attachmentMeta,
     },
     getAttachmentContent: (attachmentId: string) =>
-      getAttachmentContent(mailbox, email.id, attachmentId),
+      getAttachmentContent(mailbox, email.id, attachmentId, credentials),
   };
 }
 
@@ -89,7 +97,8 @@ async function handleGraphMailbox(
     return 0;
   }
 
-  const emails = await pollMailbox(mailbox);
+  const creds = extractCredentials(schedule.config);
+  const emails = await pollMailbox(mailbox, { credentials: creds });
   let started = 0;
 
   for (const email of emails) {
@@ -113,7 +122,7 @@ async function handleGraphMailbox(
       let attachmentMeta: Array<{ id: string; name: string; contentType: string; size: number }> = [];
       if (email.hasAttachments) {
         try {
-          attachmentMeta = await listAttachments(mailbox, email.id);
+          attachmentMeta = await listAttachments(mailbox, email.id, creds);
         } catch (err) {
           console.error(`[Connector] Failed to list attachments for ${email.id}:`, err);
         }
@@ -124,7 +133,7 @@ async function handleGraphMailbox(
       if (onMailReceived) {
         try {
           const result = await onMailReceived(
-            toMailEvent(mailbox, email, instanceId, schedule.definitionId, attachmentMeta),
+            toMailEvent(mailbox, email, instanceId, schedule.definitionId, attachmentMeta, creds),
           );
           if (result && result.skip) {
             skip = true;
@@ -150,7 +159,7 @@ async function handleGraphMailbox(
         console.log(`[Connector] Skipped instance ${instanceId} (onMailReceived returned skip)`);
       }
 
-      await markAsRead(mailbox, email.id);
+      await markAsRead(mailbox, email.id, creds);
       started++;
     } catch (err) {
       console.error(`[Connector] Failed to start instance for email ${email.id}:`, err);

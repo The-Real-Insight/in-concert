@@ -106,7 +106,7 @@ describe('Graph mailbox connector worker', () => {
     expect(instances[0].businessKey).toBe('email:msg-001');
     expect(instances[0].status).toBe('RUNNING');
 
-    expect(markAsRead).toHaveBeenCalledWith('ada@the-real-insight.com', 'msg-001');
+    expect(markAsRead).toHaveBeenCalledWith('ada@the-real-insight.com', 'msg-001', undefined);
   });
 
   it('calls onMailReceived with email data and instanceId', async () => {
@@ -220,6 +220,7 @@ describe('Graph mailbox connector worker', () => {
       'ada@the-real-insight.com',
       'msg-001',
       'att-1',
+      undefined, // no per-schedule credentials
     );
     expect(downloadedBuffer).not.toBeNull();
     expect(downloadedBuffer!.toString()).toBe('col1,col2\na,b\n');
