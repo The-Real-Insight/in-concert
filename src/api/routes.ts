@@ -3,7 +3,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { config } from '../config';
 import { deployDefinition } from '../model/service';
-import { startInstance, getInstance } from '../instance/service';
+import { startInstance, getInstance, purgeInstance } from '../instance/service';
 import { getProcessHistory } from '../history/service';
 import { getCollections, COLLECTION_NAMES, type TimerScheduleStatus, type ConnectorScheduleStatus } from '../db/collections';
 import { claimContinuation, processContinuation } from '../workers/processor';
@@ -125,6 +125,22 @@ apiRouter.get('/v1/instances/:instanceId', async (req: Request, res: Response) =
     res.json(doc);
   } catch (err) {
     res.status(500).json({ error: 'Query failed' });
+  }
+});
+
+/** Purge an instance and the transitive closure of its child instances. */
+apiRouter.delete('/v1/instances/:instanceId', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const result = await purgeInstance(db, req.params.instanceId);
+    if (!result) {
+      res.status(404).json({ error: 'Instance not found' });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Purge failed';
+    res.status(500).json({ error: message });
   }
 });
 
@@ -483,36 +499,35 @@ apiRouter.put('/v1/connector-schedules/:scheduleId/credentials', async (req: Req
 apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: Request, res: Response) => {
   try {
     const { definitionId } = req.params;
-    const { graphCredentials } = req.body as {
+    const { graphCredentials, startingTenantId } = req.body as {
       graphCredentials?: { tenantId: string; clientId: string; clientSecret: string };
+      startingTenantId?: string;
     };
     const db = getDb();
     const { TimerSchedules, ConnectorSchedules } = getCollections(db);
     const now = new Date();
 
+    const connectorSet: Record<string, unknown> = {
+      status: 'ACTIVE' as ConnectorScheduleStatus,
+      updatedAt: now,
+    };
     if (graphCredentials) {
-      await ConnectorSchedules.updateMany(
-        { definitionId },
-        {
-          $set: {
-            'config.tenantId': graphCredentials.tenantId,
-            'config.clientId': graphCredentials.clientId,
-            'config.clientSecret': graphCredentials.clientSecret,
-            status: 'ACTIVE' as ConnectorScheduleStatus,
-            updatedAt: now,
-          },
-        },
-      );
-    } else {
-      await ConnectorSchedules.updateMany(
-        { definitionId },
-        { $set: { status: 'ACTIVE' as ConnectorScheduleStatus, updatedAt: now } },
-      );
+      connectorSet['config.tenantId'] = graphCredentials.tenantId;
+      connectorSet['config.clientId'] = graphCredentials.clientId;
+      connectorSet['config.clientSecret'] = graphCredentials.clientSecret;
     }
+    if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
+      connectorSet.startingTenantId = startingTenantId;
+    }
+    await ConnectorSchedules.updateMany({ definitionId }, { $set: connectorSet });
 
+    const timerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
+    if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
+      timerSet.startingTenantId = startingTenantId;
+    }
     await TimerSchedules.updateMany(
       { definitionId, status: { $ne: 'EXHAUSTED' } },
-      { $set: { status: 'ACTIVE', updatedAt: now } },
+      { $set: timerSet },
     );
 
     res.json({ accepted: true });

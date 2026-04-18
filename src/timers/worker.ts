@@ -29,9 +29,14 @@ export async function claimDueTimer(db: Db): Promise<TimerScheduleDoc | null> {
 }
 
 export async function fireTimer(db: Db, schedule: TimerScheduleDoc): Promise<string> {
+  const startingTenantId =
+    typeof schedule.startingTenantId === 'string' && schedule.startingTenantId.length > 0
+      ? schedule.startingTenantId
+      : undefined;
   const { instanceId } = await startInstance(db, {
     commandId: uuidv4(),
     definitionId: schedule.definitionId,
+    ...(startingTenantId ? { tenantId: startingTenantId } : {}),
   });
   return instanceId;
 }

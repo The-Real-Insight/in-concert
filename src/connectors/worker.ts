@@ -27,12 +27,22 @@ export async function claimDueConnector(db: Db): Promise<ConnectorScheduleDoc | 
   const { ConnectorSchedules } = getCollections(db);
   const now = new Date();
 
+  // Due when never polled, or now - lastPolledAt >= pollingIntervalMs.
+  // Filter server-side so we only claim schedules that actually need polling —
+  // avoids resetting lastPolledAt every worker tick and starving the interval.
   return ConnectorSchedules.findOneAndUpdate(
     {
       status: 'ACTIVE',
       $or: [
         { lastPolledAt: { $exists: false } },
-        { lastPolledAt: { $lte: new Date(now.getTime() - 1) } },
+        {
+          $expr: {
+            $gte: [
+              { $subtract: [now, '$lastPolledAt'] },
+              '$pollingIntervalMs',
+            ],
+          },
+        },
       ],
     },
     {
@@ -44,11 +54,6 @@ export async function claimDueConnector(db: Db): Promise<ConnectorScheduleDoc | 
     },
     { returnDocument: 'after' },
   );
-}
-
-function isDue(schedule: ConnectorScheduleDoc): boolean {
-  if (!schedule.lastPolledAt) return true;
-  return Date.now() - new Date(schedule.lastPolledAt).getTime() >= schedule.pollingIntervalMs;
 }
 
 function emailDedupeKey(email: GraphEmail): string {
@@ -107,10 +112,15 @@ async function handleGraphMailbox(
 
     try {
       // 1. Create the instance (exists but no tokens advancing yet)
+      const startingTenantId =
+        typeof schedule.startingTenantId === 'string' && schedule.startingTenantId.length > 0
+          ? schedule.startingTenantId
+          : undefined;
       const { instanceId } = await startInstance(db, {
         commandId: uuidv4(),
         definitionId: schedule.definitionId,
         businessKey: `email:${email.id}`,
+        ...(startingTenantId ? { tenantId: startingTenantId } : {}),
       });
 
       console.log(
@@ -186,10 +196,6 @@ export async function processOneConnector(
 ): Promise<boolean> {
   const schedule = await claimDueConnector(db);
   if (!schedule) return false;
-  if (!isDue(schedule)) {
-    await releaseSchedule(db, schedule);
-    return false;
-  }
 
   try {
     if (schedule.connectorType === 'graph-mailbox') {

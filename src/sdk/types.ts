@@ -26,6 +26,17 @@ export type DeployResult = {
   definitionId: string;
 };
 
+/** Options for activateSchedules — persisted on timer/connector schedule docs for this definition. */
+export type ActivateSchedulesOptions = {
+  graphCredentials?: { tenantId: string; clientId: string; clientSecret: string };
+  /**
+   * Portal/customer tenant that is activating (starting) these schedules.
+   * Stored as `startingTenantId` on ConnectorSchedule and TimerSchedule; instances started by
+   * email/timer get `ProcessInstances.tenantId` from this (not from the process definition).
+   */
+  startingTenantId?: string;
+};
+
 export type StartInstanceParams = {
   commandId: string;
   definitionId: string;

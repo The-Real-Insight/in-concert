@@ -143,6 +143,7 @@ export async function deployDefinition(
       {
         $set: {
           name: params.name,
+          tenantId: params.tenantId,
           bpmnXml: params.bpmnXml,
           graph,
           deployedAt: now,

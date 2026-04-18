@@ -82,6 +82,60 @@ export async function startInstance(
   return { instanceId, status: 'RUNNING' };
 }
 
+/**
+ * Purge a process instance and the full transitive closure of its descendants
+ * (child instances created by call activities, grandchildren, etc.) from the
+ * database. Removes all per-instance rows across ProcessInstance,
+ * ProcessInstanceState, ProcessInstanceEvent, ProcessInstanceHistory,
+ * Continuation, Outbox, and HumanTask.
+ *
+ * Returns null if the instance does not exist, otherwise the list of purged
+ * instance ids (the root first, then descendants).
+ */
+export async function purgeInstance(
+  db: Db,
+  instanceId: string
+): Promise<{ purgedInstanceIds: string[] } | null> {
+  const {
+    ProcessInstances,
+    ProcessInstanceState,
+    ProcessInstanceEvents,
+    ProcessInstanceHistory,
+    Continuations,
+    Outbox,
+    HumanTasks,
+  } = getCollections(db);
+
+  const root = await ProcessInstances.findOne({ _id: instanceId }, { projection: { _id: 1 } });
+  if (!root) return null;
+
+  const allIds: string[] = [instanceId];
+  let frontier: string[] = [instanceId];
+  while (frontier.length > 0) {
+    const children = await ProcessInstances
+      .find({ parentInstanceId: { $in: frontier } }, { projection: { _id: 1 } })
+      .toArray();
+    const childIds = children.map((c) => c._id);
+    if (childIds.length === 0) break;
+    allIds.push(...childIds);
+    frontier = childIds;
+  }
+
+  const idFilter = { _id: { $in: allIds } };
+  const fkFilter = { instanceId: { $in: allIds } };
+  await Promise.all([
+    ProcessInstances.deleteMany(idFilter),
+    ProcessInstanceState.deleteMany(idFilter),
+    ProcessInstanceEvents.deleteMany(fkFilter),
+    ProcessInstanceHistory.deleteMany(fkFilter),
+    Continuations.deleteMany(fkFilter),
+    Outbox.deleteMany(fkFilter),
+    HumanTasks.deleteMany(fkFilter),
+  ]);
+
+  return { purgedInstanceIds: allIds };
+}
+
 export async function getInstance(
   db: Db,
   instanceId: string

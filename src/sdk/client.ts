@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import { emitEngineAttributionNoticeOnce } from '../attribution';
 import type {
+  ActivateSchedulesOptions,
   DeployParams,
   DeployResult,
   StartInstanceParams,
@@ -175,6 +176,31 @@ export class BpmnEngineClient {
     const { getInstance } = await import('../instance/service');
     const result = await getInstance(this.config.db, instanceId);
     return result as InstanceSummary | null;
+  }
+
+  /**
+   * Purge an instance and the full transitive closure of its descendant
+   * instances (children from call activities, grandchildren, etc.) together
+   * with all dependent rows: ProcessInstance, ProcessInstanceState,
+   * ProcessInstanceEvent, ProcessInstanceHistory, Continuation, Outbox, and
+   * HumanTask. Returns null if the instance does not exist.
+   */
+  async purgeInstance(
+    instanceId: string
+  ): Promise<{ purgedInstanceIds: string[] } | null> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/instances/${instanceId}`, {
+        method: 'DELETE',
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error((err as { error?: string }).error ?? `Purge failed: ${res.status}`);
+      }
+      return (await res.json()) as { purgedInstanceIds: string[] };
+    }
+    const { purgeInstance } = await import('../instance/service');
+    return purgeInstance(this.config.db, instanceId);
   }
 
   /**
@@ -882,7 +908,7 @@ export class BpmnEngineClient {
    */
   async activateSchedules(
     definitionId: string,
-    options?: { graphCredentials?: { tenantId: string; clientId: string; clientSecret: string } },
+    options?: ActivateSchedulesOptions,
   ): Promise<void> {
     if (this.config.mode === 'rest') {
       const res = await fetch(
@@ -900,32 +926,25 @@ export class BpmnEngineClient {
     const { TimerSchedules, ConnectorSchedules } = getCollections(this.config.db);
     const now = new Date();
 
-    // Set credentials + resume all connector schedules
+    const connectorSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
     if (options?.graphCredentials) {
       const gc = options.graphCredentials;
-      await ConnectorSchedules.updateMany(
-        { definitionId },
-        {
-          $set: {
-            'config.tenantId': gc.tenantId,
-            'config.clientId': gc.clientId,
-            'config.clientSecret': gc.clientSecret,
-            status: 'ACTIVE',
-            updatedAt: now,
-          },
-        },
-      );
-    } else {
-      await ConnectorSchedules.updateMany(
-        { definitionId },
-        { $set: { status: 'ACTIVE', updatedAt: now } },
-      );
+      connectorSet['config.tenantId'] = gc.tenantId;
+      connectorSet['config.clientId'] = gc.clientId;
+      connectorSet['config.clientSecret'] = gc.clientSecret;
     }
+    if (options?.startingTenantId) {
+      connectorSet.startingTenantId = options.startingTenantId;
+    }
+    await ConnectorSchedules.updateMany({ definitionId }, { $set: connectorSet });
 
-    // Resume all timer schedules
+    const timerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
+    if (options?.startingTenantId) {
+      timerSet.startingTenantId = options.startingTenantId;
+    }
     await TimerSchedules.updateMany(
       { definitionId, status: { $ne: 'EXHAUSTED' } },
-      { $set: { status: 'ACTIVE', updatedAt: now } },
+      { $set: timerSet },
     );
   }
 

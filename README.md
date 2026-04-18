@@ -30,6 +30,10 @@
 
 ## What's new
 
+### Purge a process instance and its full transitive closure
+
+Clean up a process instance — and every descendant instance spawned through call activities — in one call. `DELETE /v1/instances/:instanceId` (or `client.purgeInstance(instanceId)`) walks the `parentInstanceId` chain and removes all dependent rows from `ProcessInstance`, `ProcessInstanceState`, `ProcessInstanceEvent`, `ProcessInstanceHistory`, `Continuation`, `Outbox`, and `HumanTask`. Definition-scoped collections (process definitions, timer and connector schedules) are left untouched. [Full documentation](./docs/sdk/usage.md#purgeinstanceinstanceid)
+
 ### RRULE recurrence — full calendar-style scheduling
 
 Timer start events now support **RFC 5545 RRULE expressions**, bringing Outlook-style recurrence patterns to BPMN process scheduling. Define schedules that cron simply cannot express:
@@ -295,6 +299,7 @@ The engine exposes a REST API under `/v1`. Key endpoints:
 POST   /v1/definitions                              Deploy a BPMN file
 POST   /v1/instances                                Start a process instance
 GET    /v1/instances/:id                            Get instance
+DELETE /v1/instances/:id                            Purge instance and child-instance closure
 GET    /v1/instances/:id/state                      Get execution state
 POST   /v1/instances/:id/work-items/:wid/complete   Complete a work item
 POST   /v1/instances/:id/decisions/:did             Resolve an XOR gateway

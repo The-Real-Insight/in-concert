@@ -265,6 +265,8 @@ export type TimerScheduleStatus = 'ACTIVE' | 'PAUSED' | 'EXHAUSTED';
 export type TimerScheduleDoc = {
   _id: string;
   definitionId: string;
+  /** Portal/customer tenant that activated this schedule (process instances started by timer inherit this). */
+  startingTenantId?: string;
   nodeId: string;
   kind: 'cycle' | 'date' | 'duration' | 'cron' | 'rrule';
   expression: string;
@@ -283,6 +285,8 @@ export type ConnectorScheduleStatus = 'ACTIVE' | 'PAUSED' | 'DISABLED';
 export type ConnectorScheduleDoc = {
   _id: string;
   definitionId: string;
+  /** Portal/customer tenant that activated this schedule (process instances started by connector inherit this). */
+  startingTenantId?: string;
   nodeId: string;
   connectorType: string;
   /** Connector-specific config from BPMN tri: extensions (e.g. mailbox address). */

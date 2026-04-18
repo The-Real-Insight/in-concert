@@ -30,6 +30,7 @@ export type {
   EngineInitConfig,
   DeployParams,
   DeployResult,
+  ActivateSchedulesOptions,
   StartInstanceParams,
   StartInstanceResult,
   InstanceSummary,

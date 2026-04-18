@@ -20,7 +20,7 @@ Same API in both modes; switch with config.
   - [Local mode](#local-mode-no-server)
 - [Core APIs (Server Programming Model)](#core-apis-server-programming-model)
 - [SDK API Reference](#sdk-api-reference)
-  - [Constructor](#constructor) · [init](#initconfig) · [getServiceVocabulary](#getservicevocabulary) · [extractEvents](#extractevents-bpmnxml-) · [deploy](#deployparams) · [startInstance](#startinstanceparams) · [getInstance](#getinstanceinstanceid) · [getState](#getstateinstanceid)
+  - [Constructor](#constructor) · [init](#initconfig) · [getServiceVocabulary](#getservicevocabulary) · [extractEvents](#extractevents-bpmnxml-) · [deploy](#deployparams) · [startInstance](#startinstanceparams) · [getInstance](#getinstanceinstanceid) · [purgeInstance](#purgeinstanceinstanceid) · [getState](#getstateinstanceid)
   - [completeUserTask](#completeusertaskinstanceid-workitemid-options) · [completeExternalTask](#completeexternaltaskinstanceid-workitemid-options) · [completeWorkItem](#completeworkiteminstanceid-workitemid-options)
   - [activateSchedules](#activateschedulesdefinitionid-options) · [deactivateSchedules](#deactivateschedulesdefinitionid) · [recover](#recoveroptions)
 - [Callbacks for User Tasks and Service Tasks](#callbacks-for-user-tasks-and-service-tasks)
@@ -309,6 +309,34 @@ Get instance summary (id, status, timestamps). Returns `null` if not found.
 const instance = await client.getInstance(instanceId);
 // { _id, status, createdAt, endedAt? }
 ```
+
+---
+
+### purgeInstance(instanceId)
+
+Permanently delete a process instance and the **full transitive closure of its descendant instances** — every child instance created by a call activity, every grandchild, and so on — together with all their dependent rows.
+
+The engine walks the `parentInstanceId` chain starting from `instanceId` and deletes matching rows across:
+
+- `ProcessInstance`
+- `ProcessInstanceState`
+- `ProcessInstanceEvent`
+- `ProcessInstanceHistory`
+- `Continuation`
+- `Outbox`
+- `HumanTask`
+
+Definition-scoped collections (`ProcessDefinition`, `TimerSchedule`, `ConnectorSchedule`) are **not** touched — those outlive individual instances.
+
+```typescript
+const result = await client.purgeInstance(instanceId);
+// { purgedInstanceIds: [rootId, ...descendantIds] }
+// → null if the instance does not exist
+```
+
+REST equivalent: `DELETE /v1/instances/:instanceId`. Returns `404` if the instance is unknown, otherwise `200` with `{ purgedInstanceIds }`.
+
+> **Warning:** This is an irreversible destructive operation. It is intended for administrative cleanup (test fixtures, abandoned branches, data retention) — not for ending a running process. To stop a running instance without deleting its audit trail, complete or terminate it through normal BPMN flow instead.
 
 ---
 
