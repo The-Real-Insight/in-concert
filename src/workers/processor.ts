@@ -14,13 +14,15 @@ const LEASE_MS = 30_000;
 
 export async function claimContinuation(
   db: Db,
-  options?: { instanceId?: string }
+  options?: { instanceId?: string; excludeInstanceIds?: string[] }
 ): Promise<ContinuationDoc | null> {
   const { Continuations } = getCollections(db);
   const now = new Date();
   const filter: Record<string, unknown> = { status: 'READY', dueAt: { $lte: now } };
   if (options?.instanceId) {
     filter.instanceId = options.instanceId;
+  } else if (options?.excludeInstanceIds && options.excludeInstanceIds.length > 0) {
+    filter.instanceId = { $nin: options.excludeInstanceIds };
   }
   const result = await Continuations.findOneAndUpdate(
     filter,
@@ -39,7 +41,7 @@ export async function claimContinuation(
 }
 
 export type ProcessContinuationResult = {
-  outbox: Omit<OutboxDoc, '_id'>[];
+  outbox: OutboxDoc[];
   events: import('../db/collections').ProcessInstanceEventDoc[];
 };
 
@@ -80,6 +82,7 @@ export async function processContinuation(
 
   const now = new Date();
 
+  let outboxWithIds: OutboxDoc[] = [];
   const session = db.client.startSession();
   try {
     await session.withTransaction(async () => {
@@ -135,8 +138,9 @@ export async function processContinuation(
         );
       }
 
-      for (const ob of result.outbox) {
-        await Outbox.insertOne({ ...ob, _id: uuidv4() }, opts);
+      outboxWithIds = result.outbox.map((ob) => ({ ...ob, _id: uuidv4() }));
+      for (const ob of outboxWithIds) {
+        await Outbox.insertOne(ob, opts);
       }
 
       const continuationPayload =
@@ -167,7 +171,7 @@ export async function processContinuation(
         opts
       );
     });
-    return { outbox: result.outbox, events: result.events };
+    return { outbox: outboxWithIds, events: result.events };
   } finally {
     await session.endSession();
   }

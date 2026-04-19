@@ -17,6 +17,13 @@ export async function startInstance(
     businessKey?: string;
     tenantId?: string;
     user?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+    /**
+     * When true, skip inserting the START Continuation. The instance is created in RUNNING state
+     * but will not advance until the caller explicitly calls {@link insertStartContinuation}.
+     * Intended for entry points (e.g. graph-mailbox) that must finish async setup (attachments,
+     * RAG, data-pool seeding) before the BPMN engine sees the first token.
+     */
+    deferContinuation?: boolean;
   }
 ): Promise<StartInstanceResult> {
   const cols = getCollections(db);
@@ -67,9 +74,36 @@ export async function startInstance(
     updatedAt: now,
   });
 
+  if (!params.deferContinuation) {
+    await Continuations.insertOne({
+      _id: uuidv4(),
+      instanceId,
+      dueAt: now,
+      kind: 'START',
+      payload: { commandId: params.commandId },
+      status: 'READY',
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  return { instanceId, status: 'RUNNING' };
+}
+
+/**
+ * Insert the START Continuation for an instance that was created with `deferContinuation: true`.
+ * After this resolves the BPMN engine may pick it up and begin advancing tokens.
+ */
+export async function insertStartContinuation(
+  db: Db,
+  params: { instanceId: string; commandId: string }
+): Promise<void> {
+  const { Continuations } = getCollections(db);
+  const now = new Date();
   await Continuations.insertOne({
     _id: uuidv4(),
-    instanceId,
+    instanceId: params.instanceId,
     dueAt: now,
     kind: 'START',
     payload: { commandId: params.commandId },
@@ -78,8 +112,6 @@ export async function startInstance(
     createdAt: now,
     updatedAt: now,
   });
-
-  return { instanceId, status: 'RUNNING' };
 }
 
 /**

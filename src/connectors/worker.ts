@@ -8,7 +8,7 @@ import { createHash } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import type { Db } from 'mongodb';
 import { getCollections, type ConnectorScheduleDoc } from '../db/collections';
-import { startInstance } from '../instance/service';
+import { startInstance, insertStartContinuation } from '../instance/service';
 import { pollMailbox, markAsRead, listAttachments, getAttachmentContent, type GraphEmail, type GraphCredentials } from './graph';
 import type { MailReceivedEvent, MailReceivedResult } from '../sdk/types';
 
@@ -111,15 +111,20 @@ async function handleGraphMailbox(
     if (schedule.cursor && schedule.cursor >= dedupeKey) continue;
 
     try {
-      // 1. Create the instance (exists but no tokens advancing yet)
+      // 1. Create the instance with the START continuation DEFERRED. Tokens will not advance
+      //    until we explicitly insert the continuation after onMailReceived finishes — this
+      //    prevents the BPMN engine from firing service tasks concurrently with async setup
+      //    (attachment downloads, RAG processing, data-pool seeding, etc.).
       const startingTenantId =
         typeof schedule.startingTenantId === 'string' && schedule.startingTenantId.length > 0
           ? schedule.startingTenantId
           : undefined;
+      const commandId = uuidv4();
       const { instanceId } = await startInstance(db, {
-        commandId: uuidv4(),
+        commandId,
         definitionId: schedule.definitionId,
         businessKey: `email:${email.id}`,
+        deferContinuation: true,
         ...(startingTenantId ? { tenantId: startingTenantId } : {}),
       });
 
@@ -138,7 +143,8 @@ async function handleGraphMailbox(
         }
       }
 
-      // 3. Call onMailReceived — caller stores domain data, downloads attachments on demand
+      // 3. Call onMailReceived — caller stores domain data, downloads attachments on demand.
+      //    We await this fully before releasing the BPMN engine.
       let skip = false;
       if (onMailReceived) {
         try {
@@ -154,8 +160,9 @@ async function handleGraphMailbox(
         }
       }
 
-      // 4. If skipped, terminate the instance; otherwise the START continuation
-      //    (already inserted by startInstance) will advance the process
+      // 4. If skipped, terminate the instance (no continuation was ever inserted, so the
+      //    BPMN engine never sees it). Otherwise release the engine by inserting the
+      //    START continuation now.
       if (skip) {
         const { ProcessInstances, ProcessInstanceState } = getCollections(db);
         await ProcessInstances.updateOne(
@@ -167,6 +174,8 @@ async function handleGraphMailbox(
           { $set: { status: 'TERMINATED' } },
         );
         console.log(`[Connector] Skipped instance ${instanceId} (onMailReceived returned skip)`);
+      } else {
+        await insertStartContinuation(db, { instanceId, commandId });
       }
 
       await markAsRead(mailbox, email.id, creds);

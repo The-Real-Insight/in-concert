@@ -30,6 +30,18 @@
 
 ## What's new
 
+### Enhanced recovery semantics — processes survive crashes
+
+**Server restart? Your processes come back.** in-concert now ships with a first-class crash-recovery entry point: call `recover()` once at startup, and the engine restores every in-flight process from the previous run — quiescent instances come back untouched, mid-step transitions are replayed, and callbacks that were persisted-but-not-delivered are re-handed to your `onServiceCall`, `onWorkItem`, and `onDecision` handlers.
+
+```typescript
+const engine = getBpmEngineClient();
+engine.init({ onServiceCall, onWorkItem, onDecision });
+await engine.recover();   // survive crashes from prior runs
+```
+
+No polling, no bespoke resumption logic, no lost work. The new documentation includes a **crash-survival table from the developer's perspective** — what a restart means for waiting instances, in-flight tasks, pending callbacks, timers, and email-triggered starts — so you can reason about failure modes without reading engine internals. [Full recovery guide](./docs/sdk/usage.md#recoveroptions)
+
 ### Purge a process instance and its full transitive closure
 
 Clean up a process instance — and every descendant instance spawned through call activities — in one call. `DELETE /v1/instances/:instanceId` (or `client.purgeInstance(instanceId)`) walks the `parentInstanceId` chain and removes all dependent rows from `ProcessInstance`, `ProcessInstanceState`, `ProcessInstanceEvent`, `ProcessInstanceHistory`, `Continuation`, `Outbox`, and `HumanTask`. Definition-scoped collections (process definitions, timer and connector schedules) are left untouched. [Full documentation](./docs/sdk/usage.md#purgeinstanceinstanceid)

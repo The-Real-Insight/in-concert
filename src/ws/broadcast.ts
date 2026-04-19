@@ -78,7 +78,7 @@ export function broadcastLifecycle(events: ProcessInstanceEventDoc[]): void {
 }
 
 export function broadcastAll(
-  outbox: Omit<OutboxDoc, '_id'>[],
+  outbox: OutboxDoc[] | Omit<OutboxDoc, '_id'>[],
   events: ProcessInstanceEventDoc[]
 ): void {
   const payload: StreamPayload = {};

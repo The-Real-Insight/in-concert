@@ -421,18 +421,60 @@ await client.deactivateSchedules(definitionId);
 
 ### recover(options?)
 
-Process all pending continuations (e.g. after server restart). Uses handlers from `init()` unless overridden. Local mode only.
+Restore in-flight work after a server restart. Local mode only.
+
+`recover()` is the engine's crash-recovery entry point. Call it **once at server startup**, after `init()` and before the first `run()`. It resumes anything the previous process was doing: continuations that were mid-step, callbacks that were persisted but never delivered, tokens sitting in the queue.
+
+#### Standard startup pattern
+
+```typescript
+const engine = getBpmEngineClient();
+
+// 1. Wire handlers once.
+engine.init({
+  onServiceCall,
+  onWorkItem,
+  onDecision,
+});
+
+// 2. Resume whatever the previous process left behind.
+await engine.recover();
+
+// 3. From here, business as usual.
+//    - User-initiated starts:
+await engine.run(instanceId);
+//    - Timer / connector schedules call run() internally.
+```
+
+#### Handlers are required
+
+`recover()` can re-deliver `onServiceCall`, `onWorkItem`, `onDecision`, and `onMultiInstanceResolve` callbacks for work that was in flight when the previous process died. Without handlers, those callbacks would be silently dropped — so `recover()` **throws** if neither `init()` nor `options.handlers` provides them.
 
 ```typescript
 // Uses init handlers
-const { processed } = await client.recover();
+const { processed } = await engine.recover();
 
-// Override handlers for this call
-const { processed } = await client.recover({
+// Override handlers for this call only
+const { processed } = await engine.recover({
   handlers: { onWorkItem: ..., onDecision: ... },
   maxIterations: 5000,
 });
 ```
+
+#### What survives a crash
+
+From an application developer's perspective:
+
+| If the server died while… | Does my process / email survive? | What `recover()` does |
+|---|---|---|
+| A process instance was **waiting** for a user task, timer, or external event | ✅ Yes | Nothing needed — quiescent state is already durable |
+| A user submitted a task / decision a moment before the crash | ✅ Yes | The continuation is replayed and the process advances |
+| A service task or gateway callback was being handed to your handler | ✅ Yes | The callback is re-delivered to `onServiceCall` / `onDecision` |
+| A process instance was mid-step (applying a transition) | ✅ Yes | The step is re-attempted |
+| A **timer** was firing at the instant of the crash | ⚠️ The schedule continues; one fire may produce a duplicate instance | Handle with idempotency in your handlers ([tracked](../tickets/timer-connector-double-fire.md)) |
+| A **mailbox connector** was starting an instance for an email | ⚠️ The email is retried; one email may produce a duplicate instance | Handle with idempotency in `onMailReceived` ([tracked](../tickets/timer-connector-double-fire.md)) |
+
+In short: **your processes don't disappear.** Quiescent instances come back untouched; in-flight steps get replayed. The only residual footgun is that timers and email-triggered starts can double-fire under a narrow crash window — your handlers should be idempotent there (or tolerate a second instance being started).
 
 ---
 

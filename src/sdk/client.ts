@@ -520,8 +520,29 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Process all pending continuations (e.g. after server restart).
-   * Uses handlers from init() unless overridden. Local mode only.
+   * Restore in-flight work after a server restart. Call once at startup,
+   * after {@link init}, before the first {@link run}.
+   *
+   * Performs three steps in order:
+   *   1. Reclaims continuations that a previous process started but never
+   *      finished (e.g. crashed mid-step), so they become claimable again.
+   *   2. Re-delivers any callback (`onWorkItem`, `onServiceCall`,
+   *      `onDecision`, `onMultiInstanceResolve`) that was persisted but
+   *      never handed to a handler because the process died between
+   *      commit and callback delivery.
+   *   3. Drains every pending continuation, invoking the init handlers,
+   *      until the queue is empty.
+   *
+   * Standard startup pattern:
+   *
+   *     const engine = getBpmEngineClient();
+   *     engine.init({ onServiceCall, onWorkItem, onDecision });
+   *     await engine.recover();   // survive crashes from prior runs
+   *     // ...then run() for user-initiated or scheduled starts
+   *
+   * Handlers are required — without them, re-delivered callbacks would be
+   * silently dropped. `recover()` throws if no handlers are set via
+   * `init()` or `options.handlers`. Local mode only.
    */
   async recover(options?: { handlers?: CallbackHandlers; maxIterations?: number }): Promise<{ processed: number }> {
     if (this.config.mode !== 'local') {
@@ -535,14 +556,21 @@ export class BpmnEngineClient {
     }
     const { claimContinuation, processContinuation } = await import('../workers/processor');
     const { broadcastAll } = await import('../ws/broadcast');
+    const { sweepExpiredLeases } = await import('../workers/sweeper');
+    const { markOutboxSent, dispatchOutboxBatch } = await import('../workers/outbox-dispatcher');
     const maxIter = options?.maxIterations ?? 5000;
     const db = (this.config as { mode: 'local'; db: Db }).db;
+    await sweepExpiredLeases(db);
+    await dispatchOutboxBatch(db, { stalenessMs: 0 });
     let processed = 0;
     for (let i = 0; i < maxIter; i++) {
       const cont = await claimContinuation(db);
       if (!cont) return { processed };
       const { outbox, events } = await processContinuation(db, cont);
       broadcastAll(outbox, events);
+      if (outbox.length > 0) {
+        await markOutboxSent(db, outbox.map((o) => o._id));
+      }
       processed++;
       for (const ob of outbox) {
         const item = { kind: ob.kind, instanceId: ob.instanceId, payload: ob.payload } as CallbackItem;
@@ -608,6 +636,7 @@ export class BpmnEngineClient {
     const { claimContinuation, processContinuation } = await import('../workers/processor');
     const { getInstance } = await import('../instance/service');
     const { broadcastAll } = await import('../ws/broadcast');
+    const { markOutboxSent } = await import('../workers/outbox-dispatcher');
     const maxIter = options?.maxIterations ?? 500;
 
     const db = (this.config as { mode: 'local'; db: Db }).db;
@@ -620,6 +649,9 @@ export class BpmnEngineClient {
 
       const { outbox, events } = await processContinuation(db, cont);
       broadcastAll(outbox, events);
+      if (outbox.length > 0) {
+        await markOutboxSent(db, outbox.map((o) => o._id));
+      }
 
       for (const ev of events) {
         const payloadInstanceId = (ev.payload as { instanceId?: string }).instanceId;
@@ -690,14 +722,20 @@ export class BpmnEngineClient {
    * REST: WebSocket at /ws. Local: internal engine loop (MongoDB passive).
    * Returns unsubscribe function.
    */
-  subscribeToCallbacks(callback: (item: CallbackItem) => void): () => void {
+  subscribeToCallbacks(
+    callback: (item: CallbackItem) => void,
+    options?: { getExcludedInstanceIds?: () => string[] }
+  ): () => void {
     if (this.config.mode === 'local') {
-      return this._subscribeLocal(callback);
+      return this._subscribeLocal(callback, options);
     }
     return this._subscribeRest(callback);
   }
 
-  private _subscribeLocal(callback: (item: CallbackItem) => void): () => void {
+  private _subscribeLocal(
+    callback: (item: CallbackItem) => void,
+    options?: { getExcludedInstanceIds?: () => string[] }
+  ): () => void {
     if (this.config.mode !== 'local') throw new Error('Expected local config');
     const db = this.config.db;
     let stopped = false;
@@ -705,12 +743,17 @@ export class BpmnEngineClient {
     void (async () => {
       const { claimContinuation, processContinuation } = await import('../workers/processor');
       const { broadcastAll } = await import('../ws/broadcast');
+      const { markOutboxSent } = await import('../workers/outbox-dispatcher');
       while (!stopped) {
         try {
-          const cont = await claimContinuation(db);
+          const excludeInstanceIds = options?.getExcludedInstanceIds?.() ?? [];
+          const cont = await claimContinuation(db, { excludeInstanceIds });
           if (cont) {
             const { outbox, events } = await processContinuation(db, cont);
             broadcastAll(outbox, events);
+            if (outbox.length > 0) {
+              await markOutboxSent(db, outbox.map((o) => o._id));
+            }
             for (const ob of outbox) {
               if (!stopped) {
                 callback({ kind: ob.kind, instanceId: ob.instanceId, payload: ob.payload } as CallbackItem);

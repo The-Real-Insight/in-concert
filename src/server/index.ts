@@ -25,6 +25,8 @@ import { addBotMessage } from './conversation';
 import { emitEngineAttributionNoticeOnce } from '../attribution';
 import { processOneTimer } from '../timers/worker';
 import { processOneConnector } from '../connectors/worker';
+import { sweepExpiredLeases } from '../workers/sweeper';
+import { dispatchOutboxBatch, markOutboxSent } from '../workers/outbox-dispatcher';
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -210,6 +212,8 @@ function createServiceTaskHandler() {
 const POLL_MS = 500;
 const TIMER_POLL_MS = 1_000;
 const CONNECTOR_POLL_MS = 2_000;
+const SWEEPER_INTERVAL_MS = 10_000;
+const OUTBOX_DISPATCH_INTERVAL_MS = 500;
 
 async function connectorLoop() {
   const db = getDb();
@@ -236,6 +240,30 @@ async function timerLoop() {
   }
 }
 
+async function sweeperLoop() {
+  const db = getDb();
+  while (true) {
+    try {
+      await sweepExpiredLeases(db);
+    } catch (err) {
+      console.error('Sweeper error:', err);
+    }
+    await new Promise((r) => setTimeout(r, SWEEPER_INTERVAL_MS));
+  }
+}
+
+async function outboxDispatcherLoop() {
+  const db = getDb();
+  while (true) {
+    try {
+      await dispatchOutboxBatch(db);
+    } catch (err) {
+      console.error('Outbox dispatcher error:', err);
+    }
+    await new Promise((r) => setTimeout(r, OUTBOX_DISPATCH_INTERVAL_MS));
+  }
+}
+
 async function workerLoop() {
   const db = getDb();
   while (true) {
@@ -245,6 +273,9 @@ async function workerLoop() {
         try {
           const { outbox, events } = await processContinuation(db, continuation);
           broadcastAll(outbox, events);
+          if (outbox.length > 0) {
+            await markOutboxSent(db, outbox.map((o) => o._id));
+          }
         } catch (err) {
           console.error('Continuation failed:', err);
           const { Continuations } = getCollections(db);
@@ -266,6 +297,11 @@ async function main() {
   const db = await connectDb();
   await ensureIndexes(db);
 
+  const swept = await sweepExpiredLeases(db);
+  if (swept.continuations + swept.timers + swept.connectors > 0) {
+    console.log(`[Startup] Reclaimed expired leases:`, swept);
+  }
+
   addStreamHandler(createProjectionHandler(db));
   addStreamHandler(createNeoWatchHandler());
   addStreamHandler(createServiceTaskHandler());
@@ -282,6 +318,8 @@ async function main() {
   workerLoop();
   timerLoop();
   connectorLoop();
+  sweeperLoop();
+  outboxDispatcherLoop();
 
   process.on('SIGTERM', async () => {
     httpServer.close();
