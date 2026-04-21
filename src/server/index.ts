@@ -298,7 +298,7 @@ async function main() {
   await ensureIndexes(db);
 
   const swept = await sweepExpiredLeases(db);
-  if (swept.continuations + swept.timers + swept.connectors > 0) {
+  if (swept.continuations + swept.timers + swept.connectors + swept.triggers > 0) {
     console.log(`[Startup] Reclaimed expired leases:`, swept);
   }
 

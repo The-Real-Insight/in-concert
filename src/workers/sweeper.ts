@@ -15,10 +15,11 @@ export type SweepResult = {
   continuations: number;
   timers: number;
   connectors: number;
+  triggers: number;
 };
 
 export async function sweepExpiredLeases(db: Db): Promise<SweepResult> {
-  const { Continuations, TimerSchedules, ConnectorSchedules } = getCollections(db);
+  const { Continuations, TimerSchedules, ConnectorSchedules, TriggerSchedules } = getCollections(db);
   const now = new Date();
 
   const contRes = await Continuations.updateMany(
@@ -36,9 +37,15 @@ export async function sweepExpiredLeases(db: Db): Promise<SweepResult> {
     { $set: { updatedAt: now }, $unset: { ownerId: '', leaseUntil: '' } },
   );
 
+  const trigRes = await TriggerSchedules.updateMany(
+    { leaseUntil: { $lt: now } },
+    { $set: { updatedAt: now }, $unset: { ownerId: '', leaseUntil: '' } },
+  );
+
   return {
     continuations: contRes.modifiedCount ?? 0,
     timers: timerRes.modifiedCount ?? 0,
     connectors: connRes.modifiedCount ?? 0,
+    triggers: trigRes.modifiedCount ?? 0,
   };
 }

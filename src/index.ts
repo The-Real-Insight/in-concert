@@ -82,7 +82,7 @@ async function main() {
 
   // Reclaim any leases that outlived the previous process, then resume.
   const swept = await sweepExpiredLeases(db);
-  if (swept.continuations + swept.timers + swept.connectors > 0) {
+  if (swept.continuations + swept.timers + swept.connectors + swept.triggers > 0) {
     console.log(`[Startup] Reclaimed expired leases:`, swept);
   }
 

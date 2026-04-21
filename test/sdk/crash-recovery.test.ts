@@ -109,7 +109,7 @@ describe('sweepExpiredLeases', () => {
     const { Continuations } = getCollections(db);
     await Continuations.insertOne(makeContinuation({ status: 'READY' }));
     const result = await sweepExpiredLeases(db);
-    expect(result).toEqual({ continuations: 0, timers: 0, connectors: 0 });
+    expect(result).toEqual({ continuations: 0, timers: 0, connectors: 0, triggers: 0 });
   });
 });
 
