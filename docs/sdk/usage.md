@@ -38,6 +38,8 @@ Same API in both modes; switch with config.
 - [Message start events — Graph mailbox connector](#message-start-events--graph-mailbox-connector)
   - [Engine configuration](#engine-configuration) · [onMailReceived callback](#onmailreceived-callback)
   - [End-to-end example: email-triggered agentic workflow](#end-to-end-example-email-triggered-agentic-workflow)
+- [AI-listener start events](#ai-listener-start-events)
+  - [How it works](#how-it-works-1) · [LLM response parsing](#llm-response-parsing) · [Bypassing HTTP](#bypassing-http-tests-and-sdk-direct-integration)
 - [Prerequisites](#prerequisites)
 
 ---
@@ -1903,6 +1905,132 @@ Redeploy (overwrite) → preserves current status
 ```
 
 The process model never changes. Credentials, polling state, and lifecycle are all managed at runtime through the SDK or REST API.
+
+---
+
+## AI-listener start events
+
+BPMN message start events with `tri:connectorType="ai-listener"` poll an MCP-style tool endpoint, feed the result to an LLM together with a prompt authored in the BPMN, and start a process instance when the LLM answers "yes". The business rule — *how to interpret the signal* — lives in the prompt; the engine handles polling, exactly-once, crash recovery, and dedup.
+
+Canonical use cases:
+
+- **Weather guard** — tool returns current observations; prompt asks *"is it raining heavily enough to halt outdoor ops?"*
+- **Price-movement detector** — tool returns a quote + its 30-day band; prompt asks *"is this a reportable move?"*
+- **System-health monitor** — tool returns a JSON health report; prompt asks *"does this warrant waking on-call?"*
+
+### BPMN definition
+
+```xml
+<bpmn:message id="Msg_RainAlert" name="ai-rain-alert"
+  tri:connectorType="ai-listener"
+  tri:toolEndpoint="https://weather.example.com/tools/call"
+  tri:tool="get_weather"
+  tri:llmEndpoint="https://llm.example.com/evaluate"
+  tri:prompt="Given this observation, is it currently raining heavily enough to halt outdoor ops? Answer strictly yes or no."
+  tri:pollIntervalSeconds="300"
+  tri:initialPolicy="skip-existing" />
+
+<bpmn:startEvent id="Start" name="Rain detected">
+  <bpmn:messageEventDefinition messageRef="Msg_RainAlert" />
+</bpmn:startEvent>
+```
+
+### `tri:*` attributes
+
+| Attribute | Required | Default | Meaning |
+|---|---|---|---|
+| `tri:connectorType` | yes | — | Must be `"ai-listener"` |
+| `tri:toolEndpoint` | yes | — | URL receiving `POST { tool }`; returns tool output as JSON |
+| `tri:tool` | yes | — | Tool name, passed in the POST body |
+| `tri:llmEndpoint` | yes† | — | URL receiving `POST { prompt, context }`; returns `{ decision|answer, reason?, correlationId? }`. †Not required if host injects an `evaluate` function |
+| `tri:prompt` | yes | — | Evaluation prompt sent to the LLM alongside the tool output |
+| `tri:pollIntervalSeconds` | no | `"120"` | Polling cadence, minimum `30` |
+| `tri:initialPolicy` | no | `"skip-existing"` | `"fire-existing"` fires even on first poll; `"skip-existing"` primes silently |
+
+### How it works
+
+1. **Deploy** — the engine detects the message start event with `tri:connectorType="ai-listener"` and creates a `TriggerSchedule` row (`status: 'PAUSED'`).
+2. **Activate** — `client.resumeTriggerSchedule(scheduleId)` (or the legacy `resumeConnectorSchedule` alias) starts polling.
+3. **Each tick** — the plugin `POST`s to the tool endpoint, then `POST`s the result and prompt to the LLM endpoint, parses the response for `yes`/`no`, and emits a `StartRequest` on `yes`. Ambiguous responses (`"maybe yes"`, free-form hedging) report `unclear` and fire nothing.
+4. **Exactly-once** — the `StartRequest` carries a dedup key. When the LLM response includes `correlationId`, that's the key; otherwise a 16-char hash of the tool output. Two `yes`-detections with the same key collapse to a single process instance.
+
+### LLM response parsing
+
+The plugin accepts two response shapes:
+
+```json
+{ "decision": "yes", "reason": "precipitation is above threshold" }
+{ "answer": "Yes, because the wind is ..." }
+```
+
+Parsing rules:
+
+- Case-insensitive, word-boundary matched (`"YES"` matches; `"yesterday"` does not).
+- If both `"yes"` and `"no"` appear in the same response → `unclear`, no fire.
+- If neither appears → `unclear`, no fire.
+- An optional `correlationId` in the response overrides the default hash-based dedup, letting the LLM name the *event* it detected (`"zone-7-flood"` stays one instance across many polls of the same ongoing situation).
+
+Prompt your model toward unambiguous output: something like *"Answer strictly with `yes` or `no`, no other words."* keeps the parser happy.
+
+### Credentials
+
+Two optional keys forwarded as `Authorization: Bearer <key>` on the respective calls:
+
+```typescript
+await client.setTriggerCredentials(scheduleId, {
+  toolApiKey: 'tool-bearer-xxx',
+  llmApiKey: 'sk-ant-xxx',
+});
+```
+
+Hosts that need a different auth scheme (mTLS, custom headers, SDK-based calls) inject their own `callTool` / `evaluate` functions via the plugin constructor — see below.
+
+### Bypassing HTTP (tests and SDK-direct integration)
+
+The default HTTP flow is convenient but optional. Real deployments often want to call the Anthropic or OpenAI SDK directly (for retries, structured output, caching) and skip the extra network hop. Swap either or both halves of the flow via the plugin's constructor:
+
+```typescript
+import { getDefaultTriggerRegistry, AIListenerTrigger } from '@the-real-insight/in-concert/triggers';
+import { parseEvaluation } from '@the-real-insight/in-concert/triggers/ai-listener';
+import Anthropic from '@anthropic-ai/sdk';
+
+const anthropic = new Anthropic();
+const plugin = getDefaultTriggerRegistry().get('ai-listener') as AIListenerTrigger;
+
+plugin.setEvaluate(async (prompt, context) => {
+  const completion = await anthropic.messages.create({
+    model: 'claude-opus-4-7',
+    max_tokens: 20,
+    system: 'Answer strictly with yes or no. No other words.',
+    messages: [{ role: 'user', content: `${prompt}\n\nData: ${JSON.stringify(context)}` }],
+  });
+  const text = (completion.content[0] as { text: string }).text;
+  return parseEvaluation({ answer: text });
+});
+```
+
+With `setEvaluate` wired, `tri:llmEndpoint` becomes optional and the plugin calls your function instead. Same pattern for `setCallTool` if you'd rather use an MCP SDK than raw HTTP for the tool half.
+
+### SDK methods
+
+Standard trigger-schedule management applies uniformly:
+
+```typescript
+const schedules = await client.listTriggerSchedules({ triggerType: 'ai-listener' });
+await client.pauseTriggerSchedule(scheduleId);
+await client.resumeTriggerSchedule(scheduleId);
+await client.setTriggerCredentials(scheduleId, { toolApiKey, llmApiKey });
+```
+
+### Gotchas
+
+1. **The LLM is the business rule.** Two operators reading the prompt should agree on the answer — write prompts that spell out edge cases ("ignore drizzle", "count only weekday observations").
+2. **Polling cost.** Every tick is a tool call plus an LLM call. Set `pollIntervalSeconds` generously — most real detections don't need sub-minute cadence.
+3. **Dedup is only as good as your key.** Hashing the tool output means volatile fields (timestamps, request IDs) cause a new instance every poll. Prefer a `correlationId` from the LLM that names the *situation*, not the *observation*.
+4. **Unclear answers don't fire.** Constrain the model to strict yes/no and the parser will be happy.
+5. **LLM failures retry next tick.** The scheduler records `lastError` on the schedule row and releases the lease. Nothing was created, no duplicate risk.
+
+See [`src/triggers/ai-listener/README.md`](../../src/triggers/ai-listener/README.md) for the full plugin reference.
 
 ---
 
