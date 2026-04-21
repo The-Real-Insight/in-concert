@@ -41,6 +41,14 @@
     "engine"
   ],
   "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/The-Real-Insight/in-concert.git"
+  },
+  "homepage": "https://github.com/The-Real-Insight/in-concert#readme",
+  "bugs": {
+    "url": "https://github.com/The-Real-Insight/in-concert/issues"
+  },
   "files": [
     "dist",
     "LICENSE"
