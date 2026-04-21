@@ -110,42 +110,76 @@ function buildTimingFields(
   return { intervalMs: timing.ms };
 }
 
-async function syncConnectorSchedules(db: Db, definitionId: string, graph: NormalizedGraph): Promise<void> {
-  const { ConnectorSchedules } = getCollections(db);
+/**
+ * Write/refresh TriggerSchedule rows for BPMN message start events whose
+ * message carries a `tri:connectorType`. Each such start event is matched
+ * against a registered StartTrigger via the default trigger registry.
+ *
+ * Replaces the pre-refactor syncConnectorSchedules which wrote into the
+ * now-deprecated ConnectorSchedule collection.
+ */
+async function syncConnectorTriggerSchedules(
+  db: Db,
+  definitionId: string,
+  graph: NormalizedGraph,
+): Promise<void> {
+  const { TriggerSchedules } = getCollections(db);
+  const registry = getDefaultTriggerRegistry();
   const now = new Date();
 
   const connectorStartNodes = graph.startNodeIds
-    .map(id => graph.nodes[id])
-    .filter(n => n?.type === 'startEvent' && n.connectorConfig?.connectorType);
+    .map((id) => graph.nodes[id])
+    .filter((n) => n?.type === 'startEvent' && n.connectorConfig?.connectorType);
 
-  const activeNodeIds = connectorStartNodes.map(n => n.id);
-  await ConnectorSchedules.deleteMany({
+  // Remove any non-timer trigger rows whose start event is gone.
+  const activeStartEventIds = connectorStartNodes.map((n) => n.id);
+  await TriggerSchedules.deleteMany({
     definitionId,
-    ...(activeNodeIds.length > 0
-      ? { nodeId: { $nin: activeNodeIds } }
+    triggerType: { $ne: 'timer' },
+    ...(activeStartEventIds.length > 0
+      ? { startEventId: { $nin: activeStartEventIds } }
       : {}),
   });
 
   for (const node of connectorStartNodes) {
     const cc = node.connectorConfig!;
     const { connectorType, ...restConfig } = cc;
-    const pollingIntervalMs =
-      connectorType === 'graph-mailbox' ? config.graph.pollingIntervalMs : 10_000;
+    const trigger = registry.get(connectorType);
+    if (!trigger) {
+      throw new Error(
+        `BPMN references tri:connectorType="${connectorType}" but no such trigger is registered.`,
+      );
+    }
 
-    await ConnectorSchedules.updateOne(
-      { definitionId, nodeId: node.id },
+    const def: TriggerDefinition = {
+      triggerType: connectorType,
+      definitionId,
+      startEventId: node.id,
+      config: restConfig,
+    };
+    trigger.validate(def);
+
+    const timing = trigger.nextSchedule(def, null, null);
+    const setFields = buildTimingFields(timing);
+
+    await TriggerSchedules.updateOne(
+      { definitionId, startEventId: node.id, triggerType: connectorType },
       {
         $set: {
-          connectorType,
-          config: restConfig,
-          pollingIntervalMs,
+          config: def.config,
           updatedAt: now,
+          ...setFields,
         },
         $setOnInsert: {
           _id: uuidv4(),
+          scheduleId: uuidv4(),
           definitionId,
-          nodeId: node.id,
-          status: 'PAUSED',
+          startEventId: node.id,
+          triggerType: connectorType,
+          cursor: null,
+          credentials: null,
+          initialPolicy: trigger.defaultInitialPolicy,
+          status: 'PAUSED', // deployed as PAUSED — host must call activate
           createdAt: now,
         },
       },
@@ -191,7 +225,7 @@ export async function deployDefinition(
       }
     );
     await syncTimerTriggerSchedules(db, existing._id, graph);
-    await syncConnectorSchedules(db, existing._id, graph);
+    await syncConnectorTriggerSchedules(db, existing._id, graph);
     return { definitionId: existing._id };
   }
 
@@ -209,7 +243,7 @@ export async function deployDefinition(
   });
 
   await syncTimerTriggerSchedules(db, definitionId, graph);
-  await syncConnectorSchedules(db, definitionId, graph);
+  await syncConnectorTriggerSchedules(db, definitionId, graph);
 
   return { definitionId };
 }

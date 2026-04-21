@@ -56,15 +56,24 @@ export class BpmnEngineClient {
     this.serviceVocabulary = config.serviceVocabulary ?? null;
     this._onMailReceived = config.onMailReceived ?? null;
 
-    // Apply connector credentials to global config (overrides env vars)
-    if (config.connectors?.['graph-mailbox']) {
-      const gc = config.connectors['graph-mailbox'];
-      const { config: engineConfig } = require('../config');
-      if (gc.tenantId) engineConfig.graph.tenantId = gc.tenantId;
-      if (gc.clientId) engineConfig.graph.clientId = gc.clientId;
-      if (gc.clientSecret) engineConfig.graph.clientSecret = gc.clientSecret;
-      if (gc.pollingIntervalMs != null) engineConfig.graph.pollingIntervalMs = gc.pollingIntervalMs;
-      if (gc.sinceMinutes != null) engineConfig.graph.sinceMinutes = gc.sinceMinutes;
+    // Forward the onMailReceived hook to the registered graph-mailbox trigger.
+    if (config.onMailReceived) {
+      const { getDefaultTriggerRegistry } = require('../triggers') as typeof import('../triggers');
+      const { GraphMailboxTrigger } = require('../triggers/graph-mailbox/graph-mailbox-trigger') as typeof import('../triggers/graph-mailbox/graph-mailbox-trigger');
+      const mailbox = getDefaultTriggerRegistry().get('graph-mailbox');
+      if (mailbox instanceof GraphMailboxTrigger) {
+        mailbox.setOnMailReceived(config.onMailReceived);
+      }
+    }
+
+    // Deprecated: engine-level graph-mailbox credentials. Prefer per-schedule
+    // credentials via client.setConnectorCredentials(). Forwarded to env so
+    // the plugin picks them up via its own credential resolution.
+    const gc = config.connectors?.['graph-mailbox'];
+    if (gc) {
+      if (gc.tenantId) process.env.GRAPH_TENANT_ID = gc.tenantId;
+      if (gc.clientId) process.env.GRAPH_CLIENT_ID = gc.clientId;
+      if (gc.clientSecret) process.env.GRAPH_CLIENT_SECRET = gc.clientSecret;
     }
   }
 
@@ -857,7 +866,7 @@ export class BpmnEngineClient {
     definitionId?: string;
     status?: string;
     connectorType?: string;
-  }): Promise<import('../db/collections').ConnectorScheduleDoc[]> {
+  }): Promise<import('../db/collections').TriggerScheduleDoc[]> {
     if (this.config.mode === 'rest') {
       const q = new URLSearchParams();
       if (params?.definitionId) q.set('definitionId', params.definitionId);
@@ -865,16 +874,18 @@ export class BpmnEngineClient {
       if (params?.connectorType) q.set('connectorType', params.connectorType);
       const res = await fetch(`${this.config.baseUrl}/v1/connector-schedules?${q}`);
       if (!res.ok) throw new Error(`List connector schedules failed: ${res.status}`);
-      const json = (await res.json()) as { items: import('../db/collections').ConnectorScheduleDoc[] };
+      const json = (await res.json()) as {
+        items: import('../db/collections').TriggerScheduleDoc[];
+      };
       return json.items;
     }
     const { getCollections } = await import('../db/collections');
-    const { ConnectorSchedules } = getCollections(this.config.db);
-    const filter: Record<string, unknown> = {};
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const filter: Record<string, unknown> = { triggerType: { $ne: 'timer' } };
     if (params?.definitionId) filter.definitionId = params.definitionId;
     if (params?.status) filter.status = params.status;
-    if (params?.connectorType) filter.connectorType = params.connectorType;
-    return ConnectorSchedules.find(filter).sort({ createdAt: -1 }).toArray();
+    if (params?.connectorType) filter.triggerType = params.connectorType;
+    return TriggerSchedules.find(filter).sort({ createdAt: -1 }).toArray();
   }
 
   async pauseConnectorSchedule(scheduleId: string): Promise<void> {
@@ -884,9 +895,9 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { ConnectorSchedules } = getCollections(this.config.db);
-    const result = await ConnectorSchedules.findOneAndUpdate(
-      { _id: scheduleId, status: 'ACTIVE' },
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: scheduleId, triggerType: { $ne: 'timer' }, status: 'ACTIVE' },
       { $set: { status: 'PAUSED', updatedAt: new Date() } },
     );
     if (!result) throw new Error('Connector schedule not found or not ACTIVE');
@@ -899,18 +910,19 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { ConnectorSchedules } = getCollections(this.config.db);
-    const result = await ConnectorSchedules.findOneAndUpdate(
-      { _id: scheduleId, status: 'PAUSED' },
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: scheduleId, triggerType: { $ne: 'timer' }, status: 'PAUSED' },
       { $set: { status: 'ACTIVE', updatedAt: new Date() } },
     );
     if (!result) throw new Error('Connector schedule not found or not PAUSED');
   }
 
   /**
-   * Set or update credentials on a connector schedule.
-   * Stored in ConnectorSchedule.config — persisted in MongoDB, survives restarts.
-   * The worker reads them at poll time, falling back to global config.graph.
+   * Set or update credentials on a trigger schedule. Stored in
+   * TriggerSchedule.credentials — persisted in MongoDB, survives restarts.
+   * Only applies to non-timer triggers (mailbox, sharepoint-folder, etc.)
+   * where credentials are relevant.
    */
   async setConnectorCredentials(
     scheduleId: string,
@@ -929,11 +941,15 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { ConnectorSchedules } = getCollections(this.config.db);
-    const result = await ConnectorSchedules.findOneAndUpdate(
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
       { _id: scheduleId },
       {
         $set: {
+          // Credentials are stored on the dedicated field now, but also
+          // mirrored into config.* for backward-compatibility with test
+          // assertions that read credentials.clientId off config.*.
+          credentials,
           'config.tenantId': credentials.tenantId,
           'config.clientId': credentials.clientId,
           'config.clientSecret': credentials.clientSecret,
@@ -968,12 +984,14 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { TriggerSchedules, ConnectorSchedules } = getCollections(this.config.db);
+    const { TriggerSchedules } = getCollections(this.config.db);
     const now = new Date();
 
+    // Non-timer triggers (mailbox, sharepoint, …): activate + optional credentials.
     const connectorSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
     if (options?.graphCredentials) {
       const gc = options.graphCredentials;
+      connectorSet.credentials = gc;
       connectorSet['config.tenantId'] = gc.tenantId;
       connectorSet['config.clientId'] = gc.clientId;
       connectorSet['config.clientSecret'] = gc.clientSecret;
@@ -981,15 +999,19 @@ export class BpmnEngineClient {
     if (options?.startingTenantId) {
       connectorSet.startingTenantId = options.startingTenantId;
     }
-    await ConnectorSchedules.updateMany({ definitionId }, { $set: connectorSet });
+    await TriggerSchedules.updateMany(
+      { definitionId, triggerType: { $ne: 'timer' } },
+      { $set: connectorSet },
+    );
 
-    const triggerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
+    // Timer triggers: activate (unless EXHAUSTED).
+    const timerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
     if (options?.startingTenantId) {
-      triggerSet.startingTenantId = options.startingTenantId;
+      timerSet.startingTenantId = options.startingTenantId;
     }
     await TriggerSchedules.updateMany(
       { definitionId, triggerType: 'timer', status: { $ne: 'EXHAUSTED' } },
-      { $set: triggerSet },
+      { $set: timerSet },
     );
   }
 
@@ -1007,14 +1029,10 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { TriggerSchedules, ConnectorSchedules } = getCollections(this.config.db);
+    const { TriggerSchedules } = getCollections(this.config.db);
     const now = new Date();
-    await ConnectorSchedules.updateMany(
-      { definitionId, status: 'ACTIVE' },
-      { $set: { status: 'PAUSED', updatedAt: now } },
-    );
     await TriggerSchedules.updateMany(
-      { definitionId, triggerType: 'timer', status: 'ACTIVE' },
+      { definitionId, status: 'ACTIVE' },
       { $set: { status: 'PAUSED', updatedAt: now } },
     );
   }

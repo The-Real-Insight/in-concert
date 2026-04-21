@@ -4,10 +4,10 @@
  * Uses OAuth2 client credentials flow (no MSAL dependency).
  * Polls /users/{mailbox}/messages for unread emails.
  *
- * All functions accept optional credential overrides so that each connector
- * schedule can carry its own tenant/client. Falls back to global config.graph.
+ * This module is owned by the graph-mailbox trigger plugin. Credentials
+ * come from the plugin (per-schedule overrides, or env-var fallback read
+ * here). The engine core has no knowledge of Graph.
  */
-import { config } from '../config';
 
 // ── Credential overrides ─────────────────────────────────────────────────────
 
@@ -17,18 +17,36 @@ export type GraphCredentials = {
   clientSecret?: string;
 };
 
+function envFallback(): GraphCredentials {
+  return {
+    tenantId: process.env.GRAPH_TENANT_ID,
+    clientId: process.env.GRAPH_CLIENT_ID,
+    clientSecret: process.env.GRAPH_CLIENT_SECRET,
+  };
+}
+
 function resolveCredentials(overrides?: GraphCredentials) {
-  const tenantId = overrides?.tenantId || config.graph.tenantId;
-  const clientId = overrides?.clientId || config.graph.clientId;
-  const clientSecret = overrides?.clientSecret || config.graph.clientSecret;
+  const env = envFallback();
+  const tenantId = overrides?.tenantId || env.tenantId;
+  const clientId = overrides?.clientId || env.clientId;
+  const clientSecret = overrides?.clientSecret || env.clientSecret;
   if (!tenantId || !clientId || !clientSecret) {
     throw new Error(
       'Graph connector not configured. Set GRAPH_TENANT_ID, GRAPH_CLIENT_ID, and GRAPH_CLIENT_SECRET ' +
-      '(or provide per-schedule credentials in ConnectorSchedule.config).'
+        '(or provide per-schedule credentials).',
     );
   }
   return { tenantId, clientId, clientSecret };
 }
+
+export const DEFAULT_GRAPH_POLLING_INTERVAL_MS = parseInt(
+  process.env.GRAPH_POLLING_INTERVAL_MS ?? '10000',
+  10,
+);
+export const DEFAULT_GRAPH_SINCE_MINUTES = parseInt(
+  process.env.GRAPH_SINCE_MINUTES ?? '1440',
+  10,
+);
 
 // ── Token cache (keyed by tenant+client) ─────────────────────────────────────
 
@@ -92,7 +110,7 @@ export async function pollMailbox(
   options?: { sinceMinutes?: number; top?: number; credentials?: GraphCredentials }
 ): Promise<GraphEmail[]> {
   const token = await getAccessToken(options?.credentials);
-  const sinceMinutes = options?.sinceMinutes ?? config.graph.sinceMinutes;
+  const sinceMinutes = options?.sinceMinutes ?? DEFAULT_GRAPH_SINCE_MINUTES;
   const top = options?.top ?? 10;
 
   const since = new Date();

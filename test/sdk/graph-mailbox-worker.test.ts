@@ -1,7 +1,9 @@
 /**
- * Integration test: Graph mailbox connector worker.
+ * Integration test: Graph mailbox trigger.
  * Mocks the Graph API (token, poll, attachments, mark-as-read) and tests the
- * full worker flow: poll → create instance → onMailReceived callback → run/skip.
+ * full trigger flow: poll → create instance → onMailReceived callback →
+ * run/skip. Exercises the new `processOneTrigger` scheduler, not the old
+ * dedicated connector worker.
  */
 import type { Db } from 'mongodb';
 import { BpmnEngineClient } from '../../src/sdk/client';
@@ -12,21 +14,28 @@ import {
 } from '../scripts/helpers';
 import { ensureIndexes } from '../../src/db/indexes';
 import { getCollections } from '../../src/db/collections';
-import { processOneConnector, type OnMailReceivedFn } from '../../src/connectors/worker';
-import type { MailReceivedEvent } from '../../src/sdk/types';
-import type { GraphEmail } from '../../src/connectors/graph';
+import { processOneTrigger } from '../../src/workers/trigger-scheduler';
+import { getDefaultTriggerRegistry } from '../../src/triggers';
+import { GraphMailboxTrigger } from '../../src/triggers/graph-mailbox/graph-mailbox-trigger';
+import type {
+  GraphEmail,
+  MailReceivedEvent,
+  OnMailReceivedFn,
+} from '../../src/triggers/graph-mailbox';
 
 // ── Mock the Graph API module ────────────────────────────────────────────────
 
-jest.mock('../../src/connectors/graph', () => ({
+jest.mock('../../src/triggers/graph-mailbox/graph', () => ({
   pollMailbox: jest.fn(),
   markAsRead: jest.fn().mockResolvedValue(undefined),
   listAttachments: jest.fn(),
   getAttachmentContent: jest.fn(),
+  DEFAULT_GRAPH_POLLING_INTERVAL_MS: 10_000,
+  DEFAULT_GRAPH_SINCE_MINUTES: 1440,
 }));
 
 const { pollMailbox, markAsRead, listAttachments, getAttachmentContent } =
-  jest.requireMock('../../src/connectors/graph') as {
+  jest.requireMock('../../src/triggers/graph-mailbox/graph') as {
     pollMailbox: jest.Mock;
     markAsRead: jest.Mock;
     listAttachments: jest.Mock;
@@ -76,7 +85,21 @@ beforeEach(async () => {
   markAsRead.mockReset().mockResolvedValue(undefined);
   listAttachments.mockReset();
   getAttachmentContent.mockReset();
+
+  // Reset the mailbox trigger's onMailReceived between tests.
+  const mailbox = getDefaultTriggerRegistry().get('graph-mailbox');
+  if (mailbox instanceof GraphMailboxTrigger) {
+    mailbox.setOnMailReceived(null);
+  }
 });
+
+function setOnMailReceived(handler: OnMailReceivedFn | null): void {
+  const mailbox = getDefaultTriggerRegistry().get('graph-mailbox');
+  if (!(mailbox instanceof GraphMailboxTrigger)) {
+    throw new Error('graph-mailbox trigger not registered as expected');
+  }
+  mailbox.setOnMailReceived(handler);
+}
 
 async function deployMailboxProcess(): Promise<string> {
   const bpmnXml = loadBpmn('graph-mailbox-start.bpmn');
@@ -86,23 +109,32 @@ async function deployMailboxProcess(): Promise<string> {
     version: '1',
     bpmnXml,
   });
-  // Connector schedules deploy as PAUSED — resume for worker tests
+  // Mailbox trigger schedules deploy as PAUSED — resume for tests.
   const schedules = await client.listConnectorSchedules({ definitionId });
   if (schedules.length > 0) {
     await client.resumeConnectorSchedule(schedules[0]._id);
+    // Force it to be "due" right away so processOneTrigger picks it up.
+    const { TriggerSchedules } = getCollections(db);
+    await TriggerSchedules.updateOne(
+      { _id: schedules[0]._id },
+      { $set: { lastFiredAt: new Date(0) } },
+    );
   }
   return definitionId;
 }
 
+async function fireMailbox(): Promise<boolean> {
+  return processOneTrigger(db, getDefaultTriggerRegistry());
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe('Graph mailbox connector worker', () => {
+describe('Graph mailbox trigger', () => {
   it('polls and creates a process instance when an email arrives', async () => {
     const definitionId = await deployMailboxProcess();
-    const email = makeEmail();
-    pollMailbox.mockResolvedValueOnce([email]);
+    pollMailbox.mockResolvedValueOnce([makeEmail()]);
 
-    const fired = await processOneConnector(db);
+    const fired = await fireMailbox();
     expect(fired).toBe(true);
 
     const { ProcessInstances } = getCollections(db);
@@ -116,15 +148,14 @@ describe('Graph mailbox connector worker', () => {
 
   it('calls onMailReceived with email data and instanceId', async () => {
     await deployMailboxProcess();
-    const email = makeEmail({ subject: 'Important report' });
-    pollMailbox.mockResolvedValueOnce([email]);
+    pollMailbox.mockResolvedValueOnce([makeEmail({ subject: 'Important report' })]);
 
     const received: MailReceivedEvent[] = [];
-    const handler: OnMailReceivedFn = async (event) => {
+    setOnMailReceived(async (event) => {
       received.push(event);
-    };
+    });
 
-    await processOneConnector(db, handler);
+    await fireMailbox();
 
     expect(received).toHaveLength(1);
     expect(received[0].mailbox).toBe('ada@the-real-insight.com');
@@ -138,16 +169,15 @@ describe('Graph mailbox connector worker', () => {
     const definitionId = await deployMailboxProcess();
     pollMailbox.mockResolvedValueOnce([makeEmail()]);
 
-    const handler: OnMailReceivedFn = async () => ({ skip: true });
+    setOnMailReceived(async () => ({ skip: true }));
 
-    await processOneConnector(db, handler);
+    await fireMailbox();
 
     const { ProcessInstances } = getCollections(db);
     const instances = await ProcessInstances.find({ definitionId }).toArray();
     expect(instances).toHaveLength(1);
     expect(instances[0].status).toBe('TERMINATED');
 
-    // Email is still marked as read even when skipped
     expect(markAsRead).toHaveBeenCalled();
   });
 
@@ -155,9 +185,9 @@ describe('Graph mailbox connector worker', () => {
     const definitionId = await deployMailboxProcess();
     pollMailbox.mockResolvedValueOnce([makeEmail()]);
 
-    const handler: OnMailReceivedFn = async () => ({ skip: false });
+    setOnMailReceived(async () => ({ skip: false }));
 
-    await processOneConnector(db, handler);
+    await fireMailbox();
 
     const { ProcessInstances } = getCollections(db);
     const instances = await ProcessInstances.find({ definitionId }).toArray();
@@ -169,11 +199,11 @@ describe('Graph mailbox connector worker', () => {
     const definitionId = await deployMailboxProcess();
     pollMailbox.mockResolvedValueOnce([makeEmail()]);
 
-    const handler: OnMailReceivedFn = async () => {
+    setOnMailReceived(async () => {
       throw new Error('Handler crashed');
-    };
+    });
 
-    await processOneConnector(db, handler);
+    await fireMailbox();
 
     const { ProcessInstances } = getCollections(db);
     const instances = await ProcessInstances.find({ definitionId }).toArray();
@@ -182,50 +212,47 @@ describe('Graph mailbox connector worker', () => {
 
   it('passes attachment metadata without downloading content', async () => {
     await deployMailboxProcess();
-    const email = makeEmail({ hasAttachments: true });
-    pollMailbox.mockResolvedValueOnce([email]);
+    pollMailbox.mockResolvedValueOnce([makeEmail({ hasAttachments: true })]);
     listAttachments.mockResolvedValueOnce([
       { id: 'att-1', name: 'report.pdf', contentType: 'application/pdf', size: 1_200_000 },
       { id: 'att-2', name: 'photo.jpg', contentType: 'image/jpeg', size: 450_000 },
     ]);
 
     const received: MailReceivedEvent[] = [];
-    const handler: OnMailReceivedFn = async (event) => {
+    setOnMailReceived(async (event) => {
       received.push(event);
-    };
+    });
 
-    await processOneConnector(db, handler);
+    await fireMailbox();
 
     expect(received[0].email.attachments).toHaveLength(2);
     expect(received[0].email.attachments[0].name).toBe('report.pdf');
     expect(received[0].email.attachments[0].size).toBe(1_200_000);
     expect(received[0].email.attachments[1].name).toBe('photo.jpg');
 
-    // Content was NOT downloaded — getAttachmentContent not called
     expect(getAttachmentContent).not.toHaveBeenCalled();
   });
 
   it('getAttachmentContent downloads a single attachment on demand', async () => {
     await deployMailboxProcess();
-    const email = makeEmail({ hasAttachments: true });
-    pollMailbox.mockResolvedValueOnce([email]);
+    pollMailbox.mockResolvedValueOnce([makeEmail({ hasAttachments: true })]);
     listAttachments.mockResolvedValueOnce([
       { id: 'att-1', name: 'data.csv', contentType: 'text/csv', size: 500 },
     ]);
     getAttachmentContent.mockResolvedValueOnce(Buffer.from('col1,col2\na,b\n'));
 
     let downloadedBuffer: Buffer | null = null;
-    const handler: OnMailReceivedFn = async (event) => {
+    setOnMailReceived(async (event) => {
       downloadedBuffer = await event.getAttachmentContent(event.email.attachments[0].id);
-    };
+    });
 
-    await processOneConnector(db, handler);
+    await fireMailbox();
 
     expect(getAttachmentContent).toHaveBeenCalledWith(
       'ada@the-real-insight.com',
       'msg-001',
       'att-1',
-      undefined, // no per-schedule credentials
+      undefined,
     );
     expect(downloadedBuffer).not.toBeNull();
     expect(downloadedBuffer!.toString()).toBe('col1,col2\na,b\n');
@@ -239,11 +266,11 @@ describe('Graph mailbox connector worker', () => {
     ]);
 
     const subjects: string[] = [];
-    const handler: OnMailReceivedFn = async (event) => {
+    setOnMailReceived(async (event) => {
       subjects.push(event.email.subject);
-    };
+    });
 
-    await processOneConnector(db, handler);
+    await fireMailbox();
 
     const { ProcessInstances } = getCollections(db);
     const instances = await ProcessInstances.find({ definitionId }).toArray();
@@ -256,9 +283,10 @@ describe('Graph mailbox connector worker', () => {
     await deployMailboxProcess();
     pollMailbox.mockResolvedValueOnce([]);
 
-    const handler: OnMailReceivedFn = jest.fn();
+    const handler = jest.fn();
+    setOnMailReceived(handler);
 
-    await processOneConnector(db);
+    await fireMailbox();
 
     const { ProcessInstances } = getCollections(db);
     const instances = await ProcessInstances.find({}).toArray();
@@ -266,9 +294,8 @@ describe('Graph mailbox connector worker', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('returns false when no connector schedules are active', async () => {
-    // No deploy — no schedules exist
-    const fired = await processOneConnector(db);
+  it('returns false when no trigger schedules are active', async () => {
+    const fired = await fireMailbox();
     expect(fired).toBe(false);
   });
 });

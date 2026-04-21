@@ -23,7 +23,6 @@ import { serverRouter } from './routes';
 import { getInstance } from '../instance/service';
 import { addBotMessage } from './conversation';
 import { emitEngineAttributionNoticeOnce } from '../attribution';
-import { processOneConnector } from '../connectors/worker';
 import { sweepExpiredLeases } from '../workers/sweeper';
 import { dispatchOutboxBatch, markOutboxSent } from '../workers/outbox-dispatcher';
 import { processOneTrigger } from '../workers/trigger-scheduler';
@@ -212,21 +211,8 @@ function createServiceTaskHandler() {
 
 const POLL_MS = 500;
 const TRIGGER_POLL_MS = 1_000;
-const CONNECTOR_POLL_MS = 2_000;
 const SWEEPER_INTERVAL_MS = 10_000;
 const OUTBOX_DISPATCH_INTERVAL_MS = 500;
-
-async function connectorLoop() {
-  const db = getDb();
-  while (true) {
-    try {
-      await processOneConnector(db);
-    } catch (err) {
-      console.error('Connector worker error:', err);
-    }
-    await new Promise((r) => setTimeout(r, CONNECTOR_POLL_MS));
-  }
-}
 
 async function triggerLoop() {
   const db = getDb();
@@ -319,7 +305,6 @@ async function main() {
 
   workerLoop();
   triggerLoop();
-  connectorLoop();
   sweeperLoop();
   outboxDispatcherLoop();
 
