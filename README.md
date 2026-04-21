@@ -30,6 +30,27 @@
 
 ## What's new
 
+### Unified start triggers — SharePoint folder events join timers and mailboxes
+
+**Start a process from anything.** Timers, Microsoft 365 mailboxes, and SharePoint folders are now implementations of a single `StartTrigger` plugin interface. The engine core contains zero references to specific trigger types — register the ones you want, write your own, or strip out the ones you don't need.
+
+**SharePoint folder triggers are new:** drop a file into a watched SharePoint folder and the engine starts a process with the file's metadata as initial variables. Uses the Graph `/delta` API — no full folder scans, no duplicate starts, no "mark as processed" dance.
+
+```xml
+<bpmn:message id="Msg_NewOrder" name="incoming-orders"
+  tri:connectorType="sharepoint-folder"
+  tri:siteUrl="https://contoso.sharepoint.com/sites/Ops"
+  tri:folderPath="/Incoming/Orders"
+  tri:fileNamePattern="*.pdf"
+  tri:initialPolicy="skip-existing" />
+
+<bpmn:startEvent id="Start">
+  <bpmn:messageEventDefinition messageRef="Msg_NewOrder" />
+</bpmn:startEvent>
+```
+
+Timer start events (ISO 8601 intervals, cron, RRULE, date-times, durations) and Microsoft 365 mailbox polling now ship as **first-party trigger plugins** — the same interface your own triggers would use. An S3 bucket watcher, an SQS queue, a webhook receiver — roughly 100 lines of code against a documented interface, registered at engine init. Exactly-once instance creation is built into the framework via stable dedup keys, not implemented separately by each trigger. [Full trigger guide](./docs/sdk/custom-triggers.md)
+
 ### Enhanced recovery semantics — processes survive crashes
 
 **Server restart? Your processes come back.** in-concert now ships with a first-class crash-recovery entry point: call `recover()` once at startup, and the engine restores every in-flight process from the previous run — quiescent instances come back untouched, mid-step transitions are replayed, and callbacks that were persisted-but-not-delivered are re-handed to your `onServiceCall`, `onWorkItem`, and `onDecision` handlers.
@@ -62,36 +83,6 @@ RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1</bpmn:timeCycle>
 Every 3 days. Every 2 weeks on Monday and Friday. The second Tuesday of every month. The last weekday of each quarter. **Any pattern you can define in a calendar invitation, you can now use to schedule a process.** `FREQ`, `INTERVAL`, `BYDAY`, `BYMONTHDAY`, `BYMONTH`, `BYSETPOS`, `COUNT`, and `UNTIL` are all supported — zero external dependencies.
 
 RRULE joins the existing timer expressions (ISO 8601 intervals, cron, date-times, durations) so nothing breaks. [Full RRULE documentation](./docs/sdk/usage.md#rrule-recurrence-rules-rfc-5545)
-
-### Timer start events
-
-Deploy a BPMN process with a timer start event and the engine takes care of the rest — no external scheduler, no cron daemon, no infrastructure to manage. ISO 8601 durations, repeating intervals, date-times, 5-field cron, and now RRULE expressions are all supported out of the box.
-
-**You define the schedule in standard BPMN — the engine runs it, persists it, survives restarts, and scales across nodes.** Pause and resume schedules via the SDK or REST API at any time.
-
-No polling. No Lambda triggers. No third-party scheduling service. Just BPMN.
-
-[Full documentation](./docs/sdk/usage.md#timer-start-events) | [Getting started](./docs/getting-started.md)
-
-### Microsoft 365 mailbox connector — email-driven processes
-
-**Start a process when an email arrives.** Deploy a BPMN with a message start event pointing at a Microsoft 365 mailbox, and the engine polls it for you — no Azure Functions, no Power Automate, no webhook plumbing.
-
-```xml
-<bpmn:message id="Msg_Inbox" name="inbox-poll"
-  tri:connectorType="graph-mailbox"
-  tri:mailbox="support@your-company.com" />
-
-<bpmn:startEvent id="Start">
-  <bpmn:messageEventDefinition messageRef="Msg_Inbox" />
-</bpmn:startEvent>
-```
-
-Set your Azure AD credentials once as environment variables. Every unread email becomes a process instance — automatically started, deduplicated, and marked as read. Pause and resume polling at any time via the SDK or REST API.
-
-Standard BPMN message start event. Standard Microsoft Graph API. **Zero glue code.**
-
-[Full documentation](./docs/sdk/usage.md#message-start-events--graph-mailbox-connector)
 
 ---
 
