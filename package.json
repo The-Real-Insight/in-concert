@@ -1,6 +1,6 @@
 {
   "name": "@the-real-insight/in-concert",
-  "version": "0.1.33",
+  "version": "0.1.35",
   "description": "BPMN 2.0 subset execution engine with event sourcing",
   "main": "dist/index.js",
   "exports": {
@@ -10,8 +10,11 @@
     "./local": "./dist/local.js",
     "./validator": "./dist/model/validator.js",
     "./tri-schema": "./dist/model/tri-schema.js",
-    "./timers/worker": "./dist/timers/worker.js",
-    "./connectors/worker": "./dist/connectors/worker.js"
+    "./triggers": "./dist/triggers/index.js",
+    "./triggers/timer": "./dist/triggers/timer/index.js",
+    "./triggers/graph-mailbox": "./dist/triggers/graph-mailbox/index.js",
+    "./triggers/sharepoint-folder": "./dist/triggers/sharepoint-folder/index.js",
+    "./triggers/ai-listener": "./dist/triggers/ai-listener/index.js"
   },
   "scripts": {
     "build": "tsc",

@@ -10,6 +10,12 @@ Versions are published to npm automatically on push to `main`.
 ## [Unreleased]
 
 ### Added
+- **New package subpath exports for triggers.** Consumers can now import:
+  - `@the-real-insight/in-concert/triggers` — interface, registry, built-in classes
+  - `@the-real-insight/in-concert/triggers/timer`
+  - `@the-real-insight/in-concert/triggers/graph-mailbox`
+  - `@the-real-insight/in-concert/triggers/sharepoint-folder`
+  - `@the-real-insight/in-concert/triggers/ai-listener`
 - **Unified `StartTrigger` plugin interface.** Timers and M365 mailbox connectors are now first-party plugins against this interface; hosts can register their own triggers (webhooks, S3, SQS, filesystems, etc.) without patching the engine. See [`docs/sdk/custom-triggers.md`](./docs/sdk/custom-triggers.md).
 - **SharePoint folder trigger** (`tri:connectorType="sharepoint-folder"`). Watches a SharePoint document-library folder via the Graph `/delta` API and starts a process instance per new (or modified) matching file. Full `tri:*` attribute surface: `siteUrl`, `driveName`, `folderPath`, `recursive`, `includeModifications`, `fileNamePattern`, `minFileSizeBytes`, `itemType`, `pollIntervalSeconds`, `initialPolicy`. See [`src/triggers/sharepoint-folder/README.md`](./src/triggers/sharepoint-folder/README.md).
 - **AI-listener trigger** (`tri:connectorType="ai-listener"`). Polls an MCP-style tool endpoint, feeds the result to an LLM together with a BPMN-authored prompt, and fires when the LLM answers "yes". The business rule — *how to interpret the signal* — lives in the prompt, not in code. Dedup via an LLM-supplied `correlationId` or a hash of the tool output. Tests and SDK-direct hosts can inject `callTool` / `evaluate` callbacks to bypass HTTP entirely. See [`src/triggers/ai-listener/README.md`](./src/triggers/ai-listener/README.md).
@@ -28,6 +34,7 @@ Versions are published to npm automatically on push to `main`.
 
 ### Removed
 - `src/timers/worker.ts` and `src/connectors/` — replaced by the generic scheduler and per-plugin directories under `src/triggers/`.
+- Package subpaths `./timers/worker` and `./connectors/worker` — the files they pointed at are gone. Anyone importing these internal worker modules directly should migrate to the SDK (`client.run()`, `client.recover()`) or to `@the-real-insight/in-concert/triggers`.
 
 ### Migration notes
 - **Run the migration script before deploying this version** against a Mongo instance that holds existing timer or connector schedules: `npx ts-node -r dotenv/config scripts/migrate-to-trigger-schedules.ts`. It's idempotent; re-running is safe.
