@@ -24,6 +24,8 @@ const FORBIDDEN_LITERALS = [
   '"graph-mailbox"',
   "'sharepoint-folder'",
   '"sharepoint-folder"',
+  "'ai-listener'",
+  '"ai-listener"',
 ];
 
 /**
@@ -45,6 +47,10 @@ const ALLOWED_FILES = new Set<string>([
   'src/triggers/sharepoint-folder/sharepoint-folder-trigger.ts',
   'src/triggers/sharepoint-folder/graph-client.ts',
   'src/triggers/sharepoint-folder/index.ts',
+  // AI listener plugin.
+  'src/triggers/ai-listener/ai-listener-trigger.ts',
+  'src/triggers/ai-listener/http.ts',
+  'src/triggers/ai-listener/index.ts',
   // Schedule sync in model/service hands off to the registry by triggerType,
   // but currently names 'timer' in a narrow branch for explicit error
   // messages. Acceptable trade-off — this seam only uses literals, never

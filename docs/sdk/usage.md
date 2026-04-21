@@ -1363,6 +1363,7 @@ Start events in in-concert are all **implementations of a single plugin interfac
 | `timer` | Fires on a schedule (ISO 8601, cron, RRULE, date-times, durations) | [Timer start events](#timer-start-events) |
 | `graph-mailbox` | Starts an instance for each unread email in a Microsoft 365 mailbox | [Mailbox start events](#message-start-events--graph-mailbox-connector) |
 | `sharepoint-folder` | Starts an instance when a file arrives in a SharePoint folder | [SharePoint folder README](../../src/triggers/sharepoint-folder/README.md) |
+| `ai-listener` | Polls an MCP-style tool, asks an LLM a yes/no question about the result, fires on "yes" | [AI-listener README](../../src/triggers/ai-listener/README.md) |
 
 ### Writing your own
 

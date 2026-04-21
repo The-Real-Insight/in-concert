@@ -30,11 +30,23 @@
 
 ## What's new
 
-### Unified start triggers — SharePoint folder events join timers and mailboxes
+### Unified start triggers — four built-ins, bring-your-own plugins
 
-**Start a process from anything.** Timers, Microsoft 365 mailboxes, and SharePoint folders are now implementations of a single `StartTrigger` plugin interface. The engine core contains zero references to specific trigger types — register the ones you want, write your own, or strip out the ones you don't need.
+**Start a process from anything.** Timers, Microsoft 365 mailboxes, SharePoint folders, and **AI-listener agents** are all implementations of a single `StartTrigger` plugin interface. The engine core contains zero references to specific trigger types — register the ones you want, write your own, or strip out the ones you don't need.
 
-**SharePoint folder triggers are new:** drop a file into a watched SharePoint folder and the engine starts a process with the file's metadata as initial variables. Uses the Graph `/delta` API — no full folder scans, no duplicate starts, no "mark as processed" dance.
+**New: AI-listener triggers.** A supervisor process that polls an MCP-style tool (weather, stock, a custom API) and asks an LLM a yes/no question about the result. The business rule — *how to interpret the signal* — lives in the prompt, not in code. Fires only when the LLM says yes.
+
+```xml
+<bpmn:message id="Msg_RainAlert" name="ai-rain-alert"
+  tri:connectorType="ai-listener"
+  tri:toolEndpoint="https://weather.example.com/tools/call"
+  tri:tool="get_weather"
+  tri:llmEndpoint="https://llm.example.com/evaluate"
+  tri:prompt="Is it currently raining heavily enough to stop outdoor ops? Answer strictly yes or no."
+  tri:pollIntervalSeconds="300" />
+```
+
+**New: SharePoint folder triggers.** Drop a file into a watched SharePoint folder and the engine starts a process with the file's metadata as initial variables. Uses the Graph `/delta` API — no full folder scans, no duplicate starts, no "mark as processed" dance.
 
 ```xml
 <bpmn:message id="Msg_NewOrder" name="incoming-orders"
@@ -43,13 +55,9 @@
   tri:folderPath="/Incoming/Orders"
   tri:fileNamePattern="*.pdf"
   tri:initialPolicy="skip-existing" />
-
-<bpmn:startEvent id="Start">
-  <bpmn:messageEventDefinition messageRef="Msg_NewOrder" />
-</bpmn:startEvent>
 ```
 
-Timer start events (ISO 8601 intervals, cron, RRULE, date-times, durations) and Microsoft 365 mailbox polling now ship as **first-party trigger plugins** — the same interface your own triggers would use. An S3 bucket watcher, an SQS queue, a webhook receiver — roughly 100 lines of code against a documented interface, registered at engine init. Exactly-once instance creation is built into the framework via stable dedup keys, not implemented separately by each trigger. [Full trigger guide](./docs/sdk/custom-triggers.md)
+Timer start events (ISO 8601 intervals, cron, RRULE, date-times, durations) and Microsoft 365 mailbox polling ship as **first-party trigger plugins** too — the same interface your own triggers would use. An S3 bucket watcher, an SQS queue, a webhook receiver — roughly 100 lines of code against a documented interface, registered at engine init. Exactly-once instance creation is built into the framework via stable dedup keys, not implemented separately by each trigger. [Full trigger guide](./docs/sdk/custom-triggers.md)
 
 ### Enhanced recovery semantics — processes survive crashes
 

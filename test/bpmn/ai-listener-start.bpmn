@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  id="Defs_AIListener"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:message id="Msg_RainDetected" name="ai-rain-detector"
+    tri:connectorType="ai-listener"
+    tri:toolEndpoint="https://weather.example.com/tools/call"
+    tri:tool="get_weather"
+    tri:llmEndpoint="https://llm.example.com/evaluate"
+    tri:prompt="Given this weather observation, is it currently raining? Answer strictly yes or no."
+    tri:pollIntervalSeconds="120"
+    tri:initialPolicy="skip-existing" />
+
+  <bpmn:process id="Process_RainAlert" isExecutable="true">
+
+    <bpmn:startEvent id="Start" name="Rain detected">
+      <bpmn:messageEventDefinition messageRef="Msg_RainDetected" />
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="Task_Notify" name="Notify duty officer" tri:toolId="notify-duty-officer"/>
+
+    <bpmn:endEvent id="End"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="Task_Notify"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_Notify" targetRef="End"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>
