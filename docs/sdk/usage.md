@@ -326,7 +326,7 @@ The engine walks the `parentInstanceId` chain starting from `instanceId` and del
 - `Outbox`
 - `HumanTask`
 
-Definition-scoped collections (`ProcessDefinition`, `TimerSchedule`, `ConnectorSchedule`) are **not** touched — those outlive individual instances.
+Definition-scoped collections (`ProcessDefinition`, `TriggerSchedule`) are **not** touched — those outlive individual instances.
 
 ```typescript
 const result = await client.purgeInstance(instanceId);
@@ -1461,33 +1461,41 @@ RRULE:FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1</bpmn:timeCycle>
 
 ### How it works
 
-1. **Deploy** — `deployDefinition` scans the process graph for timer start events. For each one, a `TimerSchedule` document is created (or updated on redeploy) with the computed `nextFireAt`.
-2. **Timer worker** — a background loop polls `TimerSchedule` for due timers (`status: ACTIVE`, `nextFireAt <= now`). When found, it claims the schedule (optimistic lease), calls `startInstance`, then advances `nextFireAt` or marks the schedule `EXHAUSTED`.
+1. **Deploy** — `deployDefinition` scans the process graph for timer start events. For each one, a `TriggerSchedule` document (`triggerType: 'timer'`) is created (or updated on redeploy) with the computed `nextFireAt`.
+2. **Trigger scheduler** — a background loop polls `TriggerSchedule` for due timers (`status: ACTIVE`, `nextFireAt <= now`). When found, it claims the schedule (optimistic lease), invokes the timer plugin's `fire()`, atomically commits a new `ProcessInstance` plus the advanced `nextFireAt`, and releases the lease. Crash-and-retry is deduped via a stable idempotency key — no duplicate instances.
 3. **Process runs normally** — the started instance is identical to one started via the API. All callbacks (service tasks, decisions, user tasks) fire as usual.
 
 ### SDK methods
 
+Both the canonical trigger-schedule methods and the legacy timer-specific aliases work; the aliases are simply filtered views (`triggerType: 'timer'`).
+
 ```typescript
-// List all timer schedules (optionally filter by definition or status)
+// Canonical — works for any trigger type
+const all = await client.listTriggerSchedules({ definitionId, triggerType: 'timer' });
+await client.pauseTriggerSchedule(scheduleId);
+await client.resumeTriggerSchedule(scheduleId);
+
+// Legacy alias (deprecated, kept for backward compatibility)
 const schedules = await client.listTimerSchedules({ definitionId, status: 'ACTIVE' });
-
-// Pause a timer (stops firing until resumed)
 await client.pauseTimerSchedule(scheduleId);
-
-// Resume a paused timer
 await client.resumeTimerSchedule(scheduleId);
 ```
 
 ### REST API
 
 ```
-GET    /v1/timer-schedules                          List schedules (query: ?definitionId=&status=)
-GET    /v1/timer-schedules/:id                      Get one schedule
-POST   /v1/timer-schedules/:id/pause                Pause (ACTIVE → PAUSED)
-POST   /v1/timer-schedules/:id/resume               Resume (PAUSED → ACTIVE)
+# Canonical
+GET    /v1/trigger-schedules?triggerType=timer     List timer schedules (unified endpoint)
+POST   /v1/trigger-schedules/:id/pause             Pause (ACTIVE → PAUSED)
+POST   /v1/trigger-schedules/:id/resume            Resume (PAUSED → ACTIVE)
+
+# Legacy alias (deprecated, removal in next major)
+GET    /v1/timer-schedules                         Same as triggerType=timer filter
+POST   /v1/timer-schedules/:id/pause
+POST   /v1/timer-schedules/:id/resume
 ```
 
-### TimerSchedule status lifecycle
+### Status lifecycle
 
 ```
 ACTIVE ──▶ fires repeatedly (cycle/cron/rrule) or once (date/duration) ──▶ EXHAUSTED
@@ -1553,7 +1561,7 @@ client.init({
 
 **Option C — Per-schedule credentials** (multi-tenant):
 
-When different mailboxes belong to different Azure AD tenants, register credentials against a specific connector schedule after deploy. Credentials are stored in `ConnectorSchedule.config` in MongoDB — persisted, survives restarts, never in BPMN.
+When different mailboxes belong to different Azure AD tenants, register credentials against a specific schedule after deploy. Credentials are stored on the `TriggerSchedule` row in MongoDB — persisted, survives restarts, never in BPMN.
 
 ```typescript
 // After deploying, set credentials for a specific schedule
@@ -1586,9 +1594,9 @@ The Azure AD app registration needs the `Mail.ReadWrite` application permission 
 
 ### How it works
 
-1. **Deploy** — the engine detects the message start event with `tri:connectorType` and creates a `ConnectorSchedule` document.
-2. **Connector worker** — a background loop polls active connector schedules. For `graph-mailbox`, it calls the Graph API `/users/{mailbox}/messages` endpoint, filtering for unread emails.
-3. **Email arrives** — the worker creates a process instance (`instanceId` exists, no tokens advancing yet), then calls your `onMailReceived` callback.
+1. **Deploy** — the engine detects the message start event with `tri:connectorType` and creates a `TriggerSchedule` document (`triggerType: 'graph-mailbox'`, `status: 'PAUSED'`).
+2. **Trigger scheduler** — a background loop polls active trigger schedules. For `graph-mailbox`, the plugin's `fire()` calls the Graph API `/users/{mailbox}/messages` endpoint, filtering for unread emails.
+3. **Email arrives** — the plugin creates a process instance (`instanceId` exists, no tokens advancing yet) with a stable `idempotencyKey` (`scheduleId:messageId`), then calls your `onMailReceived` callback. Retries after a crash collapse to the same instance via the idempotency index.
 4. **Your callback** stores domain data (email content, attachments, conversation) against the `instanceId`. Return `{ skip: true }` to terminate the instance (e.g. spam filtering). Return nothing or `{ skip: false }` to let the process run.
 5. **Process runs** — the engine advances the first token. Service tasks, decisions, and user tasks fire as usual.
 
@@ -1656,24 +1664,32 @@ Each `MailAttachment` has: `id`, `name`, `contentType`, `size` (bytes). Content 
 
 ### SDK methods
 
+Both the canonical trigger-schedule methods and the legacy connector-specific aliases work; the aliases are filtered views (`triggerType !== 'timer'`).
+
 ```typescript
-// List all connector schedules
+// Canonical — works for any trigger type
+const all = await client.listTriggerSchedules({ triggerType: 'graph-mailbox' });
+await client.pauseTriggerSchedule(scheduleId);
+await client.resumeTriggerSchedule(scheduleId);
+
+// Legacy alias (deprecated)
 const schedules = await client.listConnectorSchedules({ connectorType: 'graph-mailbox' });
-
-// Pause polling
 await client.pauseConnectorSchedule(scheduleId);
-
-// Resume polling
 await client.resumeConnectorSchedule(scheduleId);
 ```
 
 ### REST API
 
 ```
-GET    /v1/connector-schedules                      List (query: ?definitionId=&status=&connectorType=)
-GET    /v1/connector-schedules/:id                  Get one
-POST   /v1/connector-schedules/:id/pause            Pause (ACTIVE → PAUSED)
-POST   /v1/connector-schedules/:id/resume           Resume (PAUSED → ACTIVE)
+# Canonical
+GET    /v1/trigger-schedules?triggerType=graph-mailbox    List mailbox schedules
+POST   /v1/trigger-schedules/:id/pause                    Pause (ACTIVE → PAUSED)
+POST   /v1/trigger-schedules/:id/resume                   Resume (PAUSED → ACTIVE)
+
+# Legacy alias (deprecated, removal in next major)
+GET    /v1/connector-schedules
+POST   /v1/connector-schedules/:id/pause
+POST   /v1/connector-schedules/:id/resume
 PUT    /v1/connector-schedules/:id/credentials      Set per-schedule Graph credentials
 ```
 
@@ -1825,7 +1841,7 @@ const { definitionId } = await client.deploy({
 });
 ```
 
-The engine creates a `ConnectorSchedule` for `support@your-company.com` in `PAUSED` state. It does not poll yet.
+The engine creates a `TriggerSchedule` (`triggerType: 'graph-mailbox'`) for `support@your-company.com` in `PAUSED` state. It does not poll yet.
 
 **5. Activate with credentials**
 
