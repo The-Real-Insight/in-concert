@@ -1352,9 +1352,47 @@ Token reaches USER_TASK → Engine creates workItem → Engine emits CALLBACK_WO
 
 ---
 
+## Start triggers
+
+Start events in in-concert are all **implementations of a single plugin interface**, `StartTrigger`. Timers, Microsoft 365 mailboxes, and SharePoint folders ship as first-party plugins; you can write your own for any external event source (webhooks, S3 buckets, SQS, filesystem watchers, etc.). The engine core contains zero references to specific trigger types — register what you need, strip out what you don't.
+
+### Built-in triggers
+
+| Trigger | Description | Section |
+|---|---|---|
+| `timer` | Fires on a schedule (ISO 8601, cron, RRULE, date-times, durations) | [Timer start events](#timer-start-events) |
+| `graph-mailbox` | Starts an instance for each unread email in a Microsoft 365 mailbox | [Mailbox start events](#message-start-events--graph-mailbox-connector) |
+| `sharepoint-folder` | Starts an instance when a file arrives in a SharePoint folder | [SharePoint folder README](../../src/triggers/sharepoint-folder/README.md) |
+
+### Writing your own
+
+See [**Writing a custom start trigger**](./custom-triggers.md) for the authoring guide. A minimal trigger is roughly 80 lines of TypeScript against a five-method interface. Exactly-once instance creation, crash recovery, and schedule management are handled by the engine — the plugin only describes *when* and *what* to fire.
+
+### Managing schedules (any trigger)
+
+All triggers store their state in a single `TriggerSchedule` collection. The SDK exposes a unified management surface plus backward-compatible legacy methods:
+
+```typescript
+// Canonical methods (work for any trigger type)
+await client.listTriggerSchedules({ triggerType: 'sharepoint-folder' });
+await client.pauseTriggerSchedule(scheduleId);
+await client.resumeTriggerSchedule(scheduleId);
+await client.setTriggerCredentials(scheduleId, { /* any shape */ });
+
+// Legacy aliases (filtered views, deprecated)
+await client.listTimerSchedules();         // same as listTriggerSchedules({ triggerType: 'timer' })
+await client.listConnectorSchedules();     // non-timer triggers only
+```
+
+REST:
+- **Canonical:** `GET/POST /v1/trigger-schedules/...`
+- **Legacy:** `GET/POST /v1/timer-schedules/...`, `GET/POST /v1/connector-schedules/...` (filtered aliases)
+
+---
+
 ## Timer start events
 
-BPMN timer start events automatically create new process instances on a schedule. The engine handles this end-to-end — no application code is needed beyond deploying the process.
+BPMN timer start events are one implementation of the `StartTrigger` plugin interface. The engine handles the schedule end-to-end — no application code needed beyond deploying the process.
 
 ### BPMN definition
 
