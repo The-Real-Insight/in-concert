@@ -74,4 +74,21 @@ export async function ensureIndexes(db: Db): Promise<void> {
         partialFilterExpression: { idempotencyKey: { $exists: true } },
       },
     );
+
+  // Unified trigger schedules (replaces TimerSchedule + ConnectorSchedule).
+  await db
+    .collection(COLLECTION_NAMES.TriggerSchedule)
+    .createIndex({ scheduleId: 1 }, { unique: true });
+
+  await db
+    .collection(COLLECTION_NAMES.TriggerSchedule)
+    .createIndex({ definitionId: 1, startEventId: 1 }, { unique: true });
+
+  await db
+    .collection(COLLECTION_NAMES.TriggerSchedule)
+    .createIndex({ triggerType: 1, status: 1, nextFireAt: 1 });
+
+  await db
+    .collection(COLLECTION_NAMES.TriggerSchedule)
+    .createIndex({ triggerType: 1, status: 1, lastFiredAt: 1 });
 }

@@ -11,6 +11,7 @@ export const COLLECTION_NAMES = {
   HumanTask: 'HumanTask',
   TimerSchedule: 'TimerSchedule',
   ConnectorSchedule: 'ConnectorSchedule',
+  TriggerSchedule: 'TriggerSchedule',
 } as const;
 
 /** Audit trail: one row per task/instance lifecycle event. */
@@ -310,6 +311,50 @@ export type ConnectorScheduleDoc = {
   updatedAt: Date;
 };
 
+/**
+ * Unified schedule row for the generalized start-trigger mechanism. Replaces
+ * TimerScheduleDoc and ConnectorScheduleDoc — the refactor migrates both
+ * into this shape. Old collections are retained during the transition and
+ * dropped in a follow-up PR once the migration has been validated.
+ */
+export type TriggerScheduleStatus = 'ACTIVE' | 'PAUSED' | 'EXHAUSTED' | 'DISABLED';
+
+export type TriggerScheduleDoc = {
+  _id: string;
+  /** Stable id used in REST paths. Survives restarts; typically equals _id but
+   *  kept separate so we can rename _id if we ever switch id strategies. */
+  scheduleId: string;
+  definitionId: string;
+  /** Portal/customer tenant that activated this schedule (process instances inherit this). */
+  startingTenantId?: string;
+  /** The BPMN start-event node this schedule is bound to. */
+  startEventId: string;
+  /** Discriminator matched to a registered StartTrigger. */
+  triggerType: string;
+  /** Flattened tri:* attributes + standard BPMN attrs; the trigger interprets this. */
+  config: Record<string, unknown>;
+  /** Opaque trigger-owned cursor. Engine never inspects. */
+  cursor: string | null;
+  /** Per-schedule credential override, or null to fall back to the trigger's defaults. */
+  credentials: Record<string, unknown> | null;
+  /** First-poll behavior: fire existing items on initial deploy, or skip them. */
+  initialPolicy: 'fire-existing' | 'skip-existing';
+  status: TriggerScheduleStatus;
+  /** For fire-at triggers (timer); absent for interval triggers. */
+  nextFireAt?: Date;
+  /** For interval triggers (mailbox, sharepoint); absent for fire-at triggers. */
+  intervalMs?: number;
+  lastFiredAt?: Date;
+  /** Last failure message, for observability. Cleared on next successful fire. */
+  lastError?: string;
+  /** Fire counter — useful for bounded-repetition triggers (RRULE COUNT, repeating timers). */
+  remainingReps?: number | null;
+  ownerId?: string;
+  leaseUntil?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type NodeDef = {
   id: string;
   type: string;
@@ -371,6 +416,9 @@ export function getCollections(database: Db) {
     ),
     ConnectorSchedules: database.collection<ConnectorScheduleDoc>(
       COLLECTION_NAMES.ConnectorSchedule
+    ),
+    TriggerSchedules: database.collection<TriggerScheduleDoc>(
+      COLLECTION_NAMES.TriggerSchedule
     ),
   };
 }
