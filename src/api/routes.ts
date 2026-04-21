@@ -558,3 +558,152 @@ apiRouter.post('/v1/definitions/:definitionId/schedules/deactivate', async (req:
     res.status(500).json({ error: 'Deactivate schedules failed' });
   }
 });
+
+// ── Canonical trigger-schedules endpoints ────────────────────────────────────
+// These are the primary endpoints for the unified trigger mechanism. The
+// legacy /v1/timer-schedules and /v1/connector-schedules routes above remain
+// as filtered aliases (by triggerType) — they are deprecated and will be
+// removed in the next major release.
+
+apiRouter.get('/v1/trigger-schedules', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { TriggerSchedules } = getCollections(db);
+    const filter: Record<string, unknown> = {};
+    if (req.query.definitionId) filter.definitionId = req.query.definitionId;
+    if (req.query.status) filter.status = req.query.status;
+    if (req.query.triggerType) filter.triggerType = req.query.triggerType;
+    const items = await TriggerSchedules.find(filter).sort({ createdAt: -1 }).toArray();
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: 'List trigger schedules failed' });
+  }
+});
+
+apiRouter.get('/v1/trigger-schedules/:scheduleId', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { TriggerSchedules } = getCollections(db);
+    const doc = await TriggerSchedules.findOne({ _id: req.params.scheduleId });
+    if (!doc) {
+      res.status(404).json({ error: 'Trigger schedule not found' });
+      return;
+    }
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: 'Get trigger schedule failed' });
+  }
+});
+
+apiRouter.post('/v1/trigger-schedules/:scheduleId/pause', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { TriggerSchedules } = getCollections(db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!result) {
+      res.status(404).json({ error: 'Trigger schedule not found or not ACTIVE' });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Pause failed' });
+  }
+});
+
+apiRouter.post('/v1/trigger-schedules/:scheduleId/resume', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { TriggerSchedules } = getCollections(db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId, status: 'PAUSED' },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!result) {
+      res.status(404).json({ error: 'Trigger schedule not found or not PAUSED' });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Resume failed' });
+  }
+});
+
+apiRouter.put('/v1/trigger-schedules/:scheduleId/credentials', async (req: Request, res: Response) => {
+  try {
+    const credentials = req.body as Record<string, unknown> | null;
+    if (!credentials || typeof credentials !== 'object') {
+      res.status(400).json({ error: 'credentials body required' });
+      return;
+    }
+    const db = getDb();
+    const { TriggerSchedules } = getCollections(db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId },
+      { $set: { credentials, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!result) {
+      res.status(404).json({ error: 'Trigger schedule not found' });
+      return;
+    }
+    res.json({ accepted: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Set credentials failed' });
+  }
+});
+
+// Canonical bulk activate/deactivate. Same semantics as the legacy
+// /definitions/:id/schedules/activate endpoint — kept as aliases above.
+
+apiRouter.post(
+  '/v1/definitions/:definitionId/trigger-schedules/activate',
+  async (req: Request, res: Response) => {
+    try {
+      const { definitionId } = req.params;
+      const { credentials, startingTenantId } = req.body as {
+        credentials?: Record<string, unknown>;
+        startingTenantId?: string;
+      };
+      const db = getDb();
+      const { TriggerSchedules } = getCollections(db);
+      const now = new Date();
+
+      const set: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
+      if (credentials) set.credentials = credentials;
+      if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
+        set.startingTenantId = startingTenantId;
+      }
+      await TriggerSchedules.updateMany(
+        { definitionId, status: { $ne: 'EXHAUSTED' } },
+        { $set: set },
+      );
+      res.json({ accepted: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Activate trigger schedules failed' });
+    }
+  },
+);
+
+apiRouter.post(
+  '/v1/definitions/:definitionId/trigger-schedules/deactivate',
+  async (req: Request, res: Response) => {
+    try {
+      const { definitionId } = req.params;
+      const db = getDb();
+      const { TriggerSchedules } = getCollections(db);
+      const now = new Date();
+      await TriggerSchedules.updateMany(
+        { definitionId, status: 'ACTIVE' },
+        { $set: { status: 'PAUSED', updatedAt: now } },
+      );
+      res.json({ accepted: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Deactivate trigger schedules failed' });
+    }
+  },
+);

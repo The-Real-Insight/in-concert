@@ -805,7 +805,91 @@ export class BpmnEngineClient {
     return () => ws.close();
   }
 
-  // ── Timer schedules ───────────────────────────────────────────────────────
+  // ── Trigger schedules (canonical) ─────────────────────────────────────────
+
+  async listTriggerSchedules(params?: {
+    definitionId?: string;
+    status?: string;
+    triggerType?: string;
+  }): Promise<import('../db/collections').TriggerScheduleDoc[]> {
+    if (this.config.mode === 'rest') {
+      const q = new URLSearchParams();
+      if (params?.definitionId) q.set('definitionId', params.definitionId);
+      if (params?.status) q.set('status', params.status);
+      if (params?.triggerType) q.set('triggerType', params.triggerType);
+      const res = await fetch(`${this.config.baseUrl}/v1/trigger-schedules?${q}`);
+      if (!res.ok) throw new Error(`List trigger schedules failed: ${res.status}`);
+      const json = (await res.json()) as {
+        items: import('../db/collections').TriggerScheduleDoc[];
+      };
+      return json.items;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const filter: Record<string, unknown> = {};
+    if (params?.definitionId) filter.definitionId = params.definitionId;
+    if (params?.status) filter.status = params.status;
+    if (params?.triggerType) filter.triggerType = params.triggerType;
+    return TriggerSchedules.find(filter).sort({ createdAt: -1 }).toArray();
+  }
+
+  async pauseTriggerSchedule(scheduleId: string): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/trigger-schedules/${scheduleId}/pause`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Pause trigger failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: scheduleId, status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: new Date() } },
+    );
+    if (!result) throw new Error('Trigger schedule not found or not ACTIVE');
+  }
+
+  async resumeTriggerSchedule(scheduleId: string): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/trigger-schedules/${scheduleId}/resume`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Resume trigger failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: scheduleId, status: 'PAUSED' },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+    );
+    if (!result) throw new Error('Trigger schedule not found or not PAUSED');
+  }
+
+  /** Set arbitrary credentials on a trigger schedule. Schema is trigger-defined. */
+  async setTriggerCredentials(
+    scheduleId: string,
+    credentials: Record<string, unknown>,
+  ): Promise<void> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/trigger-schedules/${scheduleId}/credentials`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credentials),
+        },
+      );
+      if (!res.ok) throw new Error(`Set trigger credentials failed: ${res.status}`);
+      return;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: scheduleId },
+      { $set: { credentials, updatedAt: new Date() } },
+    );
+    if (!result) throw new Error('Trigger schedule not found');
+  }
+
+  // ── Timer schedules (legacy alias) ─────────────────────────────────────────
 
   async listTimerSchedules(params?: {
     definitionId?: string;
