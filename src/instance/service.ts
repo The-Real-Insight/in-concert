@@ -6,6 +6,12 @@ import { getDefinition } from '../model/service';
 export type StartInstanceResult = {
   instanceId: string;
   status: string;
+  /**
+   * True when an existing instance was returned because of an idempotency-key
+   * collision. Callers that care about "did I just create a new one?" can
+   * branch on this; most callers should treat both cases identically.
+   */
+  deduplicated?: boolean;
 };
 
 export type StartInstanceParams = {
@@ -31,6 +37,14 @@ export type StartInstanceParams = {
    * orphaned rows.
    */
   session?: ClientSession;
+  /**
+   * Idempotency key for this logical start. Two calls with the same
+   * (definitionId, idempotencyKey) pair collapse to a single process
+   * instance; the second call returns the existing `instanceId` with
+   * `deduplicated: true` and performs no writes. Enforced by a partial
+   * unique index on ProcessInstances.
+   */
+  idempotencyKey?: string;
 };
 
 export async function startInstance(
@@ -42,22 +56,76 @@ export async function startInstance(
     throw new Error('Definition not found');
   }
 
+  // Fast-path: if an idempotency key is set and an instance already exists,
+  // return it without opening a transaction.
+  if (params.idempotencyKey) {
+    const existing = await findByIdempotencyKey(
+      db,
+      params.definitionId,
+      params.idempotencyKey,
+      params.session,
+    );
+    if (existing) {
+      return { instanceId: existing._id, status: existing.status, deduplicated: true };
+    }
+  }
+
   const instanceId = uuidv4();
 
-  if (params.session) {
-    await writeStartInstance(db, instanceId, params, params.session);
-    return { instanceId, status: 'RUNNING' };
-  }
-
-  const session = db.client.startSession();
   try {
-    await session.withTransaction(async () => {
-      await writeStartInstance(db, instanceId, params, session);
-    });
-  } finally {
-    await session.endSession();
+    if (params.session) {
+      await writeStartInstance(db, instanceId, params, params.session);
+    } else {
+      const session = db.client.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await writeStartInstance(db, instanceId, params, session);
+        });
+      } finally {
+        await session.endSession();
+      }
+    }
+    return { instanceId, status: 'RUNNING' };
+  } catch (err) {
+    // Duplicate-key on (definitionId, idempotencyKey) means a concurrent
+    // call won the race. Return the winner's instanceId.
+    if (params.idempotencyKey && isDuplicateKeyError(err)) {
+      const existing = await findByIdempotencyKey(
+        db,
+        params.definitionId,
+        params.idempotencyKey,
+        params.session,
+      );
+      if (existing) {
+        return { instanceId: existing._id, status: existing.status, deduplicated: true };
+      }
+    }
+    throw err;
   }
-  return { instanceId, status: 'RUNNING' };
+}
+
+async function findByIdempotencyKey(
+  db: Db,
+  definitionId: string,
+  idempotencyKey: string,
+  session?: ClientSession,
+): Promise<{ _id: string; status: string } | null> {
+  const { ProcessInstances } = getCollections(db);
+  const doc = await ProcessInstances.findOne(
+    { definitionId, idempotencyKey },
+    { projection: { _id: 1, status: 1 }, ...(session ? { session } : {}) },
+  );
+  if (!doc) return null;
+  return { _id: doc._id, status: doc.status };
+}
+
+function isDuplicateKeyError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: unknown }).code === 11000
+  );
 }
 
 async function writeStartInstance(
@@ -80,6 +148,7 @@ async function writeStartInstance(
       status: 'RUNNING',
       createdAt: now,
       businessKey: params.businessKey,
+      ...(params.idempotencyKey != null && { idempotencyKey: params.idempotencyKey }),
       ...(params.user != null && {
         startedBy: params.user.email,
         startedByDetails: params.user,

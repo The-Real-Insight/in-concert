@@ -61,4 +61,17 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db
     .collection(COLLECTION_NAMES.ConnectorSchedule)
     .createIndex({ definitionId: 1, nodeId: 1 }, { unique: true });
+
+  // Idempotency: two starts with the same (definitionId, idempotencyKey)
+  // collapse to one instance. Partial filter so this never conflicts with
+  // instances that don't set a key (e.g. user-initiated starts).
+  await db
+    .collection(COLLECTION_NAMES.ProcessInstance)
+    .createIndex(
+      { definitionId: 1, idempotencyKey: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { idempotencyKey: { $exists: true } },
+      },
+    );
 }

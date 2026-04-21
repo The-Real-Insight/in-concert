@@ -97,6 +97,14 @@ export type ProcessInstanceDoc = {
   parentInstanceId?: string;
   parentCallActivityId?: string;
   businessKey?: string;
+  /**
+   * Deduplication key for starts that may retry (trigger fires, idempotent
+   * API requests). Together with `definitionId`, this is the exactly-once
+   * guarantee: two `startInstance` calls with the same (definitionId,
+   * idempotencyKey) collapse to a single process instance. Enforced via a
+   * partial unique index.
+   */
+  idempotencyKey?: string;
   status: 'RUNNING' | 'COMPLETED' | 'TERMINATED' | 'FAILED';
   createdAt: Date;
   endedAt?: Date;
