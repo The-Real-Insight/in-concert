@@ -156,6 +156,30 @@ Key design choices worth calling out:
 - **Dedup key is a stable fingerprint** of `(path, mtime, size)`. If you replace the file with identical content, it won't re-fire (which is probably what you want).
 - **First-poll policy is declarative** — `tri:initialPolicy="skip-existing"` on the BPMN, default chosen by `defaultInitialPolicy`.
 
+### What the example handles (and what it doesn't)
+
+The fingerprint-based design above is deliberately simple — it covers the common cases well, but has edges. Extend the example or pick a different detection strategy if the "No" rows matter for your use case.
+
+| Event | Fires a process? | Why / how |
+|---|---|---|
+| **New file appears** in the watched folder | ✅ Yes | New path → new fingerprint → not in cursor `seen` set → start emitted. |
+| **Existing file changed** (edited, grew, shrunk, new mtime) | ✅ Yes | Same path, but different `(mtime, size)` → new fingerprint → fresh start. |
+| **File renamed** within the watched folder | ✅ Yes | New path → new fingerprint. The old name simply stops appearing. |
+| **New subfolder** created in the watched folder | ✅ Yes | `readdirSync` lists it; `statSync` gives it a fingerprint. Payload doesn't distinguish folder from file, so extend with `stat.isDirectory()` if you care. |
+| **File added inside a subfolder** | ❌ No | `readdirSync` is non-recursive in this example. Walk the tree with `readdirSync(..., { recursive: true })` if you need it. |
+| **File deleted** | ❌ No | The trigger only emits on "things I haven't seen before." Deletion is not an event — the file just stops appearing. Track a parallel `previousPaths` set and diff it if you need delete notifications. |
+| **`touch` with no content change** (mtime bumps, size same, hash same) | ✅ Yes, spuriously | Fingerprint is `(path, mtime, size)` — mtime bumped is enough to re-fire. Use a content hash in the fingerprint if that's wrong for you. |
+| **Atomic editor rewrite** (tempfile + rename over original) | ✅ Yes | Most editors update mtime on rename, so the fingerprint changes. Safe default. |
+| **Same file content re-uploaded** under the same name with the same mtime | ❌ No | Fingerprint matches — treated as the same file. Expected behavior for exactly-once. |
+| **Crash mid-fire** (process dies between reading the directory and committing) | ✅ Yes, no duplicate | Cursor update is atomic with instance creation. On retry, fingerprints match and the idempotency index deduplicates. |
+
+If the defaults don't fit, change one or two things:
+
+- **Want deletion events?** Track `previousPaths` and emit `{ dedupKey: \`deleted:${path}@${timestamp}\`, payload: { action: 'deleted', path } }` for the diff.
+- **Want recursion?** Replace `readdirSync(path)` with a recursive walk (or `readdirSync(path, { withFileTypes: true, recursive: true })` on Node ≥ 20).
+- **Want to ignore touches?** Use a content hash (`sha256` over the first N KB, or the whole file if small) instead of mtime in the fingerprint.
+- **Want to ignore partial uploads?** Skip entries where `size === 0` or where the file is newer than N seconds — same pattern the SharePoint trigger uses.
+
 ---
 
 ## Step 2 — Register the trigger
