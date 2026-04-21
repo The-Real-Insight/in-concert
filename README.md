@@ -30,11 +30,9 @@
 
 ## What's new
 
-### Unified start triggers — four built-ins, bring-your-own plugins
+### AI-listening processes — let an LLM decide when to wake up
 
-**Start a process from anything.** Timers, Microsoft 365 mailboxes, SharePoint folders, and **AI-listener agents** are all implementations of a single `StartTrigger` plugin interface. The engine core contains zero references to specific trigger types — register the ones you want, write your own, or strip out the ones you don't need.
-
-**New: AI-listener triggers.** A supervisor process that polls an MCP-style tool (weather, stock, a custom API) and asks an LLM a yes/no question about the result. The business rule — *how to interpret the signal* — lives in the prompt, not in code. Fires only when the LLM says yes.
+**A new kind of start event.** An `ai-listener` trigger polls an MCP-style tool, hands the result to an LLM together with a prompt authored directly in the BPMN, and starts a process instance only when the LLM answers *"yes"*. The business rule — *how to interpret the signal* — lives in the prompt, not in code.
 
 ```xml
 <bpmn:message id="Msg_RainAlert" name="ai-rain-alert"
@@ -42,11 +40,21 @@
   tri:toolEndpoint="https://weather.example.com/tools/call"
   tri:tool="get_weather"
   tri:llmEndpoint="https://llm.example.com/evaluate"
-  tri:prompt="Is it currently raining heavily enough to stop outdoor ops? Answer strictly yes or no."
+  tri:prompt="Given this observation, is it currently raining heavily enough to halt outdoor ops? Answer strictly yes or no."
   tri:pollIntervalSeconds="300" />
 ```
 
-**New: SharePoint folder triggers.** Drop a file into a watched SharePoint folder and the engine starts a process with the file's metadata as initial variables. Uses the Graph `/delta` API — no full folder scans, no duplicate starts, no "mark as processed" dance.
+Weather alerts. Price-movement watches. System-health escalations. Fraud-signal triage. Anything where *an LLM would know* whether the current state warrants a process — and where encoding that rule in code would require pages of thresholds, exceptions, and edge cases. Write the rule once, in English, on the BPMN.
+
+**Exactly-once out of the box.** The dedup key comes from either a `correlationId` the LLM supplies (naming the ongoing *event*) or a hash of the tool output (naming the *observation*). Repeat detections collapse to a single process instance automatically — no "am I already handling this?" bookkeeping in your handlers.
+
+**Real LLM, real tool, zero lock-in.** The default flow is plain HTTP — any MCP-compatible tool server, any LLM with a `{ prompt, context } → { answer }` endpoint. Prefer Anthropic's SDK directly? Inject `setEvaluate(...)` on the plugin and bypass HTTP entirely. [Full AI-listener guide](./docs/sdk/usage.md#ai-listener-start-events)
+
+### Unified start triggers — plus SharePoint folder events
+
+**Start a process from anything.** Timers, Microsoft 365 mailboxes, SharePoint folders, and AI-listener agents are all implementations of a single `StartTrigger` plugin interface. The engine core contains zero references to specific trigger types — register the ones you want, write your own, or strip out the ones you don't need.
+
+**SharePoint folder triggers are new:** drop a file into a watched SharePoint folder and the engine starts a process with the file's metadata as initial variables. Uses the Graph `/delta` API — no full folder scans, no duplicate starts, no "mark as processed" dance.
 
 ```xml
 <bpmn:message id="Msg_NewOrder" name="incoming-orders"
@@ -57,7 +65,7 @@
   tri:initialPolicy="skip-existing" />
 ```
 
-Timer start events (ISO 8601 intervals, cron, RRULE, date-times, durations) and Microsoft 365 mailbox polling ship as **first-party trigger plugins** too — the same interface your own triggers would use. An S3 bucket watcher, an SQS queue, a webhook receiver — roughly 100 lines of code against a documented interface, registered at engine init. Exactly-once instance creation is built into the framework via stable dedup keys, not implemented separately by each trigger. [Full trigger guide](./docs/sdk/custom-triggers.md)
+Timer start events (ISO 8601, cron, RRULE, date-times, durations) and Microsoft 365 mailbox polling ship as first-party trigger plugins too — the same interface your own triggers would use. An S3 bucket watcher, an SQS queue, a webhook receiver — roughly 100 lines of code against a documented interface, registered at engine init. Exactly-once instance creation is built into the framework via stable dedup keys, not implemented separately by each trigger. [Full trigger guide](./docs/sdk/custom-triggers.md)
 
 ### Enhanced recovery semantics — processes survive crashes
 
