@@ -9,18 +9,20 @@
 import { TriggerRegistry } from './registry';
 import { TimerTrigger } from './timer/timer-trigger';
 import { GraphMailboxTrigger } from './graph-mailbox/graph-mailbox-trigger';
+import { SharePointFolderTrigger } from './sharepoint-folder/sharepoint-folder-trigger';
 import type { StartTrigger } from './types';
 
 export { TriggerRegistry } from './registry';
 export * from './types';
 export { GraphMailboxTrigger } from './graph-mailbox/graph-mailbox-trigger';
 export { TimerTrigger } from './timer/timer-trigger';
+export { SharePointFolderTrigger } from './sharepoint-folder/sharepoint-folder-trigger';
 
 /** Populate a registry with the engine's built-in triggers. */
 export function registerBuiltInTriggers(registry: TriggerRegistry): void {
   registry.register(new TimerTrigger());
   registry.register(new GraphMailboxTrigger());
-  // SharePointFolderTrigger is registered in a later commit.
+  registry.register(new SharePointFolderTrigger());
 }
 
 /** Lazily-initialized default registry used when callers don't pass one explicitly. */

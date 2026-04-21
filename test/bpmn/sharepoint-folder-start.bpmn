@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  id="Defs_SharePointFolder"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:message id="Msg_NewOrder" name="sp-incoming-orders"
+    tri:connectorType="sharepoint-folder"
+    tri:siteUrl="https://contoso.sharepoint.com/sites/Operations"
+    tri:driveName="Documents"
+    tri:folderPath="/Incoming/Orders"
+    tri:fileNamePattern="*.pdf"
+    tri:pollIntervalSeconds="60"
+    tri:initialPolicy="skip-existing" />
+
+  <bpmn:process id="Process_SharePointFolder" isExecutable="true">
+
+    <bpmn:startEvent id="Start" name="File arrived">
+      <bpmn:messageEventDefinition messageRef="Msg_NewOrder" />
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="Task_Process" name="Process file" tri:toolId="process-file"/>
+
+    <bpmn:endEvent id="End"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="Task_Process"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_Process" targetRef="End"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>
