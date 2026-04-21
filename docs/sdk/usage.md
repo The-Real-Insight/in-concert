@@ -471,10 +471,10 @@ From an application developer's perspective:
 | A user submitted a task / decision a moment before the crash | ✅ Yes | The continuation is replayed and the process advances |
 | A service task or gateway callback was being handed to your handler | ✅ Yes | The callback is re-delivered to `onServiceCall` / `onDecision` |
 | A process instance was mid-step (applying a transition) | ✅ Yes | The step is re-attempted |
-| A **timer** was firing at the instant of the crash | ⚠️ The schedule continues; one fire may produce a duplicate instance | Handle with idempotency in your handlers ([tracked](../tickets/timer-connector-double-fire.md)) |
-| A **mailbox connector** was starting an instance for an email | ⚠️ The email is retried; one email may produce a duplicate instance | Handle with idempotency in `onMailReceived` ([tracked](../tickets/timer-connector-double-fire.md)) |
+| A **timer** was firing at the instant of the crash | ✅ Yes | The fire is retried; a stable dedup key (`scheduleId@fireTime`) collapses retries to one instance via the idempotency index |
+| A **mailbox connector** was starting an instance for an email | ✅ Yes | The email is retried; dedup key `scheduleId:messageId` collapses retries to one instance |
 
-In short: **your processes don't disappear.** Quiescent instances come back untouched; in-flight steps get replayed. The only residual footgun is that timers and email-triggered starts can double-fire under a narrow crash window — your handlers should be idempotent there (or tolerate a second instance being started).
+In short: **your processes don't disappear, and they don't double-start.** Quiescent instances come back untouched; in-flight steps get replayed; trigger fires are deduped via the exactly-once key stored on each `ProcessInstance`. The only remaining source of non-determinism is your own handler code — make `onServiceCall`, `onWorkItem`, and `onDecision` tolerant of being invoked twice if you want truly idempotent external effects, since callback delivery is at-least-once.
 
 ---
 
