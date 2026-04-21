@@ -181,7 +181,13 @@ async function persistFireResult(
         };
         const unset: Record<string, ''> = { ownerId: '', leaseUntil: '', lastError: '' };
 
-        applyScheduleTiming(update, unset, nextSchedule, result);
+        if (result.exhausted) {
+          update.status = 'EXHAUSTED';
+          unset.nextFireAt = '';
+          unset.intervalMs = '';
+        } else {
+          applyScheduleTiming(update, unset, nextSchedule, result);
+        }
 
         await TriggerSchedules.updateOne(
           { _id: schedule._id },

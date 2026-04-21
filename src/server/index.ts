@@ -23,10 +23,11 @@ import { serverRouter } from './routes';
 import { getInstance } from '../instance/service';
 import { addBotMessage } from './conversation';
 import { emitEngineAttributionNoticeOnce } from '../attribution';
-import { processOneTimer } from '../timers/worker';
 import { processOneConnector } from '../connectors/worker';
 import { sweepExpiredLeases } from '../workers/sweeper';
 import { dispatchOutboxBatch, markOutboxSent } from '../workers/outbox-dispatcher';
+import { processOneTrigger } from '../workers/trigger-scheduler';
+import { getDefaultTriggerRegistry } from '../triggers';
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -210,7 +211,7 @@ function createServiceTaskHandler() {
 }
 
 const POLL_MS = 500;
-const TIMER_POLL_MS = 1_000;
+const TRIGGER_POLL_MS = 1_000;
 const CONNECTOR_POLL_MS = 2_000;
 const SWEEPER_INTERVAL_MS = 10_000;
 const OUTBOX_DISPATCH_INTERVAL_MS = 500;
@@ -227,16 +228,17 @@ async function connectorLoop() {
   }
 }
 
-async function timerLoop() {
+async function triggerLoop() {
   const db = getDb();
+  const registry = getDefaultTriggerRegistry();
   while (true) {
     try {
-      const fired = await processOneTimer(db);
-      if (fired) continue; // check immediately for another due timer
+      const fired = await processOneTrigger(db, registry);
+      if (fired) continue; // check immediately for another due trigger
     } catch (err) {
-      console.error('Timer worker error:', err);
+      console.error('Trigger worker error:', err);
     }
-    await new Promise((r) => setTimeout(r, TIMER_POLL_MS));
+    await new Promise((r) => setTimeout(r, TRIGGER_POLL_MS));
   }
 }
 
@@ -316,7 +318,7 @@ async function main() {
   });
 
   workerLoop();
-  timerLoop();
+  triggerLoop();
   connectorLoop();
   sweeperLoop();
   outboxDispatcherLoop();

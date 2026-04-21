@@ -3,8 +3,9 @@ import { parseBpmnXml } from './parser';
 import type { NormalizedGraph } from './types';
 import type { Db } from 'mongodb';
 import { getCollections } from '../db/collections';
-import { classifyTimer, computeNextFire, parseRepeat } from '../timers/expressions';
 import { config } from '../config';
+import { getDefaultTriggerRegistry } from '../triggers';
+import type { TriggerDefinition, TriggerSchedule as TriggerScheduleShape } from '../triggers/types';
 
 export type DeployResult = {
   definitionId: string;
@@ -19,55 +20,94 @@ export type DeployParams = {
   tenantId?: string;
 };
 
-async function syncTimerSchedules(db: Db, definitionId: string, graph: NormalizedGraph): Promise<void> {
-  const { TimerSchedules } = getCollections(db);
+/**
+ * Write/refresh TriggerSchedule rows for timer start events, driven by the
+ * registered TimerTrigger. Replaces the pre-refactor syncTimerSchedules
+ * which wrote into the now-deprecated TimerSchedule collection.
+ */
+async function syncTimerTriggerSchedules(
+  db: Db,
+  definitionId: string,
+  graph: NormalizedGraph,
+): Promise<void> {
+  const { TriggerSchedules } = getCollections(db);
+  const registry = getDefaultTriggerRegistry();
+  const timerTrigger = registry.get('timer');
+  if (!timerTrigger) {
+    // Intentional: if a deployment embeds timers but the host stripped
+    // the timer plugin, we surface that as a deploy error rather than
+    // silently ignoring the BPMN's intent.
+    const hasTimers = graph.startNodeIds.some((id) => graph.nodes[id]?.timerDefinition);
+    if (hasTimers) {
+      throw new Error(
+        'BPMN contains timer start event(s) but no "timer" trigger is registered.',
+      );
+    }
+    return;
+  }
+
   const now = new Date();
 
-  // Find all timer start events in the graph
   const timerStartNodes = graph.startNodeIds
-    .map(id => graph.nodes[id])
-    .filter(n => n?.type === 'startEvent' && n.timerDefinition);
+    .map((id) => graph.nodes[id])
+    .filter((n) => n?.type === 'startEvent' && n.timerDefinition);
 
-  // Remove schedules for start events that no longer have timers
-  const activeNodeIds = timerStartNodes.map(n => n.id);
-  await TimerSchedules.deleteMany({
+  const activeTimerIds = timerStartNodes.map((n) => n.id);
+  await TriggerSchedules.deleteMany({
     definitionId,
-    ...(activeNodeIds.length > 0
-      ? { nodeId: { $nin: activeNodeIds } }
+    triggerType: 'timer',
+    ...(activeTimerIds.length > 0
+      ? { startEventId: { $nin: activeTimerIds } }
       : {}),
   });
 
-  // Upsert a schedule for each timer start event
   for (const node of timerStartNodes) {
-    const expr = classifyTimer(node.timerDefinition!);
-    const nextFireAt = computeNextFire(expr, now);
-    let remainingReps: number | null = null;
-    if (expr.kind === 'cycle') {
-      const rep = parseRepeat(expr.raw);
-      remainingReps = rep.repetitions;
-    }
+    const def: TriggerDefinition = {
+      triggerType: 'timer',
+      definitionId,
+      startEventId: node.id,
+      config: { expression: node.timerDefinition! },
+    };
 
-    await TimerSchedules.updateOne(
-      { definitionId, nodeId: node.id },
+    // Let the plugin reject invalid expressions at deploy time.
+    timerTrigger.validate(def);
+
+    const timing = timerTrigger.nextSchedule(def, null, null);
+    const setFields = buildTimingFields(timing);
+
+    await TriggerSchedules.updateOne(
+      { definitionId, startEventId: node.id, triggerType: 'timer' },
       {
         $set: {
-          kind: expr.kind,
-          expression: expr.raw,
-          nextFireAt,
-          remainingReps,
+          config: def.config,
           status: 'ACTIVE',
           updatedAt: now,
+          ...setFields,
         },
         $setOnInsert: {
           _id: uuidv4(),
+          scheduleId: uuidv4(),
           definitionId,
-          nodeId: node.id,
+          startEventId: node.id,
+          triggerType: 'timer',
+          cursor: null,
+          credentials: null,
+          initialPolicy: timerTrigger.defaultInitialPolicy,
           createdAt: now,
         },
       },
       { upsert: true },
     );
   }
+}
+
+function buildTimingFields(
+  timing: TriggerScheduleShape,
+): Record<string, unknown> {
+  if (timing.kind === 'fire-at') {
+    return { nextFireAt: timing.at };
+  }
+  return { intervalMs: timing.ms };
 }
 
 async function syncConnectorSchedules(db: Db, definitionId: string, graph: NormalizedGraph): Promise<void> {
@@ -150,7 +190,7 @@ export async function deployDefinition(
         },
       }
     );
-    await syncTimerSchedules(db, existing._id, graph);
+    await syncTimerTriggerSchedules(db, existing._id, graph);
     await syncConnectorSchedules(db, existing._id, graph);
     return { definitionId: existing._id };
   }
@@ -168,7 +208,7 @@ export async function deployDefinition(
     deployedAt: now,
   });
 
-  await syncTimerSchedules(db, definitionId, graph);
+  await syncTimerTriggerSchedules(db, definitionId, graph);
   await syncConnectorSchedules(db, definitionId, graph);
 
   return { definitionId };

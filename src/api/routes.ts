@@ -5,7 +5,7 @@ import { config } from '../config';
 import { deployDefinition } from '../model/service';
 import { startInstance, getInstance, purgeInstance } from '../instance/service';
 import { getProcessHistory } from '../history/service';
-import { getCollections, COLLECTION_NAMES, type TimerScheduleStatus, type ConnectorScheduleStatus } from '../db/collections';
+import { getCollections, COLLECTION_NAMES, type ConnectorScheduleStatus } from '../db/collections';
 import { claimContinuation, processContinuation } from '../workers/processor';
 
 export const apiRouter = Router();
@@ -327,11 +327,11 @@ apiRouter.post(
 apiRouter.get('/v1/timer-schedules', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { TimerSchedules } = getCollections(db);
-    const filter: Record<string, unknown> = {};
+    const { TriggerSchedules } = getCollections(db);
+    const filter: Record<string, unknown> = { triggerType: 'timer' };
     if (req.query.definitionId) filter.definitionId = req.query.definitionId;
     if (req.query.status) filter.status = req.query.status;
-    const items = await TimerSchedules.find(filter).sort({ nextFireAt: 1 }).toArray();
+    const items = await TriggerSchedules.find(filter).sort({ nextFireAt: 1 }).toArray();
     res.json({ items });
   } catch (err) {
     res.status(500).json({ error: 'List timer schedules failed' });
@@ -341,8 +341,8 @@ apiRouter.get('/v1/timer-schedules', async (req: Request, res: Response) => {
 apiRouter.get('/v1/timer-schedules/:scheduleId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { TimerSchedules } = getCollections(db);
-    const doc = await TimerSchedules.findOne({ _id: req.params.scheduleId });
+    const { TriggerSchedules } = getCollections(db);
+    const doc = await TriggerSchedules.findOne({ _id: req.params.scheduleId, triggerType: 'timer' });
     if (!doc) {
       res.status(404).json({ error: 'Timer schedule not found' });
       return;
@@ -356,10 +356,10 @@ apiRouter.get('/v1/timer-schedules/:scheduleId', async (req: Request, res: Respo
 apiRouter.post('/v1/timer-schedules/:scheduleId/pause', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { TimerSchedules } = getCollections(db);
-    const result = await TimerSchedules.findOneAndUpdate(
-      { _id: req.params.scheduleId, status: 'ACTIVE' },
-      { $set: { status: 'PAUSED' as TimerScheduleStatus, updatedAt: new Date() } },
+    const { TriggerSchedules } = getCollections(db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId, triggerType: 'timer', status: 'ACTIVE' },
+      { $set: { status: 'PAUSED', updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
     if (!result) {
@@ -375,10 +375,10 @@ apiRouter.post('/v1/timer-schedules/:scheduleId/pause', async (req: Request, res
 apiRouter.post('/v1/timer-schedules/:scheduleId/resume', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { TimerSchedules } = getCollections(db);
-    const result = await TimerSchedules.findOneAndUpdate(
-      { _id: req.params.scheduleId, status: 'PAUSED' },
-      { $set: { status: 'ACTIVE' as TimerScheduleStatus, updatedAt: new Date() } },
+    const { TriggerSchedules } = getCollections(db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: req.params.scheduleId, triggerType: 'timer', status: 'PAUSED' },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
     if (!result) {
@@ -504,7 +504,7 @@ apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: R
       startingTenantId?: string;
     };
     const db = getDb();
-    const { TimerSchedules, ConnectorSchedules } = getCollections(db);
+    const { TriggerSchedules, ConnectorSchedules } = getCollections(db);
     const now = new Date();
 
     const connectorSet: Record<string, unknown> = {
@@ -521,13 +521,13 @@ apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: R
     }
     await ConnectorSchedules.updateMany({ definitionId }, { $set: connectorSet });
 
-    const timerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
+    const triggerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
     if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
-      timerSet.startingTenantId = startingTenantId;
+      triggerSet.startingTenantId = startingTenantId;
     }
-    await TimerSchedules.updateMany(
-      { definitionId, status: { $ne: 'EXHAUSTED' } },
-      { $set: timerSet },
+    await TriggerSchedules.updateMany(
+      { definitionId, triggerType: 'timer', status: { $ne: 'EXHAUSTED' } },
+      { $set: triggerSet },
     );
 
     res.json({ accepted: true });
@@ -540,15 +540,15 @@ apiRouter.post('/v1/definitions/:definitionId/schedules/deactivate', async (req:
   try {
     const { definitionId } = req.params;
     const db = getDb();
-    const { TimerSchedules, ConnectorSchedules } = getCollections(db);
+    const { TriggerSchedules, ConnectorSchedules } = getCollections(db);
     const now = new Date();
 
     await ConnectorSchedules.updateMany(
       { definitionId, status: 'ACTIVE' },
       { $set: { status: 'PAUSED' as ConnectorScheduleStatus, updatedAt: now } },
     );
-    await TimerSchedules.updateMany(
-      { definitionId, status: 'ACTIVE' },
+    await TriggerSchedules.updateMany(
+      { definitionId, triggerType: 'timer', status: 'ACTIVE' },
       { $set: { status: 'PAUSED', updatedAt: now } },
     );
 

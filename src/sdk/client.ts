@@ -801,22 +801,24 @@ export class BpmnEngineClient {
   async listTimerSchedules(params?: {
     definitionId?: string;
     status?: string;
-  }): Promise<import('../db/collections').TimerScheduleDoc[]> {
+  }): Promise<import('../db/collections').TriggerScheduleDoc[]> {
     if (this.config.mode === 'rest') {
       const q = new URLSearchParams();
       if (params?.definitionId) q.set('definitionId', params.definitionId);
       if (params?.status) q.set('status', params.status);
       const res = await fetch(`${this.config.baseUrl}/v1/timer-schedules?${q}`);
       if (!res.ok) throw new Error(`List timer schedules failed: ${res.status}`);
-      const json = (await res.json()) as { items: import('../db/collections').TimerScheduleDoc[] };
+      const json = (await res.json()) as {
+        items: import('../db/collections').TriggerScheduleDoc[];
+      };
       return json.items;
     }
     const { getCollections } = await import('../db/collections');
-    const { TimerSchedules } = getCollections(this.config.db);
-    const filter: Record<string, unknown> = {};
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const filter: Record<string, unknown> = { triggerType: 'timer' };
     if (params?.definitionId) filter.definitionId = params.definitionId;
     if (params?.status) filter.status = params.status;
-    return TimerSchedules.find(filter).sort({ nextFireAt: 1 }).toArray();
+    return TriggerSchedules.find(filter).sort({ nextFireAt: 1 }).toArray();
   }
 
   async pauseTimerSchedule(scheduleId: string): Promise<void> {
@@ -826,9 +828,9 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { TimerSchedules } = getCollections(this.config.db);
-    const result = await TimerSchedules.findOneAndUpdate(
-      { _id: scheduleId, status: 'ACTIVE' },
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: scheduleId, triggerType: 'timer', status: 'ACTIVE' },
       { $set: { status: 'PAUSED', updatedAt: new Date() } },
     );
     if (!result) throw new Error('Timer schedule not found or not ACTIVE');
@@ -841,9 +843,9 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { TimerSchedules } = getCollections(this.config.db);
-    const result = await TimerSchedules.findOneAndUpdate(
-      { _id: scheduleId, status: 'PAUSED' },
+    const { TriggerSchedules } = getCollections(this.config.db);
+    const result = await TriggerSchedules.findOneAndUpdate(
+      { _id: scheduleId, triggerType: 'timer', status: 'PAUSED' },
       { $set: { status: 'ACTIVE', updatedAt: new Date() } },
     );
     if (!result) throw new Error('Timer schedule not found or not PAUSED');
@@ -966,7 +968,7 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { TimerSchedules, ConnectorSchedules } = getCollections(this.config.db);
+    const { TriggerSchedules, ConnectorSchedules } = getCollections(this.config.db);
     const now = new Date();
 
     const connectorSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
@@ -981,13 +983,13 @@ export class BpmnEngineClient {
     }
     await ConnectorSchedules.updateMany({ definitionId }, { $set: connectorSet });
 
-    const timerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
+    const triggerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
     if (options?.startingTenantId) {
-      timerSet.startingTenantId = options.startingTenantId;
+      triggerSet.startingTenantId = options.startingTenantId;
     }
-    await TimerSchedules.updateMany(
-      { definitionId, status: { $ne: 'EXHAUSTED' } },
-      { $set: timerSet },
+    await TriggerSchedules.updateMany(
+      { definitionId, triggerType: 'timer', status: { $ne: 'EXHAUSTED' } },
+      { $set: triggerSet },
     );
   }
 
@@ -1005,14 +1007,14 @@ export class BpmnEngineClient {
       return;
     }
     const { getCollections } = await import('../db/collections');
-    const { TimerSchedules, ConnectorSchedules } = getCollections(this.config.db);
+    const { TriggerSchedules, ConnectorSchedules } = getCollections(this.config.db);
     const now = new Date();
     await ConnectorSchedules.updateMany(
       { definitionId, status: 'ACTIVE' },
       { $set: { status: 'PAUSED', updatedAt: now } },
     );
-    await TimerSchedules.updateMany(
-      { definitionId, status: 'ACTIVE' },
+    await TriggerSchedules.updateMany(
+      { definitionId, triggerType: 'timer', status: 'ACTIVE' },
       { $set: { status: 'PAUSED', updatedAt: now } },
     );
   }

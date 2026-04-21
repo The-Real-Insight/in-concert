@@ -72,6 +72,13 @@ export type TriggerResult = {
   nextFireAt?: Date;
   /** Last-error string the scheduler should record on the schedule row. */
   lastError?: string;
+  /**
+   * Mark the schedule as `EXHAUSTED` after this fire. Used by one-shot
+   * timers and bounded cycles (R3/PT10M) that have run out of repetitions.
+   * `nextFireAt` and `intervalMs` are cleared when set; no further polls
+   * will occur until the schedule is manually re-activated.
+   */
+  exhausted?: boolean;
 };
 
 /**
@@ -130,9 +137,14 @@ export type StartTrigger = {
   readonly defaultInitialPolicy: InitialPolicy;
 
   /**
-   * Called when the schedule is first created and after each successful fire.
+   * Called when the schedule is first created (with `lastFiredAt=null,
+   * cursor=null`) and after each successful fire (with the new cursor).
    * Returning `interval` makes the scheduler re-invoke `fire()` every N ms;
    * returning `fire-at` is a one-shot that gets re-evaluated after each call.
+   *
+   * For fire-at triggers whose timing is determined by the result of
+   * `fire()` (e.g. timer), the scheduler prefers `TriggerResult.nextFireAt`
+   * and only falls back to `nextSchedule` on the initial creation.
    */
   nextSchedule(
     def: TriggerDefinition,
