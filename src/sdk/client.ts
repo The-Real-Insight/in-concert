@@ -1122,6 +1122,58 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Start the trigger scheduler polling loop (local mode only).
+   *
+   * Drains due `TriggerSchedule` rows against the given registry, one schedule
+   * per iteration. Without this loop, ACTIVE schedules sit in Mongo and never
+   * fire — the SDK owns the loop so embedding hosts don't have to reach into
+   * `dist/workers/trigger-scheduler` across the package's exports boundary.
+   *
+   * Returns a stop function; call it on shutdown to let the current iteration
+   * finish and exit the loop.
+   *
+   * REST mode: no-op with a warning — the in-concert server runs its own
+   * `triggerLoop` in-process. Still returns a stop function for call-site
+   * symmetry.
+   */
+  startTriggerScheduler(options?: {
+    registry?: import('../triggers/registry').TriggerRegistry;
+    pollMs?: number;
+    onError?: (err: unknown) => void;
+  }): () => void {
+    if (this.config.mode !== 'local') {
+      console.warn(
+        '[in-concert] startTriggerScheduler() is a no-op in REST mode — the server runs its own trigger loop.',
+      );
+      return () => {
+        /* noop */
+      };
+    }
+    const db = this.config.db;
+    const pollMs = options?.pollMs ?? 1_000;
+    const onError = options?.onError;
+    let stopped = false;
+    void (async () => {
+      const { processOneTrigger } = await import('../workers/trigger-scheduler');
+      const { getDefaultTriggerRegistry } = await import('../triggers');
+      const registry = options?.registry ?? getDefaultTriggerRegistry();
+      while (!stopped) {
+        try {
+          const fired = await processOneTrigger(db, registry);
+          if (fired) continue; // drain immediately when a schedule fired
+        } catch (err) {
+          if (onError) onError(err);
+          // else: swallow — next iteration will try again
+        }
+        if (!stopped) await new Promise((r) => setTimeout(r, pollMs));
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  }
+
+  /**
    * Close connections. No-op; caller manages DB/connection lifecycle.
    */
   async close(): Promise<void> {

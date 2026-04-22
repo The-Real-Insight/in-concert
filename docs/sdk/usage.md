@@ -25,7 +25,7 @@ Same API in both modes; switch with config.
   - [activateSchedules](#activateschedulesdefinitionid-options) · [deactivateSchedules](#deactivateschedulesdefinitionid) · [recover](#recoveroptions)
 - [Callbacks for User Tasks and Service Tasks](#callbacks-for-user-tasks-and-service-tasks)
   - [User Tasks](#user-tasks) · [Service Tasks](#service-tasks-push-based-no-polling)
-  - [submitDecision](#submitdecisioninstanceid-decisionid-options) · [processUntilComplete](#processuntilcompleteinstanceid-handlers-options) · [subscribeToCallbacks](#subscribetocallbackscallback)
+  - [submitDecision](#submitdecisioninstanceid-decisionid-options) · [processUntilComplete](#processuntilcompleteinstanceid-handlers-options) · [subscribeToCallbacks](#subscribetocallbackscallback) · [startTriggerScheduler](#starttriggerscheduleroptions)
 - [Example: Linear Process](#example-linear-process-local-mode)
 - [Example: XOR Gateway](#example-xor-gateway-local-mode)
 - [When to Use Each Mode](#when-to-use-each-mode)
@@ -768,6 +768,27 @@ unsubscribe(); // when done
 ```
 
 Same API in both modes—stream always comes from the engine.
+
+---
+
+### startTriggerScheduler(options?)
+
+**Local mode only.** Starts the polling loop that drains due `TriggerSchedule` rows — the same loop the in-concert REST server runs internally as `triggerLoop`. Without this call, ACTIVE schedules sit in Mongo and never fire.
+
+```typescript
+const stop = client.startTriggerScheduler({
+  pollMs: 1_000,                    // default
+  onError: (err) => log.error(err), // else swallowed
+  // registry defaults to getDefaultTriggerRegistry()
+});
+
+// on shutdown
+stop();
+```
+
+The loop polls Mongo for rows where `status === 'ACTIVE'` and the timing predicate matches (`nextFireAt <= now`, or interval elapsed). `pauseTriggerSchedule` / `activateSchedules` / `deactivateSchedules` just flip `status` — the loop picks up the change on the next tick; no restart needed. Rows that hit `EXHAUSTED` drop out of the query the same way.
+
+**REST mode:** no-op with a warning — the server runs its own loop. Returns a stop function for call-site symmetry.
 
 ---
 

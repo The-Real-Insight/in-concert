@@ -243,7 +243,10 @@ const [schedule] = await engine.listTriggerSchedules({ triggerType: 'fs-watcher'
 await engine.resumeTriggerSchedule(schedule._id);
 ```
 
-From here the generic `triggerLoop` picks up due schedules and calls your `fire()`. Each `StartRequest` becomes a process instance with the dedup key applied.
+From here the generic trigger scheduler picks up due schedules and calls your `fire()`. Each `StartRequest` becomes a process instance with the dedup key applied.
+
+- **REST mode:** the in-concert server runs `triggerLoop` in-process; no host action required.
+- **Local mode:** the host must start the loop itself via `client.startTriggerScheduler()` — otherwise ACTIVE schedules sit in Mongo and never fire. See [usage.md → startTriggerScheduler](./usage.md#starttriggerscheduleroptions).
 
 ---
 
