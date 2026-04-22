@@ -97,6 +97,7 @@ function makeFakeTrigger(
   const trigger: StartTrigger = {
     triggerType,
     defaultInitialPolicy: 'fire-existing',
+    claimFromBpmn: () => null, // schedules inserted directly; BPMN-claim path not exercised
     validate() {
       /* noop */
     },

@@ -23,7 +23,10 @@ import {
   type DriveItem,
   type GraphCredentials,
 } from './graph-client';
+import { stripTriPrefix } from '../attrs';
 import type {
+  BpmnClaim,
+  BpmnStartEventView,
   StartRequest,
   StartTrigger,
   TriggerCursor,
@@ -40,6 +43,22 @@ const MIN_POLL_SECONDS = 15;
 export class SharePointFolderTrigger implements StartTrigger {
   readonly triggerType = SHAREPOINT_FOLDER_TRIGGER_TYPE;
   readonly defaultInitialPolicy = 'skip-existing' as const;
+
+  claimFromBpmn(event: BpmnStartEventView): BpmnClaim | null {
+    // Accept the attribute in either spot: on the referenced <bpmn:message>
+    // (message start) or inline on the start event / conditional event
+    // definition. Portals free to pick the authoring shape that fits best.
+    const fromMessage = event.messageAttrs?.['tri:connectorType'];
+    const fromSelf = event.selfAttrs['tri:connectorType'];
+    const source =
+      fromMessage === SHAREPOINT_FOLDER_TRIGGER_TYPE
+        ? event.messageAttrs!
+        : fromSelf === SHAREPOINT_FOLDER_TRIGGER_TYPE
+        ? event.selfAttrs
+        : null;
+    if (!source) return null;
+    return { config: stripTriPrefix(source, ['connectorType']) };
+  }
 
   validate(def: TriggerDefinition): void {
     const cfg = def.config;

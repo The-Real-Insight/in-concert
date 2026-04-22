@@ -158,8 +158,13 @@ function parseParticipantsFromXml(xml: string): { id: string; name?: string; pro
   return result;
 }
 
-/** Parse bpmn:message elements from XML for tri: extension attributes (e.g. tri:connectorType, tri:mailbox). */
-function parseMessageConnectors(xml: string): Record<string, Record<string, string>> {
+/**
+ * Parse `bpmn:message` elements from XML, returning their tri:* attributes
+ * keyed by the message's `name` (falling back to `id`). Engine-agnostic —
+ * no filtering by connector discriminator; plugins decide what to claim.
+ * Keys are fully qualified (`tri:foo`).
+ */
+function parseMessageAttrs(xml: string): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {};
   const msgRe = /<bpmn:message\s+id="([^"]+)"([^>]*)\/?>/gi;
   let m;
@@ -170,10 +175,51 @@ function parseMessageConnectors(xml: string): Record<string, Record<string, stri
     const attrRe = /tri:(\w+)="([^"]*)"/g;
     let am;
     while ((am = attrRe.exec(attrs))) {
-      ext[am[1]!] = am[2]!.trim();
+      ext[`tri:${am[1]!}`] = decodeXmlEntitiesInAttribute(am[2]!).trim();
     }
-    if (ext.connectorType) {
-      result[attrs.match(/name="([^"]*)"/)?.[1] ?? msgId] = ext;
+    if (Object.keys(ext).length > 0) {
+      const nameMatch = attrs.match(/name="([^"]*)"/)?.[1];
+      const key = nameMatch ?? msgId;
+      result[key] = ext;
+    }
+  }
+  return result;
+}
+
+/**
+ * Parse `tri:*` attributes from `<bpmn:startEvent>` opening tags and from
+ * any nested event-definition children (`<bpmn:conditionalEventDefinition tri:… />`).
+ * Keyed by start-event id. Engine-agnostic.
+ */
+function parseStartEventSelfAttrs(xml: string): Record<string, Record<string, string>> {
+  const result: Record<string, Record<string, string>> = {};
+  const tagRe = /<bpmn:startEvent\s+id="([^"]+)"([^>]*?)(\/?)>([\s\S]*?)<\/bpmn:startEvent>|<bpmn:startEvent\s+id="([^"]+)"([^>]*?)\/>/gi;
+  let m;
+  while ((m = tagRe.exec(xml))) {
+    const id = m[1] ?? m[5]!;
+    const openAttrs = (m[2] ?? m[6]) ?? '';
+    const inner = m[4] ?? '';
+    const ext: Record<string, string> = {};
+    const attrRe = /tri:(\w+)="([^"]*)"/g;
+    let am;
+    while ((am = attrRe.exec(openAttrs))) {
+      ext[`tri:${am[1]!}`] = decodeXmlEntitiesInAttribute(am[2]!).trim();
+    }
+    if (inner) {
+      // Walk nested event-definition elements for their tri:* attributes.
+      const defRe = /<bpmn:\w+EventDefinition\b([^>]*?)\/?>/gi;
+      let dm;
+      while ((dm = defRe.exec(inner))) {
+        const defAttrs = dm[1] ?? '';
+        const defAttrRe = /tri:(\w+)="([^"]*)"/g;
+        let dam;
+        while ((dam = defAttrRe.exec(defAttrs))) {
+          ext[`tri:${dam[1]!}`] = decodeXmlEntitiesInAttribute(dam[2]!).trim();
+        }
+      }
+    }
+    if (Object.keys(ext).length > 0) {
+      result[id] = ext;
     }
   }
   return result;
@@ -255,7 +301,8 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   const startNodeIds: string[] = [];
   const subprocessStartNodeIds: Record<string, string[]> = {};
   const conditionByFlow = parseConditionExpressionsByFlow(xml);
-  const messageConnectors = parseMessageConnectors(xml);
+  const messageAttrsByName = parseMessageAttrs(xml);
+  const startEventSelfAttrs = parseStartEventSelfAttrs(xml);
   const extensionByNode = parseExtensionAttributesByNode(xml);
 
   function processFlowElements(
@@ -312,9 +359,12 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
         node.timerDefinition = getTimerDefinition(el as { eventDefinitions?: unknown[] });
         node.messageRef = getMessageRef(el as { messageRef?: { name?: string }; eventDefinitions?: unknown[] });
         node.eventDefinition = getEventDefinition(el as { eventDefinitions?: { $type?: string }[] });
-        if (node.messageRef && messageConnectors[node.messageRef]) {
-          const mc = messageConnectors[node.messageRef];
-          node.connectorConfig = { connectorType: mc.connectorType!, ...mc };
+        const selfAttrs = startEventSelfAttrs[flowEl.id];
+        if (selfAttrs && Object.keys(selfAttrs).length > 0) {
+          node.selfAttrs = selfAttrs;
+        }
+        if (node.messageRef && messageAttrsByName[node.messageRef]) {
+          node.messageAttrs = messageAttrsByName[node.messageRef];
         }
         if (parentSubprocessId) {
           if (!subprocessStartNodeIds[parentSubprocessId])

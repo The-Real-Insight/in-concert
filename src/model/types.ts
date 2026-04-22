@@ -19,8 +19,19 @@ export type NodeDef = {
   extensions?: Record<string, string>;
   /** Multi-instance metadata when tri:multiInstanceData is present. */
   multiInstance?: { data?: string };
-  /** Connector config from bpmn:message tri: extensions (e.g. graph-mailbox polling). */
-  connectorConfig?: { connectorType: string; [key: string]: string };
+  /**
+   * Raw `tri:*` attribute bag from the BPMN element itself (start event,
+   * intermediate event, etc.) and any nested `<bpmn:*EventDefinition>`.
+   * Keys are fully qualified (`tri:connectorType`, `tri:path`, …). The
+   * engine never interprets these — trigger plugins read what they need.
+   */
+  selfAttrs?: Record<string, string>;
+  /**
+   * Raw `tri:*` attribute bag from the referenced `bpmn:Message`, when a
+   * message event definition points at one. Same engine-agnostic contract
+   * as {@link selfAttrs}.
+   */
+  messageAttrs?: Record<string, string>;
 };
 
 export type FlowDef = {

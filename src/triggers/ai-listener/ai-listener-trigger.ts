@@ -24,7 +24,10 @@ import {
   evaluateWithLlm as defaultEvaluateWithLlm,
   type EvaluationResult,
 } from './http';
+import { stripTriPrefix } from '../attrs';
 import type {
+  BpmnClaim,
+  BpmnStartEventView,
   StartTrigger,
   TriggerCursor,
   TriggerDefinition,
@@ -75,6 +78,19 @@ export class AIListenerTrigger implements StartTrigger {
 
   setEvaluate(fn: EvaluatorFn | null): void {
     this.customEvaluate = fn;
+  }
+
+  claimFromBpmn(event: BpmnStartEventView): BpmnClaim | null {
+    const fromMessage = event.messageAttrs?.['tri:connectorType'];
+    const fromSelf = event.selfAttrs['tri:connectorType'];
+    const source =
+      fromMessage === AI_LISTENER_TRIGGER_TYPE
+        ? event.messageAttrs!
+        : fromSelf === AI_LISTENER_TRIGGER_TYPE
+        ? event.selfAttrs
+        : null;
+    if (!source) return null;
+    return { config: stripTriPrefix(source, ['connectorType']) };
   }
 
   validate(def: TriggerDefinition): void {

@@ -97,10 +97,35 @@ export type TriggerSchedule =
   | { kind: 'interval'; ms: number };
 // TODO: | { kind: 'push' }
 
-/** Extraction result from the BPMN parser. One per start event with a trigger. */
-export type TriggerExtraction = {
-  triggerType: string;
-  startEventId: string;
+/**
+ * Engine-provided snapshot of a BPMN start event passed to
+ * {@link StartTrigger.claimFromBpmn}. Intentionally uses raw `tri:*`
+ * attribute bags — the engine does not interpret extension attributes;
+ * each plugin decides what its own trigger needs.
+ */
+export type BpmnStartEventView = {
+  /** The BPMN start-event node id (`flowEl.id`). */
+  nodeId: string;
+  /**
+   * BPMN primitives the engine unpacks itself. `timerDefinition` is the
+   * body of `<bpmn:timeCycle|timeDuration|timeDate>`. `eventDefinitionKind`
+   * lets plugins distinguish message-start vs conditional-start vs plain.
+   */
+  timerDefinition?: string;
+  eventDefinitionKind: 'none' | 'timer' | 'message' | 'conditional' | 'signal' | 'other';
+  /** `tri:*` attrs on the start event itself and on any nested event-definition child. */
+  selfAttrs: Record<string, string>;
+  /** `tri:*` attrs on the `bpmn:Message` referenced via messageRef, if any. */
+  messageAttrs?: Record<string, string>;
+};
+
+/** Outcome of {@link StartTrigger.claimFromBpmn}. `null` means "not mine". */
+export type BpmnClaim = {
+  /**
+   * Plugin-owned config bag, stored verbatim on the `TriggerSchedule` row
+   * and handed back to {@link StartTrigger.fire} at invocation time. The
+   * engine does not inspect or reshape it.
+   */
   config: Record<string, unknown>;
 };
 
@@ -117,9 +142,32 @@ export const INITIAL_POLICY_VALUES: readonly InitialPolicy[] = [
  * Registration happens at engine init via {@link TriggerRegistry.register}.
  */
 export type StartTrigger = {
-  /** Matches against `tri:connectorType` (for messages) or presence of
-   *  `<bpmn:timerEventDefinition>` (for timers, by convention `"timer"`). */
+  /**
+   * Stable identifier persisted on `TriggerSchedule.triggerType`. Chosen by
+   * the plugin; the engine never hard-codes or compares to specific values.
+   */
   readonly triggerType: string;
+
+  /**
+   * Inspect a parsed BPMN start event and decide whether this trigger owns
+   * it. Return a config bag to claim; return `null` to pass. The first
+   * registered trigger whose claim is non-null wins.
+   *
+   * The config bag is stored verbatim on the `TriggerSchedule` row and
+   * passed back on every {@link fire}. The engine never reshapes or
+   * interprets it — it's purely a plugin-owned carrier.
+   */
+  claimFromBpmn(event: BpmnStartEventView): BpmnClaim | null;
+
+  /**
+   * Initial `TriggerSchedule.status` when a schedule is first created from a
+   * fresh deploy. Defaults to `'PAUSED'` — polling triggers usually need
+   * credentials to be set before they start firing, so the host calls
+   * `activateSchedules()` to flip them to ACTIVE once configuration is in
+   * place. Timer-like triggers whose firing needs no external credentials
+   * should override to `'ACTIVE'`.
+   */
+  readonly deployStatus?: 'ACTIVE' | 'PAUSED';
 
   /**
    * Called at deploy time for each start event with this trigger type.

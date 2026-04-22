@@ -20,6 +20,8 @@ import {
   type TimerExpression,
 } from '../../timers/expressions';
 import type {
+  BpmnClaim,
+  BpmnStartEventView,
   StartTrigger,
   TriggerCursor,
   TriggerDefinition,
@@ -56,6 +58,12 @@ function classifyFromDef(def: TriggerDefinition): TimerExpression {
 export class TimerTrigger implements StartTrigger {
   readonly triggerType = TIMER_TRIGGER_TYPE;
   readonly defaultInitialPolicy = 'fire-existing' as const;
+  readonly deployStatus = 'ACTIVE' as const;
+
+  claimFromBpmn(event: BpmnStartEventView): BpmnClaim | null {
+    if (!event.timerDefinition) return null;
+    return { config: { expression: event.timerDefinition } };
+  }
 
   validate(def: TriggerDefinition): void {
     classifyFromDef(def);

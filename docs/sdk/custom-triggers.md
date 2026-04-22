@@ -27,6 +27,10 @@ A trigger is any object that conforms to this interface (full signature in `src/
 export type StartTrigger = {
   readonly triggerType: string;
   readonly defaultInitialPolicy: 'fire-existing' | 'skip-existing';
+  readonly deployStatus?: 'ACTIVE' | 'PAUSED'; // optional; see "Deploy status"
+
+  /** Given a parsed BPMN start event, own it or pass. First non-null wins. */
+  claimFromBpmn(event: BpmnStartEventView): { config: Record<string, unknown> } | null;
 
   validate(def: TriggerDefinition): void;
 
@@ -40,15 +44,33 @@ export type StartTrigger = {
 };
 ```
 
-Five required fields. The interface is intentionally small — everything trigger-specific lives *inside* the plugin.
+The interface is intentionally small — everything trigger-specific lives *inside* the plugin, including the recognition rule that decides which BPMN start events belong to this trigger.
 
 | Field | Purpose |
 |---|---|
-| `triggerType` | String discriminator. Matches `tri:connectorType` on `<bpmn:message>` (or a reserved name like `"timer"` for timer start events). Unique across registered triggers. |
+| `triggerType` | Stable id persisted on `TriggerSchedule.triggerType`. Chosen by the plugin; the engine never compares it to specific values. |
 | `defaultInitialPolicy` | On first poll, should existing items fire starts or be skipped? Override per-schedule with `tri:initialPolicy` on the BPMN. |
-| `validate` | Called at deploy time. Throw with a human-readable message if the BPMN config is invalid — the engine surfaces it as a deploy error. |
+| `deployStatus` (optional) | When set (e.g. `'ACTIVE'` for timer), redeploying the BPMN re-asserts that status. When omitted, status is `'PAUSED'` on first insert and preserved across redeploys. |
+| `claimFromBpmn` | Given a parsed start event (raw `tri:*` attribute bags + BPMN primitives), decide whether this trigger owns it. Return a `{ config }` bag — stored verbatim on the schedule row and handed back at `fire()` time. Return `null` to pass. |
+| `validate` | Called at deploy time with the claim's config. Throw with a human-readable message if invalid — the engine surfaces it as a deploy error. |
 | `nextSchedule` | How often/when to fire. `{ kind: 'fire-at', at: Date }` for one-shots (timer), `{ kind: 'interval', ms: number }` for polling triggers. |
 | `fire` | The actual work. Called by the scheduler when the trigger is due. Returns the `StartRequest`s plus an updated cursor. |
+
+### What the engine passes to `claimFromBpmn`
+
+```typescript
+type BpmnStartEventView = {
+  nodeId: string;
+  timerDefinition?: string;                                                    // `<bpmn:timeDate|timeDuration|timeCycle>` body
+  eventDefinitionKind: 'none' | 'timer' | 'message' | 'conditional' | 'signal' | 'other';
+  selfAttrs: Record<string, string>;                                           // tri:* on the start event + nested event-def
+  messageAttrs?: Record<string, string>;                                       // tri:* on the referenced <bpmn:message>, if any
+};
+```
+
+The two attribute bags are **verbatim** — keys are fully qualified (`tri:connectorType`, `tri:path`, …). The engine does not interpret them. You pick which bag your trigger reads from (or both), pattern-match on whichever attribute discriminates "yours" from "theirs", and return whatever config shape your `fire()` wants.
+
+Common helper: `stripTriPrefix(attrs, ['connectorType'])` from `@the-real-insight/in-concert/triggers` drops the `tri:` prefix and optionally omits the discriminator since your `triggerType` already names what kind of trigger this is.
 
 ---
 
@@ -76,13 +98,16 @@ If you can't produce a stable key, the engine can't dedupe. Pick something the u
 import { readdirSync, statSync } from 'fs';
 import { createHash } from 'crypto';
 import { join } from 'path';
-import type {
-  StartTrigger,
-  TriggerCursor,
-  TriggerDefinition,
-  TriggerInvocation,
-  TriggerResult,
-  TriggerSchedule,
+import {
+  stripTriPrefix,
+  type BpmnClaim,
+  type BpmnStartEventView,
+  type StartTrigger,
+  type TriggerCursor,
+  type TriggerDefinition,
+  type TriggerInvocation,
+  type TriggerResult,
+  type TriggerSchedule,
 } from '@the-real-insight/in-concert/triggers';
 
 type Cursor = { seen: string[] } | null;
@@ -90,6 +115,20 @@ type Cursor = { seen: string[] } | null;
 export class FsWatcherTrigger implements StartTrigger {
   readonly triggerType = 'fs-watcher';
   readonly defaultInitialPolicy = 'skip-existing' as const;
+
+  claimFromBpmn(event: BpmnStartEventView): BpmnClaim | null {
+    // Accept the authoring convention of a bpmn:message with
+    // tri:connectorType="fs-watcher", or the same attrs inline on a
+    // conditional start event. Either shape works — the plugin decides.
+    const fromMessage = event.messageAttrs?.['tri:connectorType'];
+    const fromSelf = event.selfAttrs['tri:connectorType'];
+    const source =
+      fromMessage === 'fs-watcher' ? event.messageAttrs!
+      : fromSelf === 'fs-watcher' ? event.selfAttrs
+      : null;
+    if (!source) return null;
+    return { config: stripTriPrefix(source, ['connectorType']) };
+  }
 
   validate(def: TriggerDefinition): void {
     const path = def.config['path'];

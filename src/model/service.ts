@@ -1,11 +1,16 @@
 import { v4 as uuidv4 } from 'uuid';
 import { parseBpmnXml } from './parser';
-import type { NormalizedGraph } from './types';
+import type { NodeDef, NormalizedGraph } from './types';
 import type { Db } from 'mongodb';
 import { getCollections } from '../db/collections';
 import { config } from '../config';
-import { getDefaultTriggerRegistry } from '../triggers';
-import type { TriggerDefinition, TriggerSchedule as TriggerScheduleShape } from '../triggers/types';
+import { getDefaultTriggerRegistry, type TriggerRegistry } from '../triggers';
+import type {
+  BpmnStartEventView,
+  StartTrigger,
+  TriggerDefinition,
+  TriggerSchedule as TriggerScheduleShape,
+} from '../triggers/types';
 
 export type DeployResult = {
   definitionId: string;
@@ -20,87 +25,6 @@ export type DeployParams = {
   tenantId?: string;
 };
 
-/**
- * Write/refresh TriggerSchedule rows for timer start events, driven by the
- * registered TimerTrigger. Replaces the pre-refactor syncTimerSchedules
- * which wrote into the now-deprecated TimerSchedule collection.
- */
-async function syncTimerTriggerSchedules(
-  db: Db,
-  definitionId: string,
-  graph: NormalizedGraph,
-): Promise<void> {
-  const { TriggerSchedules } = getCollections(db);
-  const registry = getDefaultTriggerRegistry();
-  const timerTrigger = registry.get('timer');
-  if (!timerTrigger) {
-    // Intentional: if a deployment embeds timers but the host stripped
-    // the timer plugin, we surface that as a deploy error rather than
-    // silently ignoring the BPMN's intent.
-    const hasTimers = graph.startNodeIds.some((id) => graph.nodes[id]?.timerDefinition);
-    if (hasTimers) {
-      throw new Error(
-        'BPMN contains timer start event(s) but no "timer" trigger is registered.',
-      );
-    }
-    return;
-  }
-
-  const now = new Date();
-
-  const timerStartNodes = graph.startNodeIds
-    .map((id) => graph.nodes[id])
-    .filter((n) => n?.type === 'startEvent' && n.timerDefinition);
-
-  const activeTimerIds = timerStartNodes.map((n) => n.id);
-  await TriggerSchedules.deleteMany({
-    definitionId,
-    triggerType: 'timer',
-    ...(activeTimerIds.length > 0
-      ? { startEventId: { $nin: activeTimerIds } }
-      : {}),
-  });
-
-  for (const node of timerStartNodes) {
-    const def: TriggerDefinition = {
-      triggerType: 'timer',
-      definitionId,
-      startEventId: node.id,
-      config: { expression: node.timerDefinition! },
-    };
-
-    // Let the plugin reject invalid expressions at deploy time.
-    timerTrigger.validate(def);
-
-    const timing = timerTrigger.nextSchedule(def, null, null);
-    const setFields = buildTimingFields(timing);
-
-    await TriggerSchedules.updateOne(
-      { definitionId, startEventId: node.id, triggerType: 'timer' },
-      {
-        $set: {
-          config: def.config,
-          status: 'ACTIVE',
-          updatedAt: now,
-          ...setFields,
-        },
-        $setOnInsert: {
-          _id: uuidv4(),
-          scheduleId: uuidv4(),
-          definitionId,
-          startEventId: node.id,
-          triggerType: 'timer',
-          cursor: null,
-          credentials: null,
-          initialPolicy: timerTrigger.defaultInitialPolicy,
-          createdAt: now,
-        },
-      },
-      { upsert: true },
-    );
-  }
-}
-
 function buildTimingFields(
   timing: TriggerScheduleShape,
 ): Record<string, unknown> {
@@ -110,77 +34,158 @@ function buildTimingFields(
   return { intervalMs: timing.ms };
 }
 
+/** Map a BPMN event-definition $type string to the stable `kind` we expose to plugins. */
+function eventDefinitionKind(node: NodeDef): BpmnStartEventView['eventDefinitionKind'] {
+  const ed = node.eventDefinition;
+  if (!ed) return 'none';
+  if (ed === 'bpmn:TimerEventDefinition') return 'timer';
+  if (ed === 'bpmn:MessageEventDefinition') return 'message';
+  if (ed === 'bpmn:ConditionalEventDefinition') return 'conditional';
+  if (ed === 'bpmn:SignalEventDefinition') return 'signal';
+  return 'other';
+}
+
+function viewOf(node: NodeDef): BpmnStartEventView {
+  return {
+    nodeId: node.id,
+    timerDefinition: node.timerDefinition,
+    eventDefinitionKind: eventDefinitionKind(node),
+    selfAttrs: node.selfAttrs ?? {},
+    messageAttrs: node.messageAttrs,
+  };
+}
+
 /**
- * Write/refresh TriggerSchedule rows for BPMN message start events whose
- * message carries a `tri:connectorType`. Each such start event is matched
- * against a registered StartTrigger via the default trigger registry.
- *
- * Replaces the pre-refactor syncConnectorSchedules which wrote into the
- * now-deprecated ConnectorSchedule collection.
+ * Resolve, for each start event, the registered trigger (if any) that
+ * claims it — together with the config the trigger wants to persist. The
+ * engine never names trigger types or extension attributes in this step:
+ * every plugin owns its own recognition logic via {@link StartTrigger.claimFromBpmn}.
  */
-async function syncConnectorTriggerSchedules(
+function resolveTriggerClaims(
+  graph: NormalizedGraph,
+  registry: TriggerRegistry,
+): Array<{
+  node: NodeDef;
+  trigger: StartTrigger;
+  config: Record<string, unknown>;
+}> {
+  const plugins = registry.list();
+  const claims: Array<{
+    node: NodeDef;
+    trigger: StartTrigger;
+    config: Record<string, unknown>;
+  }> = [];
+  for (const id of graph.startNodeIds) {
+    const node = graph.nodes[id];
+    if (!node || node.type !== 'startEvent') continue;
+    const view = viewOf(node);
+    let winner: { trigger: StartTrigger; config: Record<string, unknown> } | null = null;
+    for (const trigger of plugins) {
+      const claim = trigger.claimFromBpmn(view);
+      if (!claim) continue;
+      if (winner) {
+        throw new Error(
+          `Start event "${node.id}" is claimed by multiple triggers ` +
+            `("${winner.trigger.triggerType}" and "${trigger.triggerType}"). ` +
+            `Each start event may carry at most one trigger.`,
+        );
+      }
+      winner = { trigger, config: claim.config };
+    }
+    if (winner) {
+      claims.push({ node, trigger: winner.trigger, config: winner.config });
+    }
+  }
+  return claims;
+}
+
+/**
+ * Write/refresh TriggerSchedule rows for every start event that a registered
+ * trigger claims. Engine core has zero knowledge of trigger types or
+ * extension-attribute vocabularies — it delegates entirely to plugins via
+ * {@link StartTrigger.claimFromBpmn}.
+ *
+ * Orphan rows (start events removed from the BPMN, or whose claiming trigger
+ * was deregistered) are deleted.
+ */
+async function syncTriggerSchedules(
   db: Db,
   definitionId: string,
   graph: NormalizedGraph,
 ): Promise<void> {
   const { TriggerSchedules } = getCollections(db);
   const registry = getDefaultTriggerRegistry();
+
+  const claims = resolveTriggerClaims(graph, registry);
+
+  // Sanity: start events that parse as timers MUST be claimed by some trigger —
+  // otherwise the host silently loses timer semantics on deploy.
+  for (const id of graph.startNodeIds) {
+    const node = graph.nodes[id];
+    if (!node || node.type !== 'startEvent') continue;
+    if (!node.timerDefinition) continue;
+    const claimed = claims.some((c) => c.node.id === id);
+    if (!claimed) {
+      throw new Error(
+        `Start event "${id}" has a timer event definition but no registered ` +
+          `trigger claimed it. Did you forget to register the TimerTrigger?`,
+      );
+    }
+  }
+
   const now = new Date();
-
-  const connectorStartNodes = graph.startNodeIds
-    .map((id) => graph.nodes[id])
-    .filter((n) => n?.type === 'startEvent' && n.connectorConfig?.connectorType);
-
-  // Remove any non-timer trigger rows whose start event is gone.
-  const activeStartEventIds = connectorStartNodes.map((n) => n.id);
+  const activeStartEventIds = claims.map((c) => c.node.id);
   await TriggerSchedules.deleteMany({
     definitionId,
-    triggerType: { $ne: 'timer' },
     ...(activeStartEventIds.length > 0
       ? { startEventId: { $nin: activeStartEventIds } }
       : {}),
   });
 
-  for (const node of connectorStartNodes) {
-    const cc = node.connectorConfig!;
-    const { connectorType, ...restConfig } = cc;
-    const trigger = registry.get(connectorType);
-    if (!trigger) {
-      throw new Error(
-        `BPMN references tri:connectorType="${connectorType}" but no such trigger is registered.`,
-      );
-    }
-
+  for (const { node, trigger, config } of claims) {
     const def: TriggerDefinition = {
-      triggerType: connectorType,
+      triggerType: trigger.triggerType,
       definitionId,
       startEventId: node.id,
-      config: restConfig,
+      config,
     };
+
     trigger.validate(def);
 
     const timing = trigger.nextSchedule(def, null, null);
     const setFields = buildTimingFields(timing);
 
+    // Interpretation: when a plugin opts in with `deployStatus`, redeploying
+    // the BPMN re-asserts that status on every call (e.g. timer → 'ACTIVE').
+    // When omitted, we default to 'PAUSED' on first insert but preserve the
+    // existing status across redeploys — the host likely flipped it to ACTIVE
+    // via activateSchedules() after configuring credentials, and redeploying
+    // the same BPMN shouldn't undo that.
+    const forcedStatus = trigger.deployStatus;
+    const setClause: Record<string, unknown> = {
+      config: def.config,
+      updatedAt: now,
+      ...setFields,
+    };
+    if (forcedStatus !== undefined) {
+      setClause.status = forcedStatus;
+    }
+
     await TriggerSchedules.updateOne(
-      { definitionId, startEventId: node.id, triggerType: connectorType },
+      { definitionId, startEventId: node.id, triggerType: trigger.triggerType },
       {
-        $set: {
-          config: def.config,
-          updatedAt: now,
-          ...setFields,
-        },
+        $set: setClause,
         $setOnInsert: {
           _id: uuidv4(),
           scheduleId: uuidv4(),
           definitionId,
           startEventId: node.id,
-          triggerType: connectorType,
+          triggerType: trigger.triggerType,
           cursor: null,
           credentials: null,
           initialPolicy: trigger.defaultInitialPolicy,
-          status: 'PAUSED', // deployed as PAUSED — host must call activate
           createdAt: now,
+          ...(forcedStatus === undefined ? { status: 'PAUSED' } : {}),
         },
       },
       { upsert: true },
@@ -224,8 +229,7 @@ export async function deployDefinition(
         },
       }
     );
-    await syncTimerTriggerSchedules(db, existing._id, graph);
-    await syncConnectorTriggerSchedules(db, existing._id, graph);
+    await syncTriggerSchedules(db, existing._id, graph);
     return { definitionId: existing._id };
   }
 
@@ -242,8 +246,7 @@ export async function deployDefinition(
     deployedAt: now,
   });
 
-  await syncTimerTriggerSchedules(db, definitionId, graph);
-  await syncConnectorTriggerSchedules(db, definitionId, graph);
+  await syncTriggerSchedules(db, definitionId, graph);
 
   return { definitionId };
 }

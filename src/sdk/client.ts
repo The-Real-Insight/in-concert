@@ -78,35 +78,62 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Extract timer and connector events from a BPMN model without deploying.
-   * Pure function — no DB, no server. Use to inspect what a model needs before deploy.
+   * Extract the trigger-claimed start events from a BPMN model without
+   * deploying — the same claim logic `deploy` will run, in preview form.
+   * Pure function: no DB, no network.
+   *
+   * Each entry carries the plugin's `triggerType` and the config bag the
+   * plugin would store on its TriggerSchedule row. Hosts use this to power
+   * "these are the schedules this workflow would create" previews.
+   *
+   * Uses the default trigger registry (via `getDefaultTriggerRegistry()`);
+   * pass your own via `params.registry` to inspect against a custom set.
    */
-  async extractEvents(params: { bpmnXml: string }): Promise<Array<{
-    type: 'timer' | 'connector';
+  async extractEvents(params: {
+    bpmnXml: string;
+    registry?: import('../triggers/registry').TriggerRegistry;
+  }): Promise<Array<{
     nodeId: string;
-    expression?: string;
-    connectorType?: string;
-    config?: Record<string, string>;
+    triggerType: string;
+    config: Record<string, unknown>;
   }>> {
     const { parseBpmnXml } = await import('../model/parser');
+    const { getDefaultTriggerRegistry } = await import('../triggers');
     const graph = await parseBpmnXml(params.bpmnXml);
+    const registry = params.registry ?? getDefaultTriggerRegistry();
+    const plugins = registry.list();
+
     const events: Array<{
-      type: 'timer' | 'connector';
       nodeId: string;
-      expression?: string;
-      connectorType?: string;
-      config?: Record<string, string>;
+      triggerType: string;
+      config: Record<string, unknown>;
     }> = [];
 
     for (const startId of graph.startNodeIds) {
       const node = graph.nodes[startId];
       if (!node || node.type !== 'startEvent') continue;
-      if (node.timerDefinition) {
-        events.push({ type: 'timer', nodeId: node.id, expression: node.timerDefinition });
-      }
-      if (node.connectorConfig?.connectorType) {
-        const { connectorType, ...rest } = node.connectorConfig;
-        events.push({ type: 'connector', nodeId: node.id, connectorType, config: rest });
+      const view = {
+        nodeId: node.id,
+        timerDefinition: node.timerDefinition,
+        eventDefinitionKind: (node.eventDefinition === 'bpmn:TimerEventDefinition'
+          ? 'timer'
+          : node.eventDefinition === 'bpmn:MessageEventDefinition'
+          ? 'message'
+          : node.eventDefinition === 'bpmn:ConditionalEventDefinition'
+          ? 'conditional'
+          : node.eventDefinition === 'bpmn:SignalEventDefinition'
+          ? 'signal'
+          : node.eventDefinition
+          ? 'other'
+          : 'none') as 'none' | 'timer' | 'message' | 'conditional' | 'signal' | 'other',
+        selfAttrs: node.selfAttrs ?? {},
+        messageAttrs: node.messageAttrs,
+      };
+      for (const trigger of plugins) {
+        const claim = trigger.claimFromBpmn(view);
+        if (!claim) continue;
+        events.push({ nodeId: node.id, triggerType: trigger.triggerType, config: claim.config });
+        break;
       }
     }
     return events;

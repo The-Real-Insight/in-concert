@@ -15,6 +15,7 @@ import type { StartTrigger } from './types';
 
 export { TriggerRegistry } from './registry';
 export * from './types';
+export { stripTriPrefix } from './attrs';
 export { GraphMailboxTrigger } from './graph-mailbox/graph-mailbox-trigger';
 export { TimerTrigger } from './timer/timer-trigger';
 export { SharePointFolderTrigger } from './sharepoint-folder/sharepoint-folder-trigger';

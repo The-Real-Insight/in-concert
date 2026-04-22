@@ -55,6 +55,7 @@ describe('startTriggerScheduler (local mode)', () => {
     const fakeTrigger: StartTrigger = {
       triggerType: 'fake-sched',
       defaultInitialPolicy: 'fire-existing',
+      claimFromBpmn: () => null, // schedules inserted directly; BPMN-claim path not exercised here
       validate() {
         /* noop */
       },

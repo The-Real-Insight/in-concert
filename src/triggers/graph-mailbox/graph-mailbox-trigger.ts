@@ -26,7 +26,10 @@ import {
 } from './graph';
 import { startInstance, insertStartContinuation } from '../../instance/service';
 import { getCollections } from '../../db/collections';
+import { stripTriPrefix } from '../attrs';
 import type {
+  BpmnClaim,
+  BpmnStartEventView,
   StartTrigger,
   TriggerCursor,
   TriggerDefinition,
@@ -121,6 +124,12 @@ export class GraphMailboxTrigger implements StartTrigger {
    */
   setOnMailReceived(fn: OnMailReceivedFn | null): void {
     this.onMailReceived = fn;
+  }
+
+  claimFromBpmn(event: BpmnStartEventView): BpmnClaim | null {
+    const ct = event.messageAttrs?.['tri:connectorType'];
+    if (ct !== GRAPH_MAILBOX_TRIGGER_TYPE) return null;
+    return { config: stripTriPrefix(event.messageAttrs!, ['connectorType']) };
   }
 
   validate(def: TriggerDefinition): void {

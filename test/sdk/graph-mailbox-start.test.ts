@@ -103,16 +103,16 @@ describe('Graph mailbox message start event', () => {
     expect(paused.status).toBe('PAUSED');
   });
 
-  it('parser extracts connectorConfig on the start event node', async () => {
+  it('parser surfaces bpmn:message tri:* attributes as node.messageAttrs', async () => {
     const { parseBpmnXml } = await import('../../src/model/parser');
     const bpmnXml = loadBpmn('graph-mailbox-start.bpmn');
     const graph = await parseBpmnXml(bpmnXml);
 
     const startNode = graph.nodes[graph.startNodeIds[0]];
     expect(startNode.messageRef).toBe('inbox-poll');
-    expect(startNode.connectorConfig).toBeDefined();
-    expect(startNode.connectorConfig!.connectorType).toBe('graph-mailbox');
-    expect(startNode.connectorConfig!.mailbox).toBe('ada@the-real-insight.com');
+    expect(startNode.messageAttrs).toBeDefined();
+    expect(startNode.messageAttrs!['tri:connectorType']).toBe('graph-mailbox');
+    expect(startNode.messageAttrs!['tri:mailbox']).toBe('ada@the-real-insight.com');
   });
 
   it('deploying a process without connectors creates no connector schedule', async () => {
