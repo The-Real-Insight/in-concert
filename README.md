@@ -30,21 +30,35 @@
 
 ## What's new
 
-### Transparent engine — the core no longer names your `tri:*` attributes
+### Transparent engine — your BPMN extension attributes flow straight to your plugins
 
-**What stayed hard-coded inside the library for too long now belongs to the plugin.** Before this release, adding a new `tri:*` attribute — or an entirely new start-trigger type — meant cutting a library release: the parser knew the attribute names, the deploy path knew how to reshape them, the SDK's `extractEvents` had a hard-coded `'timer' | 'connector'` split. That's gone.
+**What stayed hard-coded inside the library for too long now belongs to the plugin.** Before this release, adding a new extension attribute to your BPMN — or an entirely new start-trigger type — meant cutting a library release: the parser knew the attribute names, the deploy path knew how to reshape them, the SDK's `extractEvents` had a hard-coded `'timer' | 'connector'` split. That's gone.
 
-The engine's parser now emits **raw attribute bags** — `node.selfAttrs` and `node.messageAttrs` — pulled verbatim from the BPMN. Each `StartTrigger` plugin implements a new `claimFromBpmn(event)` method and decides for itself whether it owns a given start event and what config it wants stored. Deploy iterates start events × registered plugins; first non-null claim wins. The library never names a trigger type or an extension attribute in the process.
+The engine's parser now emits **raw attribute bags** — `node.selfAttrs` and `node.messageAttrs` — pulled verbatim from the BPMN. Each `StartTrigger` plugin implements a new `claimFromBpmn(event)` method and decides for itself whether it owns a given start event and what config it wants stored. Deploy iterates start events × registered plugins; first non-null claim wins. **The library never interprets an extension attribute — your plugins do, using whatever vocabulary your organization prefers.**
+
+```xml
+<!-- The built-in triggers use the `tri:` namespace as TRI's own
+     convention. Your own triggers can define any attribute names they
+     want — the engine treats them as opaque strings and hands them to
+     whichever plugin claims the start event. -->
+<bpmn:message id="Msg_Escalation" name="acme-escalation"
+  acme:connectorType="acme-pagerduty"
+  acme:serviceKey="svc_abc123"
+  acme:severity="critical" />
+```
 
 ```typescript
-class MyWebhookTrigger implements StartTrigger {
-  readonly triggerType = 'my-webhook';
+class AcmePagerDutyTrigger implements StartTrigger {
+  readonly triggerType = 'acme-pagerduty';
   readonly deployStatus = 'PAUSED';
 
+  // Plugin owns the recognition rule AND the attribute vocabulary.
+  // The engine just hands you whatever attributes it found on the BPMN;
+  // you pick which ones mean "this is mine" and which become config.
   claimFromBpmn(event): BpmnClaim | null {
     if (event.eventDefinitionKind !== 'message') return null;
-    if (event.messageAttrs?.['tri:connectorType'] !== 'my-webhook') return null;
-    return { config: stripTriPrefix(event.messageAttrs, ['connectorType']) };
+    if (event.messageAttrs?.['acme:connectorType'] !== 'acme-pagerduty') return null;
+    return { config: stripPrefix(event.messageAttrs, 'acme:', ['connectorType']) };
   }
 
   // ...validate, nextSchedule, fire — same as today
@@ -53,7 +67,7 @@ class MyWebhookTrigger implements StartTrigger {
 
 Register it and ship. **No in-concert release required.** A new attribute on an existing trigger? Plugin change only. A new trigger entirely? Plugin change only. The editor side is independent too — it declares its own `bpmn-moddle` extensions for round-trip serialisation, and those names never cross into the engine.
 
-The four built-in triggers (timer, graph-mailbox, sharepoint-folder, ai-listener) are the first consumers of the new contract and ship alongside the engine strictly as convenience — they have no special treatment in the core, and host apps are free to drop any of them. A companion `test/decoupling/engine-isolation.test.ts` guards the property in CI: if a file outside the documented allowlist references a specific trigger type or `tri:*` name, the build fails.
+The four built-in triggers (timer, graph-mailbox, sharepoint-folder, ai-listener) are the first consumers of the new contract and ship alongside the engine strictly as convenience — they happen to use the `tri:` namespace for their own attributes, but there's no special treatment in the core, and host apps are free to drop any of them. A companion `test/decoupling/engine-isolation.test.ts` guards the property in CI: if a file outside the documented allowlist references a specific trigger type or a hard-coded attribute name, the build fails.
 
 **Breaking change in 0.2.0:** `StartTrigger.claimFromBpmn` is required on the plugin interface, and `extractEvents` now returns `{ nodeId, triggerType, config }[]`. Migration is a ~15-line addition per plugin. [Full plugin guide](./docs/sdk/custom-triggers.md)
 
