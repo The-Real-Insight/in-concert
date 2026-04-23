@@ -1,8 +1,8 @@
 ---
-title: "BPMN extension attributes: one vocabulary from modeling through execution to analytics"
+title: "BPMN as config: one vocabulary runs the model, the runtime, and the analytics"
 published: false
-description: "Most BPM engines hardcode their extension vocabulary. in-concert takes the opposite stance — you pick the attribute names, the engine carries them verbatim from bpmn.io through your handlers, and the same vocabulary you authored in the model becomes your analytics dimensional data for free."
-tags: bpmn, nodejs, ai, workflow
+description: "Camunda and Flowable preserve your extension attributes at runtime — but their ergonomic gradient pulls you toward each engine's own extension schema. in-concert flattens that: the callback payload IS the attribute bag, so your `acme:*` is no more expensive than a vendor vocabulary. One vocabulary, authored in bpmn.io, drives modeling, execution, and analytics without translation."
+tags: bpmn, workflow, architecture, ai
 cover_image: ""
 canonical_url: ""
 ---
