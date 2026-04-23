@@ -231,3 +231,30 @@ export async function deltaRequest(
 
   return { items, nextLink, deltaLink: finalDeltaLink };
 }
+
+/**
+ * Download a drive item's content as a Buffer. Uses Graph's
+ * `/drives/{id}/items/{itemId}/content` endpoint — this issues a 302 redirect
+ * to short-lived CDN storage. `fetch` follows redirects by default.
+ *
+ * The on-demand shape is intentional: most hosts only want the metadata and
+ * a handful of filtered items' content, so we don't pre-download everything
+ * during the delta poll.
+ */
+export async function getDriveItemContent(
+  driveId: string,
+  itemId: string,
+  credentials?: GraphCredentials,
+): Promise<Buffer> {
+  const token = await getAccessToken(credentials);
+  const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(
+      `Fetching drive item content failed (${res.status}) for ${driveId}/${itemId}: ${text}`,
+    );
+  }
+  const arrayBuffer = await res.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}

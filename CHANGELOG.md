@@ -10,6 +10,12 @@ Versions are published to npm automatically on push to `main`.
 ## [Unreleased]
 
 ### Added
+- **`onFileReceived` hook on the sharepoint-folder trigger.** Per-file host callback that runs between `ProcessInstance` creation and START continuation insertion — the exact same lifecycle position as `graph-mailbox`'s `onMailReceived`. The event carries full file metadata (`itemId`, `name`, `path`, `size`, `mimeType`, `eTag`, `webUrl`, timestamps) plus a lazy `getFileContent()` that downloads the bytes on demand via Graph. Hosts can return `{ skip: true }` to cancel an instance before BPMN starts (throws are treated as skip, so a buggy callback can't leave half-configured instances running). Register via constructor option `new SharePointFolderTrigger({ onFileReceived })` or at init time with `registry.get('sharepoint-folder').setOnFileReceived(fn)`. Internal structural change: `SharePointFolderTrigger.fire()` now creates each matching item's `ProcessInstance` inline (mirroring `graph-mailbox.fire()`) rather than returning `StartRequest[]` to the scheduler, so the callback has somewhere to land. See [`src/triggers/sharepoint-folder/README.md`](./src/triggers/sharepoint-folder/README.md).
+- **`getDriveItemContent(driveId, itemId, credentials?)` helper** in `@the-real-insight/in-concert/triggers/sharepoint-folder`. The sharepoint-folder plugin uses it internally for `FileReceivedEvent.getFileContent()`; hosts can call it directly when they need the bytes outside the trigger's lifecycle.
+
+## [0.2.0]
+
+### Added
 - **New package subpath exports for triggers.** Consumers can now import:
   - `@the-real-insight/in-concert/triggers` — interface, registry, built-in classes
   - `@the-real-insight/in-concert/triggers/timer`

@@ -56,27 +56,76 @@ Azure AD app with **`Sites.Read.All`** (or narrower scope appropriate to your te
 
 Per-schedule takes precedence.
 
-## Process payload
+## Lifecycle and the `onFileReceived` hook
 
-Each fire produces a `StartRequest` with this payload shape, available as process variables once the instance starts:
+Every matching delta item runs through this sequence, inside the plugin:
+
+1. Idempotency check — if a `ProcessInstance` already exists for this `(definitionId, scheduleId:itemId@eTag)`, skip; the prior fire already handled it.
+2. `startInstance(..., deferContinuation: true)` — create the `ProcessInstance` row but **do not** kick off BPMN execution yet.
+3. Await the host's `onFileReceived(event)` callback if registered. This is where the host typically:
+   - Downloads the file content via `event.getFileContent()`.
+   - Stashes bytes in blob storage / seeds a data-pool / creates a conversation thread — anything that should exist before the first BPMN step runs.
+   - Returns `{ skip: true }` to cancel (duplicate, filter miss, business rule). A thrown error is treated as skip so a buggy callback cannot leave half-configured instances running.
+4. If not skipped, insert the START continuation — the engine's main worker loop picks the instance up and runs it.
+5. If skipped, terminate the instance (`status: 'TERMINATED'`).
+
+Set the callback at init time:
 
 ```ts
-{
-  sharepoint: {
-    driveId: string;
+import { getDefaultTriggerRegistry } from '@the-real-insight/in-concert/triggers';
+
+const sp = getDefaultTriggerRegistry().get('sharepoint-folder') as SharePointFolderTrigger;
+sp.setOnFileReceived(async (event) => {
+  if (event.file.size > 50_000_000) return { skip: true };   // too big for us
+  const bytes = await event.getFileContent();
+  await myBlobStore.put(`files/${event.instanceId}/${event.file.name}`, bytes);
+  await mySeedDataPool(event.instanceId, {
+    fileName: event.file.name,
+    mimeType: event.file.mimeType,
+    webUrl: event.file.webUrl,
+  });
+  // undefined → run the process
+});
+```
+
+Or pass it when you construct a trigger yourself:
+
+```ts
+import { SharePointFolderTrigger, TriggerRegistry } from '@the-real-insight/in-concert/triggers';
+
+const registry = new TriggerRegistry();
+registry.register(new SharePointFolderTrigger({ onFileReceived: myHook }));
+```
+
+### `FileReceivedEvent`
+
+```ts
+type FileReceivedEvent = {
+  siteUrl: string;
+  driveId: string;
+  driveName: string;
+  folderPath: string;
+  instanceId: string;          // the just-created process instance
+  definitionId: string;
+  file: {
     itemId: string;
     name: string;
-    path: string;        // server-relative
+    path: string;              // server-relative, includes file name
     webUrl: string;
     size: number;
-    createdDateTime: string;
-    lastModifiedDateTime: string;
     mimeType: string | null;
     isFolder: boolean;
     eTag: string;
-  }
-}
+    createdDateTime: string;
+    lastModifiedDateTime: string;
+  };
+  getFileContent: () => Promise<Buffer>;   // lazy download, cached per event
+};
 ```
+
+`getFileContent()` hits Graph's `/drives/{id}/items/{itemId}/content`. Call it only when you need the bytes — a filter pass that only inspects metadata doesn't incur the download. Throws for folders.
+
+If no `onFileReceived` is set, every matching item falls straight through to step 4: the process starts with just the metadata available as process variables.
 
 ## Dedup key
 

@@ -7,27 +7,39 @@
  * of SharePoint or Azure AD.
  *
  * Cursor contents: `{ deltaLink }` — the opaque URL returned by Graph.
- * Each fire calls `/delta` with that URL, emits one StartRequest per
- * matching item, and returns the new deltaLink as `nextCursor`.
+ * Each fire calls `/delta` with that URL and processes each matching
+ * delta item inline: creates the `ProcessInstance` (deferred), invokes
+ * the host's `onFileReceived` callback (if set) so the host can stash
+ * content / seed data-pools / create conversations, and then either
+ * terminates the instance (`{ skip: true }`) or inserts the START
+ * continuation. The new `deltaLink` is returned as `nextCursor`.
  *
  * First-poll behavior: if initialPolicy='skip-existing' (spec default),
  * the first delta call primes the cursor without emitting any starts —
  * existing files aren't treated as "new". Set `tri:initialPolicy` on the
  * BPMN message to override.
+ *
+ * Exactly-once: each fired item carries `idempotencyKey = scheduleId:itemId@eTag`.
+ * The unique `ProcessInstance(definitionId, idempotencyKey)` index collapses
+ * retries of the same logical fire to one instance.
  */
+import { v4 as uuidv4 } from 'uuid';
+import type { Db } from 'mongodb';
 import {
   deltaRequest,
   resolveSiteAndDrive,
+  getDriveItemContent,
   DeltaExpiredError,
   DEFAULT_SHAREPOINT_POLL_SECONDS,
   type DriveItem,
   type GraphCredentials,
 } from './graph-client';
+import { startInstance, insertStartContinuation } from '../../instance/service';
+import { getCollections } from '../../db/collections';
 import { stripTriPrefix } from '../attrs';
 import type {
   BpmnClaim,
   BpmnStartEventView,
-  StartRequest,
   StartTrigger,
   TriggerCursor,
   TriggerDefinition,
@@ -40,9 +52,116 @@ export const SHAREPOINT_FOLDER_TRIGGER_TYPE = 'sharepoint-folder';
 
 const MIN_POLL_SECONDS = 15;
 
+/**
+ * Event handed to the host's `onFileReceived` callback for every matching
+ * delta item, after the `ProcessInstance` has been created but before BPMN
+ * execution begins. The host can:
+ *
+ *   - Download file content on demand via `getFileContent()`.
+ *   - Stash the file in blob storage, seed data-pools, create a conversation,
+ *     or attach it to the instance in any other host-specific way.
+ *   - Return `{ skip: true }` to terminate the instance without running the
+ *     process (e.g. duplicate, filtered, business rule).
+ */
+export type FileReceivedEvent = {
+  /** SharePoint site URL the schedule watches. */
+  siteUrl: string;
+  /** Resolved Graph drive id (document library). */
+  driveId: string;
+  /** Document library name (e.g. "Documents"). */
+  driveName: string;
+  /** Watched folder path, as configured on the BPMN (leading slash). */
+  folderPath: string;
+  /** The process instance that was just created (still deferred). */
+  instanceId: string;
+  /** The process definition this instance belongs to. */
+  definitionId: string;
+  /** File (or folder) metadata from the delta response. */
+  file: {
+    itemId: string;
+    name: string;
+    /** Folder-relative path including file name. */
+    path: string;
+    webUrl: string;
+    size: number;
+    mimeType: string | null;
+    isFolder: boolean;
+    eTag: string;
+    createdDateTime: string;
+    lastModifiedDateTime: string;
+  };
+  /**
+   * Download the item's content on demand. Only use when the size is
+   * reasonable for your host — files up to the low-GB range work, but very
+   * large ones should be streamed elsewhere. Folders have no content and
+   * will throw.
+   */
+  getFileContent: () => Promise<Buffer>;
+};
+
+export type FileReceivedResult = { skip?: boolean } | undefined | void;
+
+export type OnFileReceivedFn = (event: FileReceivedEvent) => Promise<FileReceivedResult>;
+
+function toFileEvent(
+  siteUrl: string,
+  driveId: string,
+  driveName: string,
+  folderPath: string,
+  item: DriveItem,
+  instanceId: string,
+  definitionId: string,
+  credentials: GraphCredentials | undefined,
+): FileReceivedEvent {
+  const isFolder = Boolean(item.folder);
+  const parentPath = (item.parentReference?.path ?? '')
+    .replace(/^\/drives\/[^/]+\/root:/, '');
+  return {
+    siteUrl,
+    driveId,
+    driveName,
+    folderPath,
+    instanceId,
+    definitionId,
+    file: {
+      itemId: item.id,
+      name: item.name,
+      path: parentPath + '/' + item.name,
+      webUrl: item.webUrl ?? '',
+      size: item.size ?? 0,
+      mimeType: item.file?.mimeType ?? null,
+      isFolder,
+      eTag: item.eTag ?? '',
+      createdDateTime: item.createdDateTime ?? '',
+      lastModifiedDateTime: item.lastModifiedDateTime ?? '',
+    },
+    getFileContent: () => {
+      if (isFolder) {
+        return Promise.reject(new Error(`Drive item ${item.id} is a folder; no content to fetch.`));
+      }
+      return getDriveItemContent(driveId, item.id, credentials);
+    },
+  };
+}
+
 export class SharePointFolderTrigger implements StartTrigger {
   readonly triggerType = SHAREPOINT_FOLDER_TRIGGER_TYPE;
   readonly defaultInitialPolicy = 'skip-existing' as const;
+
+  private onFileReceived: OnFileReceivedFn | null = null;
+
+  constructor(options?: { onFileReceived?: OnFileReceivedFn }) {
+    this.onFileReceived = options?.onFileReceived ?? null;
+  }
+
+  /**
+   * Configure the `onFileReceived` hook after construction — used when the
+   * engine's default registry already holds a trigger instance and the host
+   * wants to wire in its own per-file callback at init time.
+   */
+  setOnFileReceived(fn: OnFileReceivedFn | null): void {
+    this.onFileReceived = fn;
+  }
 
   claimFromBpmn(event: BpmnStartEventView): BpmnClaim | null {
     // Accept the attribute in either spot: on the referenced <bpmn:message>
@@ -154,7 +273,10 @@ export class SharePointFolderTrigger implements StartTrigger {
       };
     }
 
-    const starts: StartRequest[] = [];
+    // Per-item instance creation happens inline so we can invoke
+    // `onFileReceived` between instance creation and START continuation
+    // insertion — mirror of the graph-mailbox lifecycle.
+    const { ProcessInstances } = getCollections(invocation.db);
     const folderPathNormalized = folderPath.replace(/\/+$/, '');
 
     for (const item of delta.items) {
@@ -197,32 +319,72 @@ export class SharePointFolderTrigger implements StartTrigger {
       }
 
       const eTag = item.eTag ?? '';
-      starts.push({
-        dedupKey: `${item.id}@${eTag}`,
-        payload: {
-          sharepoint: {
-            driveId: siteRef.driveId,
-            itemId: item.id,
-            name: item.name,
-            path: (item.parentReference?.path ?? '').replace(/^\/drives\/[^/]+\/root:/, '') +
-              '/' + item.name,
-            webUrl: item.webUrl ?? '',
-            size: item.size ?? 0,
-            createdDateTime: item.createdDateTime ?? '',
-            lastModifiedDateTime: item.lastModifiedDateTime ?? '',
-            mimeType: item.file?.mimeType ?? null,
-            isFolder,
-            eTag,
-          },
-        },
+      const idempotencyKey = `${invocation.scheduleId}:${item.id}@${eTag}`;
+
+      const existing = await ProcessInstances.findOne(
+        { definitionId: invocation.definition.definitionId, idempotencyKey },
+        { projection: { _id: 1 } },
+      );
+      if (existing) continue; // already processed in a prior (possibly crashed) fire
+
+      const commandId = uuidv4();
+      const { instanceId } = await startInstance(invocation.db, {
+        commandId,
+        definitionId: invocation.definition.definitionId,
+        businessKey: `sharepoint:${item.id}@${eTag}`,
+        idempotencyKey,
+        deferContinuation: true,
       });
+
+      let skip = false;
+      if (this.onFileReceived) {
+        try {
+          const r = await this.onFileReceived(
+            toFileEvent(
+              siteUrl,
+              siteRef.driveId,
+              driveName,
+              folderPath,
+              item,
+              instanceId,
+              invocation.definition.definitionId,
+              credentials,
+            ),
+          );
+          if (r?.skip) skip = true;
+        } catch (err) {
+          console.error(`[sharepoint-folder] onFileReceived threw for ${item.id}:`, err);
+          skip = true;
+        }
+      }
+
+      if (skip) {
+        await terminateInstance(invocation.db, instanceId);
+      } else {
+        await insertStartContinuation(invocation.db, { instanceId, commandId });
+      }
     }
 
+    // Instance creation happened inline above; report no starts to the
+    // scheduler. All we need from it is the cursor advance.
     return {
-      starts,
+      starts: [],
       nextCursor: encodeCursor({ deltaLink: delta.deltaLink ?? null }),
     };
   }
+}
+
+async function terminateInstance(db: Db, instanceId: string): Promise<void> {
+  const { ProcessInstances, ProcessInstanceState } = getCollections(db);
+  const now = new Date();
+  await ProcessInstances.updateOne(
+    { _id: instanceId },
+    { $set: { status: 'TERMINATED', endedAt: now } },
+  );
+  await ProcessInstanceState.updateOne(
+    { _id: instanceId },
+    { $set: { status: 'TERMINATED' } },
+  );
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

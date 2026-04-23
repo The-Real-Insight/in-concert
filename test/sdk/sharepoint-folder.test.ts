@@ -28,14 +28,16 @@ jest.mock('../../src/triggers/sharepoint-folder/graph-client', () => {
     ...actual,
     resolveSiteAndDrive: jest.fn(),
     deltaRequest: jest.fn(),
+    getDriveItemContent: jest.fn(),
   };
 });
 
-const { resolveSiteAndDrive, deltaRequest } = jest.requireMock(
+const { resolveSiteAndDrive, deltaRequest, getDriveItemContent } = jest.requireMock(
   '../../src/triggers/sharepoint-folder/graph-client',
 ) as {
   resolveSiteAndDrive: jest.Mock;
   deltaRequest: jest.Mock;
+  getDriveItemContent: jest.Mock;
 };
 
 jest.setTimeout(20_000);
@@ -63,6 +65,7 @@ beforeEach(async () => {
   await ensureIndexes(db);
   resolveSiteAndDrive.mockReset().mockResolvedValue({ siteId: 'site-1', driveId: 'drive-1' });
   deltaRequest.mockReset();
+  getDriveItemContent.mockReset();
 });
 
 function makeFile(overrides: Partial<DriveItem> = {}): DriveItem {
@@ -293,5 +296,152 @@ describe('SharePoint folder trigger', () => {
     await expect(
       client.deploy({ id: 'sp-invalid', name: 'Bad', version: '1', bpmnXml }),
     ).rejects.toThrow(/pollIntervalSeconds/);
+  });
+});
+
+describe('SharePoint folder trigger — onFileReceived hook', () => {
+  type Registry = ReturnType<typeof getDefaultTriggerRegistry>;
+  let registry: Registry;
+  let sp: any;
+
+  beforeEach(() => {
+    registry = getDefaultTriggerRegistry();
+    sp = registry.get('sharepoint-folder');
+    expect(sp?.setOnFileReceived).toBeDefined();
+  });
+
+  afterEach(() => {
+    sp.setOnFileReceived(null);
+  });
+
+  // Re-arm the interval-based schedule so the next processOneTrigger call
+  // will claim it — same pattern as the happy-path tests above.
+  async function rearm(definitionId: string): Promise<void> {
+    const { TriggerSchedules } = getCollections(db);
+    await TriggerSchedules.updateOne(
+      { definitionId },
+      { $set: { lastFiredAt: new Date(0) } },
+    );
+  }
+
+  it('invokes onFileReceived per matching file with full event metadata', async () => {
+    const definitionId = await deploySharePointProcess();
+    deltaRequest
+      .mockResolvedValueOnce({ items: [], nextLink: undefined, deltaLink: 'link-0' }) // prime
+      .mockResolvedValueOnce({
+        items: [makeFile({ id: 'f1', name: 'a.pdf' }), makeFile({ id: 'f2', name: 'b.pdf' })],
+        nextLink: undefined,
+        deltaLink: 'link-1',
+      });
+
+    await fire(); // first poll → primes cursor, emits nothing
+
+    const seen: any[] = [];
+    sp.setOnFileReceived(async (ev: any) => {
+      seen.push({ itemId: ev.file.itemId, name: ev.file.name, instanceId: ev.instanceId });
+    });
+
+    await rearm(definitionId);
+    await fire(); // second poll → two matching files, callback runs twice
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0].name).toBe('a.pdf');
+    expect(seen[0].instanceId).toBeTruthy();
+    expect(seen[1].name).toBe('b.pdf');
+
+    const { ProcessInstances } = getCollections(db);
+    const instances = await ProcessInstances.find({ definitionId }).toArray();
+    expect(instances).toHaveLength(2);
+    // Callback returned undefined → neither skip; both should be RUNNING.
+    for (const inst of instances) {
+      expect(inst.status).not.toBe('TERMINATED');
+    }
+  });
+
+  it('skip:true terminates the instance without starting the process', async () => {
+    const definitionId = await deploySharePointProcess();
+    deltaRequest
+      .mockResolvedValueOnce({ items: [], nextLink: undefined, deltaLink: 'link-0' })
+      .mockResolvedValueOnce({
+        items: [makeFile({ id: 'keep', name: 'keep.pdf' }), makeFile({ id: 'drop', name: 'drop.pdf' })],
+        nextLink: undefined,
+        deltaLink: 'link-1',
+      });
+
+    await fire();
+    sp.setOnFileReceived(async (ev: any) =>
+      ev.file.name === 'drop.pdf' ? { skip: true } : undefined,
+    );
+    await rearm(definitionId);
+    await fire();
+
+    const { ProcessInstances } = getCollections(db);
+    const instances = await ProcessInstances.find({ definitionId }).toArray();
+    expect(instances).toHaveLength(2);
+    const byName = Object.fromEntries(
+      instances.map((i) => [String((i as any).businessKey ?? ''), i]),
+    );
+    // businessKey = sharepoint:${itemId}@${eTag}
+    const dropped = Object.values(byName).find((i: any) =>
+      String(i.businessKey).includes('drop'),
+    ) as any;
+    expect(dropped?.status).toBe('TERMINATED');
+  });
+
+  it('getFileContent downloads via the plugin helper only when called', async () => {
+    const definitionId = await deploySharePointProcess();
+    deltaRequest
+      .mockResolvedValueOnce({ items: [], nextLink: undefined, deltaLink: 'link-0' })
+      .mockResolvedValueOnce({
+        items: [makeFile({ id: 'abc', name: 'report.pdf' })],
+        nextLink: undefined,
+        deltaLink: 'link-1',
+      });
+    getDriveItemContent.mockResolvedValue(Buffer.from('hello'));
+
+    await fire();
+
+    let bytes: Buffer | undefined;
+    sp.setOnFileReceived(async (ev: any) => {
+      // Only one of the two callbacks pulls content — lazy, per-event.
+      bytes = (await ev.getFileContent()) as Buffer;
+    });
+    await rearm(definitionId);
+    await fire();
+
+    expect(getDriveItemContent).toHaveBeenCalledTimes(1);
+    const [driveIdArg, itemIdArg] = getDriveItemContent.mock.calls[0];
+    expect(driveIdArg).toBe('drive-1');
+    expect(itemIdArg).toBe('abc');
+    expect(bytes).toBeDefined();
+    expect(bytes!.toString()).toBe('hello');
+  });
+
+  it('callback throwing is treated as skip — instance is terminated, loop continues', async () => {
+    const definitionId = await deploySharePointProcess();
+    deltaRequest
+      .mockResolvedValueOnce({ items: [], nextLink: undefined, deltaLink: 'link-0' })
+      .mockResolvedValueOnce({
+        items: [makeFile({ id: 'bad', name: 'bad.pdf' }), makeFile({ id: 'ok', name: 'ok.pdf' })],
+        nextLink: undefined,
+        deltaLink: 'link-1',
+      });
+
+    await fire();
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    sp.setOnFileReceived(async (ev: any) => {
+      if (ev.file.name === 'bad.pdf') throw new Error('host boom');
+    });
+    await rearm(definitionId);
+    await fire();
+    errSpy.mockRestore();
+
+    const { ProcessInstances } = getCollections(db);
+    const all = await ProcessInstances.find({ definitionId }).toArray();
+    expect(all).toHaveLength(2);
+    const bad = all.find((i: any) => String(i.businessKey).includes('bad')) as any;
+    const ok = all.find((i: any) => String(i.businessKey).includes('ok')) as any;
+    expect(bad?.status).toBe('TERMINATED');
+    expect(ok?.status).not.toBe('TERMINATED');
   });
 });
