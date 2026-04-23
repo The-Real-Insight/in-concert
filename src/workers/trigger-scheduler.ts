@@ -26,6 +26,11 @@ import type {
   TriggerResult,
   TriggerSchedule,
 } from '../triggers/types';
+import {
+  buildFireEventDoc,
+  makeFireReporter,
+  type FireReportError,
+} from './fire-reporter';
 
 const LEASE_MS = 60_000;
 
@@ -96,11 +101,21 @@ export async function fireClaimedSchedule(
 ): Promise<FireOutcome | null> {
   const trigger = registry.get(schedule.triggerType);
   if (!trigger) {
-    await recordFireError(
-      db,
-      schedule._id,
-      `No trigger registered for type "${schedule.triggerType}"`,
-    );
+    const msg = `No trigger registered for type "${schedule.triggerType}"`;
+    await recordFireError(db, schedule._id, msg);
+    await writeFireEvent(db, schedule, {
+      firedAt: new Date(),
+      durationMs: 0,
+      snapshot: {
+        itemsObserved: 0,
+        itemsFired: 0,
+        itemsSkipped: 0,
+        dropReasons: {},
+        instanceIds: [],
+        firstError: null,
+      },
+      outerError: { stage: 'unknown', message: msg },
+    });
     return null;
   }
 
@@ -111,6 +126,7 @@ export async function fireClaimedSchedule(
     config: schedule.config,
   };
 
+  const reporter = makeFireReporter();
   const invocation: TriggerInvocation = {
     scheduleId: schedule.scheduleId,
     definition: def,
@@ -119,18 +135,83 @@ export async function fireClaimedSchedule(
     now: new Date(),
     db,
     startingTenantId: schedule.startingTenantId,
+    report: reporter,
   };
 
-  let result: TriggerResult;
+  const firedAt = new Date();
+  const started = Date.now();
+  let result: TriggerResult | null = null;
+  let outerError: FireReportError | null = null;
   try {
     result = await trigger.fire(invocation);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    outerError = {
+      stage: 'fire',
+      message: msg,
+      rawSnippet: stack ? stack.slice(0, 500) : undefined,
+    };
     await recordFireError(db, schedule._id, msg);
-    return null;
   }
 
-  return persistFireResult(db, trigger, schedule, result);
+  // Persist instances first so the reporter reflects actual created counts
+  // for StartRequest-style plugins (graph-mailbox and sharepoint-folder
+  // populate the reporter themselves inside fire(); timer and ai-listener
+  // return StartRequest[] and rely on the scheduler for persistence).
+  let fireOutcome: FireOutcome | null = null;
+  if (result) {
+    try {
+      fireOutcome = await persistFireResult(db, trigger, schedule, result, reporter);
+    } catch (persistErr) {
+      const msg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+      outerError = outerError ?? {
+        stage: 'fire',
+        message: `persistFireResult failed: ${msg}`,
+      };
+    }
+  }
+
+  const durationMs = Date.now() - started;
+  try {
+    await writeFireEvent(db, schedule, {
+      firedAt,
+      durationMs,
+      snapshot: reporter.snapshot(),
+      outerError,
+    });
+  } catch (writeErr) {
+    // Telemetry must never affect the fire path. Swallow and log.
+    // eslint-disable-next-line no-console
+    console.error('[trigger-scheduler] Failed to write TriggerFireEvent:', writeErr);
+  }
+
+  return fireOutcome;
+}
+
+async function writeFireEvent(
+  db: Db,
+  schedule: TriggerScheduleDoc,
+  params: {
+    firedAt: Date;
+    durationMs: number;
+    snapshot: ReturnType<ReturnType<typeof makeFireReporter>['snapshot']>;
+    outerError: FireReportError | null;
+  },
+): Promise<void> {
+  const doc = buildFireEventDoc({
+    _id: uuidv4(),
+    scheduleId: schedule.scheduleId,
+    definitionId: schedule.definitionId,
+    triggerType: schedule.triggerType,
+    firedAt: params.firedAt,
+    durationMs: params.durationMs,
+    snapshot: params.snapshot,
+    outerError: params.outerError,
+  });
+  if (doc === null) return; // no-op fire; heartbeat via schedule.lastFiredAt is enough
+  const { TriggerFireEvents } = getCollections(db);
+  await TriggerFireEvents.insertOne(doc);
 }
 
 async function persistFireResult(
@@ -138,6 +219,7 @@ async function persistFireResult(
   trigger: StartTrigger,
   schedule: TriggerScheduleDoc,
   result: TriggerResult,
+  reporter: ReturnType<typeof makeFireReporter> | null,
 ): Promise<FireOutcome> {
   const { TriggerSchedules } = getCollections(db);
   const now = new Date();
@@ -154,6 +236,12 @@ async function persistFireResult(
   let dedupedCount = 0;
 
   if (result.starts.length > 0 || true) {
+    // Feed the reporter observed-items count for StartRequest-style plugins
+    // that didn't populate it themselves (inline-creating plugins populate
+    // the reporter from inside fire() and return starts: []).
+    if (reporter && result.starts.length > 0 && reporter.snapshot().itemsObserved === 0) {
+      reporter.observed(result.starts.length);
+    }
     const session = db.client.startSession();
     try {
       await session.withTransaction(async () => {
@@ -169,8 +257,10 @@ async function persistFireResult(
           });
           if (res.deduplicated) {
             dedupedCount++;
+            reporter?.dropped('already-processed');
           } else {
             createdCount++;
+            reporter?.fired(res.instanceId);
           }
         }
 

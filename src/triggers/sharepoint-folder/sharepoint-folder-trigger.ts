@@ -278,26 +278,27 @@ export class SharePointFolderTrigger implements StartTrigger {
     // insertion — mirror of the graph-mailbox lifecycle.
     const { ProcessInstances } = getCollections(invocation.db);
     const folderPathNormalized = folderPath.replace(/\/+$/, '');
+    invocation.report?.observed(delta.items.length);
 
     for (const item of delta.items) {
       // Deleted items never fire.
-      if (item.deleted) continue;
+      if (item.deleted) { invocation.report?.dropped('deleted'); continue; }
 
       const isFolder = Boolean(item.folder);
       const isFile = Boolean(item.file);
-      if (itemType === 'file' && !isFile) continue;
-      if (itemType === 'folder' && !isFolder) continue;
-      if (itemType === 'any' && !isFile && !isFolder) continue;
+      if (itemType === 'file' && !isFile) { invocation.report?.dropped('item-type-mismatch'); continue; }
+      if (itemType === 'folder' && !isFolder) { invocation.report?.dropped('item-type-mismatch'); continue; }
+      if (itemType === 'any' && !isFile && !isFolder) { invocation.report?.dropped('item-type-mismatch'); continue; }
 
       // Partial-upload guard: skip files with size 0 or no hashes yet.
       if (isFile) {
         const size = item.size ?? 0;
-        if (size === 0) continue;
-        if (!item.file?.hashes) continue;
-        if (size < minSize) continue;
+        if (size === 0) { invocation.report?.dropped('partial-upload'); continue; }
+        if (!item.file?.hashes) { invocation.report?.dropped('partial-upload'); continue; }
+        if (size < minSize) { invocation.report?.dropped('below-min-size'); continue; }
       }
 
-      if (!matchesPattern(item.name, pattern)) continue;
+      if (!matchesPattern(item.name, pattern)) { invocation.report?.dropped('filter-pattern'); continue; }
 
       // Scope filter: non-recursive mode drops items in subfolders below
       // the watched folder.
@@ -305,7 +306,7 @@ export class SharePointFolderTrigger implements StartTrigger {
         const parentPath = item.parentReference?.path ?? '';
         // Graph returns parentReference.path like "/drives/<id>/root:/Incoming".
         const normalized = parentPath.replace(/^\/drives\/[^/]+\/root:/, '');
-        if (normalized !== folderPathNormalized) continue;
+        if (normalized !== folderPathNormalized) { invocation.report?.dropped('non-recursive-scope'); continue; }
       }
 
       // Modifications: without includeModifications, we can't perfectly
@@ -315,7 +316,10 @@ export class SharePointFolderTrigger implements StartTrigger {
       if (!includeModifications) {
         const created = item.createdDateTime ?? '';
         const modified = item.lastModifiedDateTime ?? '';
-        if (created && modified && created !== modified) continue;
+        if (created && modified && created !== modified) {
+          invocation.report?.dropped('modification-ignored');
+          continue;
+        }
       }
 
       const eTag = item.eTag ?? '';
@@ -325,7 +329,7 @@ export class SharePointFolderTrigger implements StartTrigger {
         { definitionId: invocation.definition.definitionId, idempotencyKey },
         { projection: { _id: 1 } },
       );
-      if (existing) continue; // already processed in a prior (possibly crashed) fire
+      if (existing) { invocation.report?.dropped('already-processed'); continue; }
 
       const commandId = uuidv4();
       const { instanceId } = await startInstance(invocation.db, {
@@ -338,6 +342,7 @@ export class SharePointFolderTrigger implements StartTrigger {
       });
 
       let skip = false;
+      let callbackErr: unknown = null;
       if (this.onFileReceived) {
         try {
           const r = await this.onFileReceived(
@@ -356,13 +361,26 @@ export class SharePointFolderTrigger implements StartTrigger {
         } catch (err) {
           console.error(`[sharepoint-folder] onFileReceived threw for ${item.id}:`, err);
           skip = true;
+          callbackErr = err;
         }
       }
 
       if (skip) {
         await terminateInstance(invocation.db, instanceId);
+        if (callbackErr) {
+          const msg = callbackErr instanceof Error ? callbackErr.message : String(callbackErr);
+          const stack = callbackErr instanceof Error ? callbackErr.stack : undefined;
+          invocation.report?.error({
+            stage: 'callback',
+            message: msg,
+            rawSnippet: stack ? stack.slice(0, 500) : undefined,
+          });
+        } else {
+          invocation.report?.dropped('callback-skip');
+        }
       } else {
         await insertStartContinuation(invocation.db, { instanceId, commandId });
+        invocation.report?.fired(instanceId);
       }
     }
 

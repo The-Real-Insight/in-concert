@@ -91,4 +91,17 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db
     .collection(COLLECTION_NAMES.TriggerSchedule)
     .createIndex({ triggerType: 1, status: 1, lastFiredAt: 1 });
+
+  // TriggerFireEvent — telemetry for operator diagnostics.
+  //   List-by-schedule descending: the portal's expand panel reads this.
+  //   TTL: auto-expire rows after the configured retention.
+  await db
+    .collection(COLLECTION_NAMES.TriggerFireEvent)
+    .createIndex({ scheduleId: 1, firedAt: -1 });
+
+  const ttlDays = parseInt(process.env.IN_CONCERT_FIRE_EVENTS_TTL_DAYS ?? '14', 10);
+  const ttlSeconds = (Number.isFinite(ttlDays) && ttlDays > 0 ? ttlDays : 14) * 24 * 60 * 60;
+  await db
+    .collection(COLLECTION_NAMES.TriggerFireEvent)
+    .createIndex({ firedAt: 1 }, { expireAfterSeconds: ttlSeconds });
 }

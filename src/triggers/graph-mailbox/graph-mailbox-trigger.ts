@@ -158,6 +158,7 @@ export class GraphMailboxTrigger implements StartTrigger {
     const creds = extractCredentials(invocation.credentials);
     const emails = await pollMailbox(mailbox, { credentials: creds });
 
+    invocation.report?.observed(emails.length);
     if (emails.length === 0) {
       return { starts: [], nextCursor: invocation.cursor };
     }
@@ -179,6 +180,7 @@ export class GraphMailboxTrigger implements StartTrigger {
       if (existing) {
         // Already processed in a prior (possibly crashed) fire — just
         // mark as read and move on.
+        invocation.report?.dropped('already-processed');
         await markAsRead(mailbox, email.id, creds);
         continue;
       }
@@ -203,6 +205,7 @@ export class GraphMailboxTrigger implements StartTrigger {
       }
 
       let skip = false;
+      let callbackErr: unknown = null;
       if (this.onMailReceived) {
         try {
           const r = await this.onMailReceived(
@@ -219,13 +222,26 @@ export class GraphMailboxTrigger implements StartTrigger {
         } catch (err) {
           console.error(`[graph-mailbox] onMailReceived threw for ${email.id}:`, err);
           skip = true;
+          callbackErr = err;
         }
       }
 
       if (skip) {
         await terminateInstance(invocation.db, instanceId);
+        if (callbackErr) {
+          const msg = callbackErr instanceof Error ? callbackErr.message : String(callbackErr);
+          const stack = callbackErr instanceof Error ? callbackErr.stack : undefined;
+          invocation.report?.error({
+            stage: 'callback',
+            message: msg,
+            rawSnippet: stack ? stack.slice(0, 500) : undefined,
+          });
+        } else {
+          invocation.report?.dropped('callback-skip');
+        }
       } else {
         await insertStartContinuation(invocation.db, { instanceId, commandId });
+        invocation.report?.fired(instanceId);
       }
 
       await markAsRead(mailbox, email.id, creds);

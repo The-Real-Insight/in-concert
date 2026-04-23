@@ -9,6 +9,7 @@
  */
 
 import type { ClientSession, Db } from 'mongodb';
+import type { FireReporter } from '../workers/fire-reporter';
 
 /**
  * Opaque, trigger-owned cursor. The engine persists it verbatim and never
@@ -75,6 +76,15 @@ export type TriggerInvocation = {
    * it when it calls `startInstance`.
    */
   startingTenantId?: string;
+  /**
+   * Optional fire-time telemetry reporter. Populated by the scheduler for
+   * every fire. Plugins call its methods (`observed`, `fired`, `dropped`,
+   * `error`) to describe what happened so the portal's fire-history view
+   * can show per-item counts and drop reasons. A plugin that ignores this
+   * field still produces a minimal event — outcome, duration, and any
+   * outer thrown error — because the scheduler can infer those itself.
+   */
+  report?: FireReporter;
 };
 
 /** Result of one fire. Persisted atomically with any {@link starts}. */

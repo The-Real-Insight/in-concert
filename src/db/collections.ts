@@ -12,6 +12,7 @@ export const COLLECTION_NAMES = {
   TimerSchedule: 'TimerSchedule',
   ConnectorSchedule: 'ConnectorSchedule',
   TriggerSchedule: 'TriggerSchedule',
+  TriggerFireEvent: 'TriggerFireEvent',
 } as const;
 
 /** Audit trail: one row per task/instance lifecycle event. */
@@ -355,6 +356,58 @@ export type TriggerScheduleDoc = {
   updatedAt: Date;
 };
 
+/**
+ * One row per trigger fire that actually did something (created an instance
+ * or failed). "No-op" fires — cycles where the plugin observed nothing or
+ * filtered everything out — are NOT written; the schedule's `lastFiredAt`
+ * carries the heartbeat instead. Keeps the table sized to interesting
+ * activity, not activity period.
+ *
+ * Write path: the scheduler constructs one of these inside `fireClaimedSchedule`
+ * after the plugin returns, using counters accumulated via the `FireReporter`
+ * attached to the invocation. Written outside the fire's Mongo transaction —
+ * this is telemetry, not business data.
+ */
+export type TriggerFireOutcome = 'ok' | 'error' | 'no-op';
+
+export type TriggerFireErrorStage =
+  | 'resolveSite'       // site/drive lookup (or equivalent source-resolution step) failed
+  | 'delta'             // listing/polling upstream source failed (delta, Graph, MCP tool, …)
+  | 'fire'              // plugin `fire()` threw synchronously or rejected
+  | 'callback'          // host callback (onMailReceived, onFileReceived, evaluate, …) threw
+  | 'unknown';
+
+export type TriggerFireEventDoc = {
+  _id: string;
+  scheduleId: string;
+  definitionId: string;
+  triggerType: string;
+  firedAt: Date;
+  durationMs: number;
+  outcome: TriggerFireOutcome;
+  /** Raw items the plugin inspected (delta entries, emails, tool observations, …). */
+  itemsObserved: number;
+  /** Items that became process instances. */
+  itemsFired: number;
+  /** Items dropped by the plugin (filtered, already-processed, callback rejected). */
+  itemsSkipped: number;
+  /** Per-reason counts — plugin owns the string keys. Typical examples:
+   *  `filter-pattern`, `non-recursive-scope`, `partial-upload`, `already-processed`,
+   *  `callback-skip`, `callback-error`. */
+  dropReasons: Record<string, number>;
+  /** Process instances this fire created. */
+  instanceIds: string[];
+  error?: {
+    stage: TriggerFireErrorStage;
+    message: string;
+    httpStatus?: number;
+    /** Plugin-populated when upstream returns a structured error code (e.g. Graph). */
+    upstreamCode?: string;
+    /** First ~500 chars of the raw error body / stack. */
+    rawSnippet?: string;
+  };
+};
+
 export type NodeDef = {
   id: string;
   type: string;
@@ -419,6 +472,9 @@ export function getCollections(database: Db) {
     ),
     TriggerSchedules: database.collection<TriggerScheduleDoc>(
       COLLECTION_NAMES.TriggerSchedule
+    ),
+    TriggerFireEvents: database.collection<TriggerFireEventDoc>(
+      COLLECTION_NAMES.TriggerFireEvent
     ),
   };
 }

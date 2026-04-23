@@ -860,6 +860,44 @@ export class BpmnEngineClient {
     return TriggerSchedules.find(filter).sort({ createdAt: -1 }).toArray();
   }
 
+  /**
+   * List fire-time telemetry for a schedule. Returns the most recent
+   * `TriggerFireEvent` rows (only `ok` and `error` outcomes are persisted —
+   * no-op cycles are skipped and use the schedule's `lastFiredAt` as the
+   * liveness heartbeat). Powers the portal's expandable fire-history view.
+   */
+  async listFireEvents(params: {
+    scheduleId: string;
+    limit?: number;
+    outcome?: 'ok' | 'error';
+    since?: Date;
+  }): Promise<import('../db/collections').TriggerFireEventDoc[]> {
+    const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
+    if (this.config.mode === 'rest') {
+      const q = new URLSearchParams();
+      q.set('limit', String(limit));
+      if (params.outcome) q.set('outcome', params.outcome);
+      if (params.since) q.set('since', params.since.toISOString());
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/trigger-schedules/${encodeURIComponent(params.scheduleId)}/fires?${q}`,
+      );
+      if (!res.ok) throw new Error(`List fire events failed: ${res.status}`);
+      const json = (await res.json()) as {
+        items: import('../db/collections').TriggerFireEventDoc[];
+      };
+      return json.items;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TriggerFireEvents } = getCollections(this.config.db);
+    const filter: Record<string, unknown> = { scheduleId: params.scheduleId };
+    if (params.outcome) filter.outcome = params.outcome;
+    if (params.since) filter.firedAt = { $gte: params.since };
+    return TriggerFireEvents.find(filter)
+      .sort({ firedAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
   async pauseTriggerSchedule(scheduleId: string): Promise<void> {
     if (this.config.mode === 'rest') {
       const res = await fetch(`${this.config.baseUrl}/v1/trigger-schedules/${scheduleId}/pause`, { method: 'POST' });

@@ -633,6 +633,26 @@ apiRouter.post('/v1/trigger-schedules/:scheduleId/resume', async (req: Request, 
   }
 });
 
+apiRouter.get('/v1/trigger-schedules/:scheduleId/fires', async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
+    const outcome = typeof req.query.outcome === 'string' ? req.query.outcome : undefined;
+    const since = typeof req.query.since === 'string' ? new Date(req.query.since) : undefined;
+    const db = getDb();
+    const { TriggerFireEvents } = getCollections(db);
+    const filter: Record<string, unknown> = { scheduleId: req.params.scheduleId };
+    if (outcome === 'ok' || outcome === 'error') filter.outcome = outcome;
+    if (since && !isNaN(since.getTime())) filter.firedAt = { $gte: since };
+    const items = await TriggerFireEvents.find(filter)
+      .sort({ firedAt: -1 })
+      .limit(limit)
+      .toArray();
+    res.json({ items });
+  } catch (err) {
+    res.status(500).json({ error: 'List fire events failed' });
+  }
+});
+
 apiRouter.put('/v1/trigger-schedules/:scheduleId/credentials', async (req: Request, res: Response) => {
   try {
     const credentials = req.body as Record<string, unknown> | null;
