@@ -7,13 +7,20 @@ cover_image: ""
 canonical_url: ""
 ---
 
-BPMN 2.0 gives you an escape hatch that most engines waste: any element can carry arbitrary XML attributes in your own namespace. The spec says nothing about what they mean. A modeler — bpmn.io, Camunda Modeler, Signavio, whatever — will save them to XML without complaint. Open the file in another tool, they're still there. It's your metadata, stored next to the process graph.
+BPMN 2.0 lets you put arbitrary attributes in your own namespace on any element. The established BPM runtimes — **Camunda** and **Flowable** — both preserve those attributes through parsing and make them accessible at runtime. That's table stakes for the spec; neither engine violates it.
 
-Every BPM engine I've used has the same reaction to those attributes: **ignore them**. The engine reads what it knows (`id`, `name`, `conditionExpression`, maybe a hardcoded `camunda:*` subset if you're using that vendor) and throws the rest away at parse time. Your options then are to either bend your runtime logic into the engine's vocabulary — which usually doesn't fit — or to stop using BPMN attributes entirely and rebuild the attribute layer outside: a separate config file, a tag system, a "process metadata" microservice. At which point the BPMN is just a pretty diagram.
+What differs is *how* those attributes reach your code. In Camunda, a Java delegate pulls the current BPMN model instance, walks to the element in question, and reads the namespaced attribute through the generic model API — `execution.getBpmnModelElementInstance().getAttributeValueNs(ns, name)`. Flowable's pattern is similar. Both work, both have a decade of production runtime behind them. Over time, though, the path of least resistance steers teams toward each engine's own extension schema — `camunda:inputOutput`, `camunda:properties`, `flowable:field` — because the platform does more lifting when you author in its vocabulary. Gradually the *engine's* vocabulary starts winning over the *business's*.
 
-**in-concert** — the BPMN 2.0 engine I work on — takes the opposite stance: **the engine interprets almost nothing.** It carries your extension attributes verbatim from the modeler, through the parser, into your callbacks, at every extension point where BPMN lets you author metadata. You define the vocabulary. Your handlers implement the semantics. The XML in bpmn.io is the source of truth for both.
+**in-concert** — the BPMN 2.0 engine I work on — flattens that ergonomic gradient. There is no engine-defined extension schema for service tasks, user tasks, sequence flows, or gateways. What the engine does instead: hand your callback every attribute you authored, as a plain JavaScript bag in the payload.
 
-This article walks through what that looks like end-to-end — from the modeler all the way to analytics.
+```typescript
+item.payload.extensions['acme:costCenter']
+transition.attrs['acme:condition1']
+```
+
+No model traversal. No namespace-aware API calls. No translation step. Whether you use our bundled `tri:*` prefix (which the built-in triggers happen to ship with) or your own `acme:*` is invisible to the engine — the authoring surface is intentionally unbiased, so your vocabulary wins by default.
+
+The rest of this article is what that means in practice — from bpmn.io, through four extension points at runtime, to the analytics payoff.
 
 ## Step 1 — Author it in the modeler
 
@@ -204,16 +211,16 @@ None of this requires a separate "process metadata" service or a parallel taggin
 
 ## Why this matters
 
-Most BPM platforms treat the model as a drawing surface and the engine as the real system. They're backwards. The drawing *is* the system — every element, every attribute, every flow — and a good engine makes that true by getting out of the way.
+Camunda and Flowable are mature, battle-tested engines with enormous BPMN coverage and deep Java integration. in-concert doesn't try to compete on that surface area. What it *does* optimize for is a narrower, increasingly relevant shape: **your process model should carry your business vocabulary, and that vocabulary should reach your runtime handlers without an API call**.
 
 The concrete payoff of transparent extension attributes:
 
-- **One source of truth.** Your process logic, tool wiring, form schemas, escalation rules, cost centers, compliance flags — all in the BPMN. Not 40% in BPMN and 60% in handler code and YAML.
-- **No vendor lock-in on vocabulary.** `acme:*` is your namespace. Not `camunda:*`, not `zeebe:*`, not `activiti:*`. If you ever migrate engines, your BPMN files carry the metadata with them; only the handlers need to move.
-- **Analytics parity.** The attributes that drive execution are the same attributes that drive reporting. One schema, two audiences.
-- **Editor independence.** Any BPMN editor that saves extension attributes (which is to say: all of them) works. No custom palette, no vendor plugin, no proprietary format.
+- **One source of truth.** Your process logic, tool wiring, form schemas, escalation rules, cost centers, compliance flags — all in the BPMN, all authored in a modeler, all versioned alongside the graph. Not 40% in BPMN and 60% in handler code and YAML.
+- **Vocabulary parity across systems.** `acme:customerTier` in the BPMN is the same `customerTier` your analytics warehouse already uses. No translation layer between the model and reporting.
+- **Editor independence.** Every BPMN editor that round-trips extension attributes (bpmn.io, Camunda Modeler, Signavio, hand-edited XML) works — nothing in-concert-specific needs to be installed.
+- **LLM-friendly.** When your conditions are prompts, your tool calls are MCP-style invocations, and your routing decisions are LLM-evaluated — all of which in-concert supports natively — keeping every attribute in a plain JSON bag at handler time is the right shape for the AI/agentic workloads the engine is positioned for.
 
-The engine's job is to carry BPMN semantics — sequencing, tokens, gateways, events — and **nothing else**. What happens at each task, at each trigger, at each gateway is yours to author in the model and yours to implement in code. The bridge between the two is the attribute bag.
+The engine's job is to carry BPMN semantics — sequencing, tokens, gateways, events — and get out of the way of the attributes. What happens at each task, at each trigger, at each gateway is yours to author in the model and yours to implement in code. The bridge between the two is the attribute bag.
 
 ## Try it
 
