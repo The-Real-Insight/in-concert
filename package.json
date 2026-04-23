@@ -1,6 +1,6 @@
 {
   "name": "@the-real-insight/in-concert",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "BPMN 2.0 subset execution engine with event sourcing",
   "main": "dist/index.js",
   "exports": {
