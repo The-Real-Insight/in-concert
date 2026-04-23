@@ -706,24 +706,53 @@ The `CALLBACK_DECISION` payload is structured for LLM integration. You get direc
 | `transitions` | Array of alternatives, each with: |
 | `transitions[].flowId` | Flow identifier (pass to `selectedFlowIds`) |
 | `transitions[].name` | Transition label from BPMN (e.g. "Claim approved?", "default") |
-| `transitions[].conditionExpression` | Expression from BPMN (e.g. `${approved}`) |
+| `transitions[].conditionExpression` | Expression from BPMN (e.g. `${approved}`). Populated from nested `<bpmn:conditionExpression>` OR the `in-concert:condition` / `tri:condition` attribute shorthand; nested wins when both are present. |
 | `transitions[].isDefault` | `true` when no condition matches |
 | `transitions[].targetNodeName` | Target task name (e.g. "Send Approval Mail") |
 | `transitions[].targetNodeType` | Target node type (e.g. "serviceTask") |
+| `transitions[].attrs` | **Raw extension-attribute bag from the source `<bpmn:sequenceFlow>`** under any non-reserved namespace. Keys fully qualified (`acme:condition1`, `myco:weight`, …). Absent when the flow has none. The engine never interprets these — your handler does. |
 
-**Evaluating gateway name + transition conditions**
+**The engine does not evaluate any condition.** It reads what's in the BPMN, shapes it, and hands it to your `onDecision` handler. How you decide is up to you. The payload is designed to support three common evaluation styles without forcing one:
 
-The gateway `name` is the decision question; each transition's `name` is the option label. Together they form a clear yes/no or multi-choice prompt.
+#### 1. Expression-based
 
-Example from xor-with-transition-conditions BPMN:
+Evaluate `conditionExpression` against your own process data. When `${approved}` is truthy, choose that flow; otherwise use the default. Example from `xor-with-transition-conditions.bpmn`:
 
 - **Gateway**: `{ name: "Can be approved?" }`
 - **Transitions**: `[ { flowId: "Flow_Rejection", name: "No", isDefault: true }, { flowId: "Flow_Approval", name: "Yes", conditionExpression: "${approved}" } ]`
 
-To evaluate:
+#### 2. LLM-based
 
-1. **Expression-based**: If you have process data (e.g. `approved: true`), evaluate `conditionExpression` against it. When `${approved}` is truthy, choose the "Yes" flow; otherwise use the default ("No").
-2. **LLM-based**: Prompt with `gateway.name` (e.g. "Can be approved?") and the transition labels (`transitions[].name`: "No", "Yes") plus your context. The LLM returns the chosen option; map back to `flowId` and call `submitDecision(instanceId, decisionId, { selectedFlowIds: [flowId] })`.
+Prompt with `gateway.name` ("Can be approved?"), the transition `name`s ("No", "Yes"), and whatever context the LLM needs. Parse the answer back to a `flowId`.
+
+#### 3. Custom attributes on each flow (author-defined rule metadata)
+
+When `conditionExpression` and `name` aren't rich enough — e.g. multiple independent rules per flow, weighting, or free-form explanations for an LLM — put additional attributes on the `<bpmn:sequenceFlow>` under **your own namespace** and read them from `transitions[].attrs` in the handler:
+
+```xml
+<bpmn:sequenceFlow id="Flow_Approve" sourceRef="Gw" targetRef="End_A"
+  name="Approve"
+  acme:condition1="amount_below_threshold"
+  acme:condition2="customer_tier_premium"
+  acme:explanation="Small orders from premium customers auto-approve"/>
+```
+
+```typescript
+onDecision: async (item) => {
+  const chosen = item.payload.transitions.find((t) => {
+    const rule1 = t.attrs?.['acme:condition1'];
+    const rule2 = t.attrs?.['acme:condition2'];
+    const explanation = t.attrs?.['acme:explanation'];
+    // …your evaluation…
+    return matches(rule1, rule2, context);
+  });
+  await client.submitDecision(item.instanceId, item.payload.decisionId, {
+    selectedFlowIds: [chosen!.flowId],
+  });
+}
+```
+
+Pick any namespace prefix — `acme:`, `myco:`, `tri:`, whatever suits your vocabulary. The parser captures every non-reserved `<prefix>:<name>` attribute verbatim; reserved prefixes (`bpmn`, `bpmndi`, `dc`, `di`, `xsi`, `xml`, `xmlns`) are filtered out. Your handler is the sole interpreter of what the attributes mean.
 
 ---
 
