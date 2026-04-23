@@ -159,10 +159,46 @@ function parseParticipantsFromXml(xml: string): { id: string; name?: string; pro
 }
 
 /**
- * Parse `bpmn:message` elements from XML, returning their tri:* attributes
- * keyed by the message's `name` (falling back to `id`). Engine-agnostic —
- * no filtering by connector discriminator; plugins decide what to claim.
- * Keys are fully qualified (`tri:foo`).
+ * Extension-attribute namespace prefixes the parser ignores. Everything
+ * under these belongs to the BPMN spec, diagram interchange, or XML
+ * itself — never plugin-visible extension data.
+ */
+const RESERVED_NS_PREFIXES = new Set([
+  'bpmn',
+  'bpmndi',
+  'dc',
+  'di',
+  'xsi',
+  'xml',
+  'xmlns',
+]);
+
+/**
+ * Pull every `<prefix>:<name>="value"` attribute out of a tag's attribute
+ * string, except those under reserved namespaces. The engine stores these
+ * verbatim so plugins can recognize whatever vocabulary their host chose
+ * (TRI's own bundled plugins use `tri:`, but `acme:`, `myco:`, etc. work
+ * identically).
+ */
+function extractNamespacedAttrs(attrs: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const attrRe = /(\w+):(\w+)="([^"]*)"/g;
+  let am: RegExpExecArray | null;
+  while ((am = attrRe.exec(attrs)) !== null) {
+    const prefix = am[1]!;
+    if (RESERVED_NS_PREFIXES.has(prefix)) continue;
+    const name = am[2]!;
+    out[`${prefix}:${name}`] = decodeXmlEntitiesInAttribute(am[3]!).trim();
+  }
+  return out;
+}
+
+/**
+ * Parse `bpmn:message` elements from XML, returning their extension
+ * attributes keyed by the message's `name` (falling back to `id`).
+ * Engine-agnostic — no filtering by connector discriminator, no hard-
+ * coded namespace prefix; plugins decide what to claim from the raw bag.
+ * Keys are fully qualified (`<prefix>:<name>`).
  */
 function parseMessageAttrs(xml: string): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {};
@@ -171,12 +207,7 @@ function parseMessageAttrs(xml: string): Record<string, Record<string, string>> 
   while ((m = msgRe.exec(xml))) {
     const msgId = m[1]!;
     const attrs = m[2] ?? '';
-    const ext: Record<string, string> = {};
-    const attrRe = /tri:(\w+)="([^"]*)"/g;
-    let am;
-    while ((am = attrRe.exec(attrs))) {
-      ext[`tri:${am[1]!}`] = decodeXmlEntitiesInAttribute(am[2]!).trim();
-    }
+    const ext = extractNamespacedAttrs(attrs);
     if (Object.keys(ext).length > 0) {
       const nameMatch = attrs.match(/name="([^"]*)"/)?.[1];
       const key = nameMatch ?? msgId;
@@ -187,9 +218,10 @@ function parseMessageAttrs(xml: string): Record<string, Record<string, string>> 
 }
 
 /**
- * Parse `tri:*` attributes from `<bpmn:startEvent>` opening tags and from
- * any nested event-definition children (`<bpmn:conditionalEventDefinition tri:… />`).
- * Keyed by start-event id. Engine-agnostic.
+ * Parse extension attributes from `<bpmn:startEvent>` opening tags and from
+ * any nested event-definition children (`<bpmn:conditionalEventDefinition acme:… />`).
+ * Keyed by start-event id. Engine-agnostic; any non-reserved namespace
+ * is captured verbatim.
  */
 function parseStartEventSelfAttrs(xml: string): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {};
@@ -199,23 +231,14 @@ function parseStartEventSelfAttrs(xml: string): Record<string, Record<string, st
     const id = m[1] ?? m[5]!;
     const openAttrs = (m[2] ?? m[6]) ?? '';
     const inner = m[4] ?? '';
-    const ext: Record<string, string> = {};
-    const attrRe = /tri:(\w+)="([^"]*)"/g;
-    let am;
-    while ((am = attrRe.exec(openAttrs))) {
-      ext[`tri:${am[1]!}`] = decodeXmlEntitiesInAttribute(am[2]!).trim();
-    }
+    const ext: Record<string, string> = { ...extractNamespacedAttrs(openAttrs) };
     if (inner) {
-      // Walk nested event-definition elements for their tri:* attributes.
+      // Walk nested event-definition elements for their extension attributes.
       const defRe = /<bpmn:\w+EventDefinition\b([^>]*?)\/?>/gi;
       let dm;
       while ((dm = defRe.exec(inner))) {
         const defAttrs = dm[1] ?? '';
-        const defAttrRe = /tri:(\w+)="([^"]*)"/g;
-        let dam;
-        while ((dam = defAttrRe.exec(defAttrs))) {
-          ext[`tri:${dam[1]!}`] = decodeXmlEntitiesInAttribute(dam[2]!).trim();
-        }
+        Object.assign(ext, extractNamespacedAttrs(defAttrs));
       }
     }
     if (Object.keys(ext).length > 0) {

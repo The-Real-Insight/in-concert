@@ -99,9 +99,12 @@ export type TriggerSchedule =
 
 /**
  * Engine-provided snapshot of a BPMN start event passed to
- * {@link StartTrigger.claimFromBpmn}. Intentionally uses raw `tri:*`
- * attribute bags — the engine does not interpret extension attributes;
- * each plugin decides what its own trigger needs.
+ * {@link StartTrigger.claimFromBpmn}. Attribute bags are raw and
+ * namespace-agnostic — the parser captures every `<prefix>:<name>`
+ * attribute under any non-reserved namespace (reserved: `bpmn`, `bpmndi`,
+ * `dc`, `di`, `xsi`, `xml`, `xmlns`). The engine does not interpret
+ * extension attributes; each plugin decides which namespace it reads
+ * from and what its own trigger needs.
  */
 export type BpmnStartEventView = {
   /** The BPMN start-event node id (`flowEl.id`). */
@@ -113,9 +116,17 @@ export type BpmnStartEventView = {
    */
   timerDefinition?: string;
   eventDefinitionKind: 'none' | 'timer' | 'message' | 'conditional' | 'signal' | 'other';
-  /** `tri:*` attrs on the start event itself and on any nested event-definition child. */
+  /**
+   * Extension attributes found on the start event itself and on any nested
+   * event-definition child. Keys are fully qualified (`<prefix>:<name>`),
+   * e.g. `tri:connectorType`, `acme:serviceKey`. Values verbatim.
+   */
   selfAttrs: Record<string, string>;
-  /** `tri:*` attrs on the `bpmn:Message` referenced via messageRef, if any. */
+  /**
+   * Extension attributes on the `<bpmn:message>` referenced via
+   * `messageRef`, if any. Keys fully qualified; any non-reserved
+   * namespace prefix is preserved.
+   */
   messageAttrs?: Record<string, string>;
 };
 

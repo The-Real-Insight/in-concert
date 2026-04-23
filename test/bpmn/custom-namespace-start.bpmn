@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:acme="http://acme.example.com/schema/bpmn"
+  id="Defs_AcmeCustom"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:message id="Msg_AcmeAlert" name="acme-pagerduty-alert"
+    acme:connectorType="acme-pagerduty"
+    acme:serviceKey="svc_ABC123"
+    acme:severity="critical" />
+
+  <bpmn:process id="Process_AcmeAlert" isExecutable="true">
+
+    <bpmn:startEvent id="Start" name="Incident raised">
+      <bpmn:messageEventDefinition messageRef="Msg_AcmeAlert" />
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="Task_Respond" name="Respond to incident" acme:playbook="std-critical"/>
+
+    <bpmn:endEvent id="End"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="Task_Respond"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_Respond" targetRef="End"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

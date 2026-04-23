@@ -63,14 +63,41 @@ type BpmnStartEventView = {
   nodeId: string;
   timerDefinition?: string;                                                    // `<bpmn:timeDate|timeDuration|timeCycle>` body
   eventDefinitionKind: 'none' | 'timer' | 'message' | 'conditional' | 'signal' | 'other';
-  selfAttrs: Record<string, string>;                                           // tri:* on the start event + nested event-def
-  messageAttrs?: Record<string, string>;                                       // tri:* on the referenced <bpmn:message>, if any
+  selfAttrs: Record<string, string>;                                           // extension attrs on the start event + nested event-def
+  messageAttrs?: Record<string, string>;                                       // extension attrs on the referenced <bpmn:message>, if any
 };
 ```
 
-The two attribute bags are **verbatim** — keys are fully qualified (`tri:connectorType`, `tri:path`, …). The engine does not interpret them. You pick which bag your trigger reads from (or both), pattern-match on whichever attribute discriminates "yours" from "theirs", and return whatever config shape your `fire()` wants.
+### Namespace freedom
 
-Common helper: `stripTriPrefix(attrs, ['connectorType'])` from `@the-real-insight/in-concert/triggers` drops the `tri:` prefix and optionally omits the discriminator since your `triggerType` already names what kind of trigger this is.
+The two attribute bags are **verbatim**. Keys are fully qualified (`<prefix>:<name>`), and the parser captures **every non-reserved namespace prefix** — not just `tri:`. Reserved prefixes (never plugin-visible): `bpmn`, `bpmndi`, `dc`, `di`, `xsi`, `xml`, `xmlns`. Everything else flows through.
+
+That means your plugin can define its own authoring vocabulary:
+
+```xml
+<bpmn:message id="Msg" name="incident"
+  acme:connectorType="acme-pagerduty"
+  acme:serviceKey="svc_abc"
+  acme:severity="critical" />
+```
+
+…and your `claimFromBpmn` reads `event.messageAttrs?.['acme:connectorType']`. The engine doesn't care what the prefix is — pick whatever your organization uses, reuse `tri:`, mix multiple namespaces on one element. TRI's own bundled triggers (timer, graph-mailbox, sharepoint-folder, ai-listener) use `tri:*` because TRI authors them; your plugins are under no such obligation.
+
+### Helpers for turning attribute bags into config
+
+From `@the-real-insight/in-concert/triggers`:
+
+- **`stripPrefix(attrs, prefix, omit?)`** — generic. Drops the given namespace prefix from keys and optionally omits a list of keys entirely (commonly the discriminator, since your `triggerType` already names what kind of trigger this is).
+- **`stripTriPrefix(attrs, omit?)`** — convenience alias for `stripPrefix(attrs, 'tri:', omit)`, used by the bundled plugins.
+
+```typescript
+stripPrefix(
+  { 'acme:serviceKey': 'svc_abc', 'acme:severity': 'critical', 'acme:connectorType': 'acme-pagerduty' },
+  'acme:',
+  ['connectorType'],
+);
+// => { serviceKey: 'svc_abc', severity: 'critical' }
+```
 
 ---
 
