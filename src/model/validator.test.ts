@@ -149,4 +149,29 @@ describe('validateBpmnXml', () => {
     expect(roles).toContainEqual({ roleId: 'role-a', roleName: 'LaneA' });
     expect(roles).toContainEqual({ roleId: 'role-b', roleName: 'LaneB' });
   });
+
+  it('accepts in-concert:roleId as the canonical form (validator-level)', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:in-concert="http://the-real-insight.com/schema/in-concert">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_A" name="LaneA" in-concert:roleId="canonical-role">
+        <bpmn:flowNodeRef>Task_A</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:userTask id="Task_A" name="A"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="F1" sourceRef="Start_1" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="F2" sourceRef="Task_A" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const issues = await validateBpmnXml(bpmn);
+    const poolLaneIssues = issues.filter((i) => i.rule === 'POOLS_AND_LANES_NAME_ROLE_ID');
+    expect(poolLaneIssues).toHaveLength(0);
+
+    const roles = extractRolesFromBpmn(bpmn);
+    expect(roles).toContainEqual({ roleId: 'canonical-role', roleName: 'LaneA' });
+  });
 });

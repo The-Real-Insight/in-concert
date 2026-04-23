@@ -12,10 +12,24 @@ export type ValidationIssue = {
   message: string;
 };
 
-/** Aggregated role from BPMN (lane or pool with tri:roleId). */
+/** Aggregated role from BPMN (lane or pool with the engine's roleId attribute). */
 export type BpmnRole = { roleId: string; roleName?: string };
 
-/** Parse lane elements from BPMN XML to extract id, name, tri:roleId. */
+/**
+ * Read an engine-interpreted attribute accepting either the canonical
+ * `in-concert:` namespace or the legacy `tri:` namespace. `in-concert:`
+ * wins when both are present on the same element. Mirrors the helper
+ * used by the parser — kept local here to keep the validator usable
+ * without circular imports.
+ */
+function readEngineAttr(attrs: string, name: string): string | null {
+  const modern = new RegExp(`\\bin-concert:${name}="([^"]*)"`, 'i').exec(attrs);
+  if (modern) return modern[1]!;
+  const legacy = new RegExp(`\\btri:${name}="([^"]*)"`, 'i').exec(attrs);
+  return legacy ? legacy[1]! : null;
+}
+
+/** Parse lane elements. Accepts `in-concert:roleId` (canonical) or `tri:roleId` (legacy). */
 function parseLanesFromXml(xml: string): { id: string; name?: string; roleId?: string }[] {
   const result: { id: string; name?: string; roleId?: string }[] = [];
   const laneRe = /<bpmn:lane\s+id="([^"]+)"([^>]*)>/gi;
@@ -23,13 +37,13 @@ function parseLanesFromXml(xml: string): { id: string; name?: string; roleId?: s
   while ((m = laneRe.exec(xml))) {
     const attrs = m[2] ?? '';
     const name = attrs.match(/name="([^"]*)"/)?.[1]?.trim();
-    const roleId = attrs.match(/tri:roleId="([^"]*)"/)?.[1]?.trim();
+    const roleId = readEngineAttr(attrs, 'roleId')?.trim();
     result.push({ id: m[1]!, name, roleId });
   }
   return result;
 }
 
-/** Parse participant (pool) elements from BPMN XML to extract id, name, tri:roleId. */
+/** Parse participant (pool) elements. Accepts `in-concert:roleId` (canonical) or `tri:roleId` (legacy). */
 function parseParticipantsFromXml(xml: string): { id: string; name?: string; roleId?: string }[] {
   const result: { id: string; name?: string; roleId?: string }[] = [];
   const participantRe = /<bpmn:participant\s+id="([^"]+)"([^>]*)>/gi;
@@ -37,13 +51,13 @@ function parseParticipantsFromXml(xml: string): { id: string; name?: string; rol
   while ((m = participantRe.exec(xml))) {
     const attrs = m[2] ?? '';
     const name = attrs.match(/name="([^"]*)"/)?.[1]?.trim();
-    const roleId = attrs.match(/tri:roleId="([^"]*)"/)?.[1]?.trim();
+    const roleId = readEngineAttr(attrs, 'roleId')?.trim();
     result.push({ id: m[1]!, name, roleId });
   }
   return result;
 }
 
-/** Check that pools and lanes have a name and non-empty tri:roleId. */
+/** Check that pools and lanes have a name and a non-empty engine roleId attribute. */
 function validatePoolsAndLanes(xml: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -64,7 +78,7 @@ function validatePoolsAndLanes(xml: string): ValidationIssue[] {
         severity: 'error',
         elementId: lane.id,
         elementType: 'lane',
-        message: `Lane "${lane.id}" must have a non-empty tri:roleId attribute`,
+        message: `Lane "${lane.id}" must have a non-empty in-concert:roleId (or legacy tri:roleId) attribute`,
       });
     }
   }
@@ -86,7 +100,7 @@ function validatePoolsAndLanes(xml: string): ValidationIssue[] {
         severity: 'error',
         elementId: pool.id,
         elementType: 'pool',
-        message: `Pool "${pool.id}" must have a non-empty tri:roleId attribute`,
+        message: `Pool "${pool.id}" must have a non-empty in-concert:roleId (or legacy tri:roleId) attribute`,
       });
     }
   }

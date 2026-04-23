@@ -155,4 +155,81 @@ describe('parseBpmnXml', () => {
     expect(graph.nodes['Task_B']?.laneRef).toBe('LaneB');
     expect(graph.nodes['Task_B']?.roleId).toBe('role-b');
   });
+
+  it('accepts in-concert:condition as the canonical form (compat with tri:condition)', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:in-concert="http://the-real-insight.com/schema/in-concert">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:exclusiveGateway id="Gw_1"/>
+    <bpmn:endEvent id="End_A"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Gw_1"/>
+    <bpmn:sequenceFlow id="Flow_cond" sourceRef="Gw_1" targetRef="End_A" in-concert:condition="x &#62; 10"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.flows['Flow_cond']?.conditionExpression).toBe('x > 10');
+  });
+
+  it('in-concert:condition wins over tri:condition when both are present', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  xmlns:in-concert="http://the-real-insight.com/schema/in-concert">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="End_1"
+      tri:condition="legacy" in-concert:condition="canonical"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.flows['Flow_1']?.conditionExpression).toBe('canonical');
+  });
+
+  it('accepts in-concert:roleId on lanes and participants (compat with tri:roleId)', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:in-concert="http://the-real-insight.com/schema/in-concert">
+  <bpmn:collaboration id="Collab_1">
+    <bpmn:participant id="Pool_1" name="Ops" processRef="Process_1" in-concert:roleId="ops-team"/>
+  </bpmn:collaboration>
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_A" name="LaneA" in-concert:roleId="role-canonical-a">
+        <bpmn:flowNodeRef>Task_A</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:userTask id="Task_A" name="A"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_A" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.nodes['Task_A']?.roleId).toBe('role-canonical-a');
+  });
+
+  it('in-concert:roleId wins over tri:roleId when both are present on a lane', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  xmlns:in-concert="http://the-real-insight.com/schema/in-concert">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_A" name="LaneA" tri:roleId="legacy-role" in-concert:roleId="canonical-role">
+        <bpmn:flowNodeRef>Task_A</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:userTask id="Task_A" name="A"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_A" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.nodes['Task_A']?.roleId).toBe('canonical-role');
+  });
 });

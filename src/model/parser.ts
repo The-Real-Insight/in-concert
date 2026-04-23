@@ -76,7 +76,21 @@ function getEventDefinition(el: { eventDefinitions?: { $type?: string }[] }): st
   return defs[0]?.$type ?? undefined;
 }
 
-/** Decode a small subset of XML entities used in BPMN attribute values (e.g. tri:condition). */
+/**
+ * Match an engine-interpreted attribute under either the canonical
+ * `in-concert:` namespace or the legacy `tri:` namespace. When both are
+ * present on the same element, `in-concert:` wins — mirroring the
+ * native-BPMN-wins-over-extension rule used elsewhere in the parser.
+ * Returns the raw value string or null.
+ */
+function readEngineAttr(attrs: string, name: string): string | null {
+  const modern = new RegExp(`\\bin-concert:${name}="([^"]*)"`, 'i').exec(attrs);
+  if (modern) return modern[1]!;
+  const legacy = new RegExp(`\\btri:${name}="([^"]*)"`, 'i').exec(attrs);
+  return legacy ? legacy[1]! : null;
+}
+
+/** Decode a small subset of XML entities used in BPMN attribute values (e.g. `in-concert:condition`). */
 function decodeXmlEntitiesInAttribute(raw: string): string {
   if (!raw) return raw;
   return raw
@@ -90,23 +104,25 @@ function decodeXmlEntitiesInAttribute(raw: string): string {
 }
 
 /**
- * TRI extension: sequence flows may carry `tri:condition="..."` on the opening/self-closing tag
- * (modeller output) instead of nested `<bpmn:conditionExpression>`.
+ * Engine extension: sequence flows may carry a condition attribute on the
+ * opening/self-closing tag (modeller output) instead of nested
+ * `<bpmn:conditionExpression>`. The canonical attribute is
+ * `in-concert:condition`; `tri:condition` is accepted for backward
+ * compatibility with pre-rename fixtures and is equivalent.
  */
-function parseTriConditionAttributesByFlow(xml: string): Record<string, string> {
+function parseEngineConditionAttributesByFlow(xml: string): Record<string, string> {
   const result: Record<string, string> = {};
   const tagRe = /<bpmn:sequenceFlow(\s[^>]*)>/gi;
   let m: RegExpExecArray | null;
   while ((m = tagRe.exec(xml))) {
     const attrs = m[1] ?? '';
     const idMatch = /\bid="([^"]+)"/i.exec(attrs);
-    const condMatch = /\btri:condition="([^"]*)"/i.exec(attrs);
     const flowId = idMatch?.[1];
     if (!flowId) continue;
-    const raw = condMatch?.[1];
+    const raw = readEngineAttr(attrs, 'condition');
     if (raw == null) continue;
     const decoded = decodeXmlEntitiesInAttribute(raw);
-    // Empty tri:condition="" skips; do not trim() so trailing &#10; etc. stay meaningful for NL conditions.
+    // Empty condition="" skips; do not trim() so trailing &#10; etc. stay meaningful for NL conditions.
     if (decoded.replace(/\s/g, '').length === 0) continue;
     result[flowId] = decoded;
   }
@@ -124,12 +140,13 @@ function parseConditionExpressionsByFlow(xml: string): Record<string, string> {
     const body = (m[2] ?? m[3] ?? '').trim();
     if (body) fromNested[flowId] = body;
   }
-  const fromTri = parseTriConditionAttributesByFlow(xml);
-  // Nested BPMN 2.0 conditionExpression wins over tri:condition when both are present.
-  return { ...fromTri, ...fromNested };
+  const fromAttr = parseEngineConditionAttributesByFlow(xml);
+  // Nested BPMN 2.0 conditionExpression wins over the in-concert:/tri: extension
+  // attribute when both are present on the same flow.
+  return { ...fromAttr, ...fromNested };
 }
 
-/** Parse lane elements from BPMN XML to extract id, name, tri:roleId. */
+/** Parse lane elements from BPMN XML. Accepts `in-concert:roleId` (canonical) or `tri:roleId` (legacy). */
 function parseLanesFromXml(xml: string): { id: string; name?: string; roleId?: string }[] {
   const result: { id: string; name?: string; roleId?: string }[] = [];
   const laneRe = /<bpmn:lane\s+id="([^"]+)"([^>]*)>/gi;
@@ -137,13 +154,13 @@ function parseLanesFromXml(xml: string): { id: string; name?: string; roleId?: s
   while ((m = laneRe.exec(xml))) {
     const attrs = m[2] ?? '';
     const name = attrs.match(/name="([^"]*)"/)?.[1]?.trim();
-    const roleId = attrs.match(/tri:roleId="([^"]*)"/)?.[1]?.trim();
+    const roleId = readEngineAttr(attrs, 'roleId')?.trim();
     result.push({ id: m[1]!, name, roleId });
   }
   return result;
 }
 
-/** Parse participant (pool) elements from BPMN XML to extract id, name, processRef, tri:roleId. */
+/** Parse participant (pool) elements from BPMN XML. Accepts `in-concert:roleId` (canonical) or `tri:roleId` (legacy). */
 function parseParticipantsFromXml(xml: string): { id: string; name?: string; processRef?: string; roleId?: string }[] {
   const result: { id: string; name?: string; processRef?: string; roleId?: string }[] = [];
   const participantRe = /<bpmn:participant\s+id="([^"]+)"([^>]*)\/?>/gi;
@@ -152,7 +169,7 @@ function parseParticipantsFromXml(xml: string): { id: string; name?: string; pro
     const attrs = m[2] ?? '';
     const name = attrs.match(/name="([^"]*)"/)?.[1]?.trim();
     const processRef = attrs.match(/processRef="([^"]*)"/)?.[1]?.trim();
-    const roleId = attrs.match(/tri:roleId="([^"]*)"/)?.[1]?.trim();
+    const roleId = readEngineAttr(attrs, 'roleId')?.trim();
     result.push({ id: m[1]!, name, processRef, roleId });
   }
   return result;
