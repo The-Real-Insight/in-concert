@@ -41,16 +41,34 @@ export const AI_LISTENER_TRIGGER_TYPE = 'ai-listener';
 const DEFAULT_POLL_SECONDS = 120;
 const MIN_POLL_SECONDS = 30;
 
+/**
+ * Injected tool-call function. The engine passes the full trigger config
+ * (all surviving `tri:*` attributes minus the `connectorType` discriminator)
+ * as the fourth argument, so hosts that route through an in-process tool
+ * runtime can forward `parameterOverwrites`, `offerType`, etc. to their
+ * invocation API without each host reinventing a lookup path.
+ *
+ * Existing host implementations that declare only three parameters remain
+ * source-compatible — JavaScript ignores the extra argument at the call site.
+ */
 export type ToolCallerFn = (
   tool: string,
   endpoint: string,
   credentials: Record<string, unknown> | null,
+  config?: Record<string, unknown>,
 ) => Promise<unknown>;
 
+/**
+ * Injected LLM-evaluator function. Receives the same full trigger config as
+ * {@link ToolCallerFn} so evaluators that want to stitch tool output together
+ * with schedule-authored context (e.g. site id, locale) don't need a second
+ * round-trip to the schedule document.
+ */
 export type EvaluatorFn = (
   prompt: string,
   toolResult: unknown,
   credentials: Record<string, unknown> | null,
+  config?: Record<string, unknown>,
 ) => Promise<EvaluationResult>;
 
 export type AIListenerTriggerOptions = {
@@ -134,12 +152,12 @@ export class AIListenerTrigger implements StartTrigger {
     const llmEndpoint = asString(cfg['llmEndpoint']);
 
     const toolResult = this.customCallTool
-      ? await this.customCallTool(tool, toolEndpoint, invocation.credentials)
+      ? await this.customCallTool(tool, toolEndpoint, invocation.credentials, cfg)
       : await defaultCallTool(toolEndpoint, tool, invocation.credentials ?? undefined);
 
     let evaluation: EvaluationResult;
     if (this.customEvaluate) {
-      evaluation = await this.customEvaluate(prompt, toolResult, invocation.credentials);
+      evaluation = await this.customEvaluate(prompt, toolResult, invocation.credentials, cfg);
     } else {
       if (!llmEndpoint) {
         throw new Error('ai-listener: no llmEndpoint configured and no evaluator override set');

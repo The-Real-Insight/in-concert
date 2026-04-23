@@ -76,10 +76,17 @@ For deterministic testing — or for hosts that prefer to hit the Anthropic / Op
 import { AIListenerTrigger, getDefaultTriggerRegistry } from '@the-real-insight/in-concert/triggers';
 
 const plugin = getDefaultTriggerRegistry().get('ai-listener') as AIListenerTrigger;
-plugin.setCallTool(async (tool, _endpoint, _creds) => {
-  return await mcp.callTool(tool);
+// Both overrides receive the full trigger config as the fourth argument
+// (every `tri:*` attribute on the BPMN minus the connectorType discriminator).
+// Use it to forward parameter overwrites, offer type, locale, etc. to your
+// in-process tool runtime without a second round-trip to the schedule row.
+plugin.setCallTool(async (tool, _endpoint, _creds, config) => {
+  const overrides = config?.parameterOverwrites
+    ? JSON.parse(String(config.parameterOverwrites))
+    : undefined;
+  return await mcp.callTool(tool, overrides);
 });
-plugin.setEvaluate(async (prompt, context, _creds) => {
+plugin.setEvaluate(async (prompt, context, _creds, _config) => {
   const completion = await anthropic.messages.create({
     model: 'claude-opus-4-7',
     max_tokens: 20,
@@ -92,6 +99,12 @@ plugin.setEvaluate(async (prompt, context, _creds) => {
 ```
 
 When either override is set, the plugin skips the corresponding HTTP call entirely — the matching `tri:*` endpoint becomes optional (`llmEndpoint`) or is treated as metadata (`toolEndpoint`).
+
+### `config` argument
+
+The fourth argument to both overrides is the plugin-owned config bag — i.e. every attribute that `claimFromBpmn` kept after stripping the namespace prefix. For the bundled AI-listener that means `tool`, `toolEndpoint`, `prompt`, `llmEndpoint`, `pollIntervalSeconds`, `initialPolicy`, and any additional attributes the operator added on the BPMN (e.g. `parameterOverwrites`, `offerType`, `offerId`). The type is `Record<string, unknown>` because values are whatever the plugin chose to store — the engine never coerces.
+
+Existing implementations written for 0.2.x that only declare three parameters keep working unchanged; JavaScript ignores the extra argument at the call site and TypeScript sees the fourth as optional.
 
 ## Gotchas
 

@@ -255,4 +255,43 @@ describe('AI-listener trigger', () => {
       plugin.setEvaluate(null);
     }
   });
+
+  it('callTool and evaluate receive the full trigger config as the fourth argument', async () => {
+    const plugin = getDefaultTriggerRegistry().get('ai-listener');
+    if (!(plugin instanceof AIListenerTrigger)) throw new Error('unexpected plugin');
+
+    const capturedCallConfigs: Array<Record<string, unknown> | undefined> = [];
+    const capturedEvalConfigs: Array<Record<string, unknown> | undefined> = [];
+
+    plugin.setCallTool(async (_tool, _endpoint, _creds, config) => {
+      capturedCallConfigs.push(config);
+      return { ok: true };
+    });
+    plugin.setEvaluate(async (_prompt, _result, _creds, config) => {
+      capturedEvalConfigs.push(config);
+      return { decision: 'no' };
+    });
+
+    try {
+      await deployAIListenerProcess();
+      await fire();
+
+      expect(capturedCallConfigs).toHaveLength(1);
+      const callCfg = capturedCallConfigs[0]!;
+      // Schedule config carries every surviving tri:* attribute, minus the
+      // connectorType discriminator that claimFromBpmn stripped out.
+      expect(callCfg).toMatchObject({
+        tool: expect.any(String),
+        toolEndpoint: expect.any(String),
+        prompt: expect.any(String),
+      });
+      expect(callCfg!['connectorType']).toBeUndefined();
+
+      expect(capturedEvalConfigs).toHaveLength(1);
+      expect(capturedEvalConfigs[0]).toEqual(callCfg);
+    } finally {
+      plugin.setCallTool(null);
+      plugin.setEvaluate(null);
+    }
+  });
 });

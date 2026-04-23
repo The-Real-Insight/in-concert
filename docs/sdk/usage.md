@@ -2061,6 +2061,19 @@ plugin.setEvaluate(async (prompt, context) => {
 
 With `setEvaluate` wired, `tri:llmEndpoint` becomes optional and the plugin calls your function instead. Same pattern for `setCallTool` if you'd rather use an MCP SDK than raw HTTP for the tool half.
 
+Both `setCallTool` and `setEvaluate` also receive the full trigger config as a fourth argument — every surviving `tri:*` attribute from the BPMN minus the `connectorType` discriminator. Hosts that want to forward operator-authored parameter overwrites to their tool runtime read it from there:
+
+```typescript
+plugin.setCallTool(async (tool, _endpoint, _creds, config) => {
+  const overrides = config?.parameterOverwrites
+    ? JSON.parse(String(config.parameterOverwrites))
+    : undefined;
+  return await hostTools.invoke(tool, { partialParameters: overrides });
+});
+```
+
+Implementations written for 0.2.x remain source-compatible — the fourth parameter is optional, JavaScript ignores arguments declared functions don't use.
+
 ### SDK methods
 
 Standard trigger-schedule management applies uniformly:
