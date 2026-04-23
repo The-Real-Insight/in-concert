@@ -189,6 +189,7 @@ export class GraphMailboxTrigger implements StartTrigger {
         definitionId: invocation.definition.definitionId,
         businessKey: `email:${email.id}`,
         idempotencyKey,
+        tenantId: invocation.startingTenantId,
         deferContinuation: true,
       });
 

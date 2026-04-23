@@ -444,4 +444,38 @@ describe('SharePoint folder trigger — onFileReceived hook', () => {
     expect(bad?.status).toBe('TERMINATED');
     expect(ok?.status).not.toBe('TERMINATED');
   });
+
+  it('propagates schedule.startingTenantId to ProcessInstance.tenantId', async () => {
+    // Deploy, activate with a tenant, and verify the created instance
+    // carries the tenantId — required for host-side tenant-scoped lists.
+    const definitionId = await deploySharePointProcess();
+    await client.activateSchedules(definitionId, {
+      startingTenantId: 'tenant-xyz',
+      graphCredentials: { tenantId: 'x', clientId: 'x', clientSecret: 'x' },
+    });
+    // activateSchedules flipped status back to ACTIVE; re-arm so the
+    // interval-based claim picks it up on the next fire.
+    const { TriggerSchedules } = getCollections(db);
+    await TriggerSchedules.updateOne(
+      { definitionId },
+      { $set: { lastFiredAt: new Date(0) } },
+    );
+
+    deltaRequest
+      .mockResolvedValueOnce({ items: [], nextLink: undefined, deltaLink: 'link-0' })
+      .mockResolvedValueOnce({
+        items: [makeFile({ id: 'tenant-probe', name: 'doc.pdf' })],
+        nextLink: undefined,
+        deltaLink: 'link-1',
+      });
+
+    await fire();
+    await TriggerSchedules.updateOne({ definitionId }, { $set: { lastFiredAt: new Date(0) } });
+    await fire();
+
+    const { ProcessInstances } = getCollections(db);
+    const inst = await ProcessInstances.findOne({ definitionId }) as any;
+    expect(inst).toBeTruthy();
+    expect(inst.tenantId).toBe('tenant-xyz');
+  });
 });

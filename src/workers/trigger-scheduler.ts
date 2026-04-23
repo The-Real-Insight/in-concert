@@ -118,6 +118,7 @@ export async function fireClaimedSchedule(
     credentials: schedule.credentials,
     now: new Date(),
     db,
+    startingTenantId: schedule.startingTenantId,
   };
 
   let result: TriggerResult;

@@ -333,6 +333,7 @@ export class SharePointFolderTrigger implements StartTrigger {
         definitionId: invocation.definition.definitionId,
         businessKey: `sharepoint:${item.id}@${eTag}`,
         idempotencyKey,
+        tenantId: invocation.startingTenantId,
         deferContinuation: true,
       });
 

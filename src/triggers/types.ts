@@ -62,6 +62,19 @@ export type TriggerInvocation = {
   now: Date;
   /** Database handle for triggers that need it (rare — most use network APIs only). */
   db: Db;
+  /**
+   * The host/tenant that activated this schedule, propagated from
+   * `TriggerScheduleDoc.startingTenantId`. Plugins that create instances
+   * inline inside `fire()` (graph-mailbox, sharepoint-folder) MUST pass
+   * this as `startInstance({ tenantId })` so the resulting ProcessInstance
+   * inherits the originating tenant — otherwise host-side tenant-scoped
+   * queries (lists, dashboards, worklist filters) can't find the instance.
+   *
+   * Plugins that return `StartRequest[]` to the scheduler don't need to
+   * touch this — the generic `fireClaimedSchedule` path already propagates
+   * it when it calls `startInstance`.
+   */
+  startingTenantId?: string;
 };
 
 /** Result of one fire. Persisted atomically with any {@link starts}. */
