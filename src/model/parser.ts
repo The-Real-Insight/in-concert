@@ -284,6 +284,27 @@ function parseExtensionAttributesByNode(xml: string): Record<string, Record<stri
   return result;
 }
 
+/**
+ * Extract every non-reserved `<prefix>:<name>` attribute on each
+ * `<bpmn:sequenceFlow>` opening tag, keyed by flow id. The engine does not
+ * interpret these — handlers receive them verbatim in the CALLBACK_DECISION
+ * payload so they can author custom per-flow metadata in the BPMN
+ * (e.g. `acme:condition1`, `acme:weight`, `myco:explanation`) and read
+ * whatever they wrote at decision time.
+ */
+function parseFlowExtensionAttrs(xml: string): Record<string, Record<string, string>> {
+  const result: Record<string, Record<string, string>> = {};
+  const tagRe = /<bpmn:sequenceFlow\s+id="([^"]+)"([^>]*)>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(xml))) {
+    const flowId = m[1]!;
+    const attrs = m[2] ?? '';
+    const ext = extractNamespacedAttrs(attrs);
+    if (Object.keys(ext).length > 0) result[flowId] = ext;
+  }
+  return result;
+}
+
 export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   const moddle = new BpmnModdle();
   const { rootElement: definitions } = await moddle.fromXML(xml);
@@ -341,6 +362,7 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
   const startNodeIds: string[] = [];
   const subprocessStartNodeIds: Record<string, string[]> = {};
   const conditionByFlow = parseConditionExpressionsByFlow(xml);
+  const flowExtAttrs = parseFlowExtensionAttrs(xml);
   const messageAttrsByName = parseMessageAttrs(xml);
   const startEventSelfAttrs = parseStartEventSelfAttrs(xml);
   const extensionByNode = parseExtensionAttributesByNode(xml);
@@ -364,12 +386,14 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       if (type === 'bpmn:SequenceFlow') {
         const src = flowEl.sourceRef as { id?: string } | string | undefined;
         const tgt = flowEl.targetRef as { id?: string } | string | undefined;
+        const attrs = flowExtAttrs[flowEl.id];
         flows[flowEl.id] = {
           id: flowEl.id,
           sourceRef: (typeof src === 'object' ? src?.id : src) ?? '',
           targetRef: (typeof tgt === 'object' ? tgt?.id : tgt) ?? '',
           name: flowEl.name,
           conditionExpression: conditionByFlow[flowEl.id],
+          ...(attrs && Object.keys(attrs).length > 0 ? { selfAttrs: attrs } : {}),
         };
         continue;
       }

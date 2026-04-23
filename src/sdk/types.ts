@@ -169,6 +169,14 @@ export type DecisionTransition = {
   toNodeId?: string;
   targetNodeName?: string;
   targetNodeType?: string;
+  /**
+   * Extension attributes authored on the `<bpmn:sequenceFlow>` under any
+   * non-reserved namespace, keyed fully qualified (e.g. `acme:condition1`,
+   * `myco:weight`). The engine does not interpret these — your handler
+   * reads them and decides what they mean. Absent when the flow carries
+   * no extension attributes.
+   */
+  attrs?: Record<string, string>;
 };
 
 /** XOR gateway decision payload. Structured for LLM use with direct access to model strings. */

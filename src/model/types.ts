@@ -41,6 +41,15 @@ export type FlowDef = {
   name?: string;
   /** Condition expression from BPMN (e.g. \${approved}) for XOR routing. */
   conditionExpression?: string;
+  /**
+   * Extension attributes on the `<bpmn:sequenceFlow>` opening tag under any
+   * non-reserved namespace, keyed fully qualified (`<prefix>:<name>`, e.g.
+   * `acme:condition1`, `myco:weight`). The engine does not interpret these
+   * — it surfaces them so the `CALLBACK_DECISION` payload can forward them
+   * to the host's `onDecision` handler. Authors choose their own namespace
+   * and vocabulary.
+   */
+  selfAttrs?: Record<string, string>;
 };
 
 export type NormalizedGraph = {

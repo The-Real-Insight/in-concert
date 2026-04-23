@@ -9,6 +9,9 @@ Versions are published to npm automatically on push to `main`.
 
 ## [Unreleased]
 
+### Added
+- **Extension attributes on `<bpmn:sequenceFlow>` flow through to `onDecision`.** Previously the parser silently dropped any non-`condition` extension attribute on sequence flows. A BPMN like `<bpmn:sequenceFlow acme:condition1="x" acme:weight="0.7">…</bpmn:sequenceFlow>` now surfaces `{ 'acme:condition1': 'x', 'acme:weight': '0.7' }` on `flow.selfAttrs`, and the `CALLBACK_DECISION` payload carries them per-transition as `transition.attrs`. Same reserved-namespace rules as elsewhere (`bpmn`, `bpmndi`, `dc`, `di`, `xsi`, `xml`, `xmlns` excluded; everything else flows through verbatim). This was always the intent of the plugin contract; the parser gap was plumbing debt.
+
 ### Deprecated
 - **`tri:condition` and `tri:roleId` engine-interpreted attributes.** The engine's own attributes have moved to the `in-concert:` namespace (see Added). The legacy `tri:*` forms are still accepted — existing BPMN files parse unchanged — but new authoring should use `in-concert:condition` on sequence flows and `in-concert:roleId` on lanes/participants. Support for the legacy forms will be removed in a future major release; the migration is a find-and-replace.
 

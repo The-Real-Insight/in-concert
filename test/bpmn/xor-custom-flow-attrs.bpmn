@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:acme="http://acme.example.com/schema/bpmn"
+  id="Defs_FlowAttrs"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:exclusiveGateway id="Gw_1" default="Flow_Reject"/>
+    <bpmn:endEvent id="End_Approve"/>
+    <bpmn:endEvent id="End_Reject"/>
+
+    <bpmn:sequenceFlow id="Flow_0" sourceRef="Start_1" targetRef="Gw_1"/>
+    <bpmn:sequenceFlow id="Flow_Approve" sourceRef="Gw_1" targetRef="End_Approve"
+      name="Approve"
+      acme:condition1="amount_below_threshold"
+      acme:condition2="customer_tier_premium"
+      acme:explanation="Small orders from premium customers are auto-approved"/>
+    <bpmn:sequenceFlow id="Flow_Reject" sourceRef="Gw_1" targetRef="End_Reject"
+      name="Reject"
+      acme:explanation="Everything else goes to manual review"/>
+  </bpmn:process>
+
+</bpmn:definitions>

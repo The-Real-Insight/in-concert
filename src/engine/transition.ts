@@ -374,6 +374,7 @@ export function applyTransition(
             toNodeId,
             targetNodeName: targetNode?.name,
             targetNodeType: targetNode?.type,
+            ...(f.selfAttrs ? { attrs: f.selfAttrs } : {}),
           };
         });
         outbox.push({

@@ -211,6 +211,52 @@ describe('parseBpmnXml', () => {
     expect(graph.nodes['Task_A']?.roleId).toBe('role-canonical-a');
   });
 
+  it('captures arbitrary extension attributes on sequence flows into selfAttrs', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:acme="http://acme.example.com/schema/bpmn"
+  xmlns:myco="http://myco.example.com/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:exclusiveGateway id="Gw_1"/>
+    <bpmn:endEvent id="End_A"/>
+    <bpmn:endEvent id="End_B"/>
+    <bpmn:sequenceFlow id="Flow_0" sourceRef="Start_1" targetRef="Gw_1"/>
+    <bpmn:sequenceFlow id="Flow_A" sourceRef="Gw_1" targetRef="End_A"
+      name="Approve"
+      acme:condition1="amount_below_threshold"
+      acme:condition2="customer_tier in [gold, platinum]"
+      myco:weight="0.7"/>
+    <bpmn:sequenceFlow id="Flow_B" sourceRef="Gw_1" targetRef="End_B" name="Reject"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.flows['Flow_A']?.selfAttrs).toEqual({
+      'acme:condition1': 'amount_below_threshold',
+      'acme:condition2': 'customer_tier in [gold, platinum]',
+      'myco:weight': '0.7',
+    });
+    // A flow without any extension attributes has no selfAttrs — the
+    // field stays absent to avoid noisy empty bags.
+    expect(graph.flows['Flow_B']?.selfAttrs).toBeUndefined();
+  });
+
+  it('flow extension attrs exclude reserved namespaces (bpmn, xmlns, xsi, …)', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:acme="http://acme.example.com/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="End_1"
+      acme:foo="bar"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.flows['Flow_1']?.selfAttrs).toEqual({ 'acme:foo': 'bar' });
+    // No bpmn:*, xmlns:*, xsi:* attrs should have leaked in.
+  });
+
   it('in-concert:roleId wins over tri:roleId when both are present on a lane', async () => {
     const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
