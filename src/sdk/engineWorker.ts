@@ -132,28 +132,48 @@ export class EngineWorker {
   /**
    * Spawn an instance-worker for `instanceId` if one is not already running.
    * Honors `InstanceOwnership`: returns early if ownership declines.
+   *
+   * Reservation is SYNCHRONOUS: we set `inFlight` before any `await`, so two
+   * parallel callers (e.g. the change stream firing on the START insert and
+   * `awaitQuiescent` from `client.run()`) cannot both pass the guard and
+   * spawn duplicate workers for the same instance. If duplicates did spawn,
+   * they would race on `claimContinuation`; the loser would get null on a
+   * fresh instance, call `notifyWaiters`, and resolve `run()` before the
+   * winner dispatched any task. The caller would then see an empty worklist,
+   * detach, and clear run context before the first callback fires.
    */
-  private async ensureInstanceWorker(instanceId: string): Promise<void> {
+  private ensureInstanceWorker(instanceId: string): void {
     if (this.inFlight.has(instanceId)) return;
     if (this.inFlight.size >= this.poolCap) {
       // Pool full. The fallback poll (or the next change event) will retry;
       // the waiter stays registered.
       return;
     }
+    const promise = this.runWithOwnership(instanceId).finally(() => {
+      this.inFlight.delete(instanceId);
+    });
+    this.inFlight.set(instanceId, promise);
+  }
+
+  /**
+   * Run ownership acquisition + instance-worker + release. Wrapped so that
+   * `ensureInstanceWorker` can set `inFlight` synchronously before the first
+   * await (inside `shouldProcess`).
+   */
+  private async runWithOwnership(instanceId: string): Promise<void> {
     const decision = await this.ownership.shouldProcess(instanceId);
     if (decision !== 'process') return;
     await this.ownership.onClaim(instanceId);
-
-    const promise = this.runInstanceWorker(instanceId).finally(async () => {
-      this.inFlight.delete(instanceId);
+    try {
+      await this.runInstanceWorker(instanceId);
+    } finally {
       try {
         await this.ownership.onRelease(instanceId);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error('[in-concert] ownership.onRelease failed:', err);
       }
-    });
-    this.inFlight.set(instanceId, promise);
+    }
   }
 
   /**

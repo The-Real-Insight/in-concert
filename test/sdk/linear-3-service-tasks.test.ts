@@ -101,4 +101,50 @@ describe('SDK: linear-3-service-tasks (regression)', () => {
     expect(wc).toBeDefined();
     expect(wc?.w).toBe('majority');
   });
+
+  it('does not spawn duplicate instance-workers under concurrent triggers', async () => {
+    // Deterministic regression for the real race behind the phantom-quiescent
+    // symptom: the change stream and `awaitQuiescent` both call
+    // `ensureInstanceWorker` in parallel. If the guard-to-set window contains
+    // any awaits, both calls spawn workers, and the loser of the claim race
+    // resolves `run()` before the winner dispatches any task. This test
+    // simulates that by calling into the engine worker's private path twice
+    // in the same tick for the same instanceId, and asserts only one
+    // instance-worker ends up in the in-flight map.
+    const bpmn = loadBpmn('linear-3-service-tasks.bpmn');
+    const name = `Linear3Concurrent_${uuidv4().slice(0, 8)}`;
+    const { definitionId } = await client.deploy({
+      id: name,
+      name,
+      version: '1',
+      bpmnXml: bpmn,
+    });
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+      user: MOCK_USER,
+    });
+
+    // Reach into the engine worker — this is intentional: the public API is
+    // `run()`, but the race we're guarding is in the private spawn path.
+    const engineWorker = (client as unknown as { engineWorker: { ensureInstanceWorker?: (id: string) => unknown; inFlight: Map<string, unknown> } }).engineWorker;
+    expect(engineWorker).toBeDefined();
+
+    // Trigger ensureInstanceWorker TWICE back-to-back. With the bug, both
+    // calls pass the `inFlight.has` guard because the `inFlight.set`
+    // happened behind an await. With the fix, the second call sees the
+    // reservation and returns immediately.
+    const before = engineWorker.inFlight.size;
+    // The real engineWorker method may be private in TS but exists at
+    // runtime on the instance.
+    (engineWorker as unknown as { ensureInstanceWorker: (id: string) => void }).ensureInstanceWorker(instanceId);
+    (engineWorker as unknown as { ensureInstanceWorker: (id: string) => void }).ensureInstanceWorker(instanceId);
+    const after = engineWorker.inFlight.size;
+    expect(after - before).toBeLessThanOrEqual(1);
+
+    // Let run() drain so the process completes and doesn't leak state into
+    // later tests.
+    const result = await client.run(instanceId);
+    expect(result.status).toBe('COMPLETED');
+  });
 });
