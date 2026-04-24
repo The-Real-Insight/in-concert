@@ -169,29 +169,65 @@ export class EngineWorker {
     const { broadcastAll } = await import('../ws/broadcast');
     const { markOutboxSent } = await import('../workers/outbox-dispatcher');
 
+    const { getCollections } = await import('../db/collections');
+    const { Continuations } = getCollections(this.db);
+
     try {
       // eslint-disable-next-line no-console
       console.log('[engineWorker] runInstanceWorker: enter', { instanceId });
       let iter = 0;
-      // Bounded retry window for the self-write visibility gap: when a
-      // previous iteration's handler inserted a follow-up continuation (e.g.
-      // `completeExternalTask` → WORK_COMPLETED, or `processContinuation`'s
-      // transactional insertion of TOKEN_AT_NODE), the immediately-next
-      // `findOneAndUpdate` often misses it on Atlas-style replica sets even
-      // though both calls target the primary. Poll briefly before concluding
-      // the instance is quiescent. 500 ms is well above the observed gap
-      // (<100 ms) and still fast enough to not stall user-waiting tasks.
-      const quiescenceRetryMaxMs = 500;
+      // Bounded retry window for the self-write visibility gap: on Atlas
+      // replica sets a just-committed continuation isn't always immediately
+      // visible to an in-process `findOneAndUpdate`, even though both calls
+      // target the primary. We've observed gaps up to ~1 s for the initial
+      // START after `startInstance`, so the window has to be generous enough
+      // to cover that while still letting user-waiting tasks (real quiescent
+      // state) return promptly.
+      //
+      // Exit-early rule: if during the retry we confirm the instance is
+      // terminal (COMPLETED/TERMINATED/FAILED), stop waiting — no future
+      // continuation can appear.
+      const quiescenceRetryMaxMs = 3_000;
       const quiescenceRetryStepMs = 25;
       while (!this.stopped) {
         let cont = await claimContinuation(this.db, { instanceId });
         if (!cont) {
-          // Before declaring quiescent, allow a short window for a
-          // just-committed follow-up continuation to become visible.
+          // Diagnose: does the row actually exist in the DB even though
+          // claim can't find it? If so, we have a claim/lease problem
+          // (different class of bug from visibility).
+          const readyCount = await Continuations.countDocuments({
+            instanceId,
+            status: 'READY',
+          });
+          const inProgressCount = await Continuations.countDocuments({
+            instanceId,
+            status: 'IN_PROGRESS',
+          });
+          // eslint-disable-next-line no-console
+          console.log('[engineWorker] runInstanceWorker: claim returned null', {
+            instanceId,
+            iter,
+            readyCount,
+            inProgressCount,
+          });
+
           const started = Date.now();
           while (!cont && Date.now() - started < quiescenceRetryMaxMs) {
             await new Promise((r) => setTimeout(r, quiescenceRetryStepMs));
+            // Early exit: don't keep polling a terminal instance.
+            const statusDoc = await getInstance(this.db, instanceId);
+            const status = statusDoc?.status;
+            if (status && status !== 'RUNNING') break;
             cont = await claimContinuation(this.db, { instanceId });
+          }
+          if (cont) {
+            // eslint-disable-next-line no-console
+            console.log('[engineWorker] runInstanceWorker: retry claimed', {
+              instanceId,
+              iter,
+              afterMs: Date.now() - started,
+              kind: (cont as { kind?: string }).kind,
+            });
           }
         }
         if (!cont) {
@@ -227,8 +263,6 @@ export class EngineWorker {
         // a newly-inserted follow-up continuation is visible to the next
         // claim — Mongo transaction commit vs read-visibility races are the
         // most likely cause of a spurious "quiescent" here.
-        const { getCollections } = await import('../db/collections');
-        const { Continuations } = getCollections(this.db);
         const contsAfter = await Continuations.find(
           { instanceId },
           { projection: { _id: 1, kind: 1, status: 1, dueAt: 1 } }
