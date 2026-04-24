@@ -93,7 +93,16 @@ export async function processContinuation(
   let outboxWithIds: OutboxDoc[] = [];
   const session = db.client.startSession();
   try {
-    await session.withTransaction(async () => {
+    // writeConcern: 'majority' is load-bearing for cross-session
+    // read-your-writes on follow-up continuations. Transactions use their
+    // own write concern, bypassing collection-level defaults, so we pin it
+    // explicitly here: when this transaction commits a follow-up
+    // WORK_COMPLETED/new-task continuation, the next `claimContinuation`
+    // in the instance-worker loop (or in a separate process) is guaranteed
+    // to see it via its `readConcern: 'majority'` read. Pair mirrors the
+    // one on `startInstance`.
+    await session.withTransaction(
+      async () => {
       const opts = { session };
       const numEvents = result.events.length;
 
@@ -178,7 +187,9 @@ export async function processContinuation(
         { $set: { status: 'DONE', updatedAt: now } },
         opts
       );
-    });
+      },
+      { writeConcern: { w: 'majority' }, readConcern: { level: 'majority' } }
+    );
     return { outbox: outboxWithIds, events: result.events };
   } finally {
     await session.endSession();
