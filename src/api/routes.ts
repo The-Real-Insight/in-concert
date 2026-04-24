@@ -128,6 +128,44 @@ apiRouter.get('/v1/instances/:instanceId', async (req: Request, res: Response) =
   }
 });
 
+/**
+ * Attach or update host-supplied metadata on a ProcessInstance.
+ * Body: { conversationId?: string, tenantId?: string }. Unset fields are
+ * ignored; the document is never cleared by omission.
+ */
+apiRouter.patch('/v1/instances/:instanceId/metadata', async (req: Request, res: Response) => {
+  try {
+    const { conversationId, tenantId } = (req.body ?? {}) as {
+      conversationId?: string;
+      tenantId?: string;
+    };
+    const set: Record<string, unknown> = {};
+    if (typeof conversationId === 'string' && conversationId.length > 0) {
+      set.conversationId = conversationId;
+    }
+    if (typeof tenantId === 'string' && tenantId.length > 0) {
+      set.tenantId = tenantId;
+    }
+    if (Object.keys(set).length === 0) {
+      res.json({ updated: true }); // no-op is a successful request
+      return;
+    }
+    const db = getDb();
+    const { ProcessInstances } = getCollections(db);
+    const result = await ProcessInstances.updateOne(
+      { _id: req.params.instanceId } as any,
+      { $set: set },
+    );
+    if (result.matchedCount === 0) {
+      res.status(404).json({ error: 'Instance not found' });
+      return;
+    }
+    res.json({ updated: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Set instance metadata failed' });
+  }
+});
+
 /** Purge an instance and the transitive closure of its child instances. */
 apiRouter.delete('/v1/instances/:instanceId', async (req: Request, res: Response) => {
   try {
@@ -581,6 +619,7 @@ apiRouter.get('/v1/trigger-schedules', async (req: Request, res: Response) => {
     if (req.query.definitionId) filter.definitionId = req.query.definitionId;
     if (req.query.status) filter.status = req.query.status;
     if (req.query.triggerType) filter.triggerType = req.query.triggerType;
+    if (req.query.startingTenantId) filter.startingTenantId = req.query.startingTenantId;
     const items = await TriggerSchedules.find(filter).sort({ createdAt: -1 }).toArray();
     res.json({ items });
   } catch (err) {
@@ -592,7 +631,13 @@ apiRouter.get('/v1/trigger-schedules/:scheduleId', async (req: Request, res: Res
   try {
     const db = getDb();
     const { TriggerSchedules } = getCollections(db);
-    const doc = await TriggerSchedules.findOne({ _id: req.params.scheduleId });
+    // Look up by the public `scheduleId` field (the stable id hosts receive
+    // from the list endpoint). Fall back to `_id` to tolerate legacy callers
+    // that sent the Mongo _id; both fields hold the same value on rows created
+    // by the current `syncTriggerSchedules` path.
+    const doc =
+      (await TriggerSchedules.findOne({ scheduleId: req.params.scheduleId })) ??
+      (await TriggerSchedules.findOne({ _id: req.params.scheduleId }));
     if (!doc) {
       res.status(404).json({ error: 'Trigger schedule not found' });
       return;

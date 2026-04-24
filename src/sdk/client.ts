@@ -215,6 +215,44 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Attach or update host-supplied metadata on an existing `ProcessInstance`:
+   * `conversationId` (so later callbacks can resolve the host's conversation
+   * back from the instance) and `tenantId` (backfill for legacy instances
+   * whose trigger didn't propagate `startingTenantId` at creation time).
+   *
+   * Preferred over hosts reaching into the `ProcessInstance` collection via
+   * the shared DB — the document shape is an internal contract that may
+   * evolve. Returns `true` if the row existed and was updated, `false` if
+   * no row matched `instanceId`.
+   */
+  async setInstanceMetadata(
+    instanceId: string,
+    metadata: { conversationId?: string; tenantId?: string },
+  ): Promise<boolean> {
+    const set: Record<string, unknown> = {};
+    if (metadata.conversationId != null) set.conversationId = metadata.conversationId;
+    if (metadata.tenantId != null) set.tenantId = metadata.tenantId;
+    if (Object.keys(set).length === 0) return true; // nothing to write
+    if (this.config.mode === 'rest') {
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/instances/${encodeURIComponent(instanceId)}/metadata`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(metadata),
+        },
+      );
+      if (res.status === 404) return false;
+      if (!res.ok) throw new Error(`Set instance metadata failed: ${res.status}`);
+      return true;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { ProcessInstances } = getCollections(this.config.db);
+    const result = await ProcessInstances.updateOne({ _id: instanceId } as any, { $set: set });
+    return result.matchedCount > 0;
+  }
+
+  /**
    * Purge an instance and the full transitive closure of its descendant
    * instances (children from call activities, grandchildren, etc.) together
    * with all dependent rows: ProcessInstance, ProcessInstanceState,
@@ -838,12 +876,21 @@ export class BpmnEngineClient {
     definitionId?: string;
     status?: string;
     triggerType?: string;
+    /**
+     * Filter to schedules activated by a specific tenant. Matches rows whose
+     * `startingTenantId` equals this value. Rows with no `startingTenantId`
+     * (legacy) are excluded — hosts that need those should pass `null` (not
+     * supported today; reserved for a future per-tenant schedules change,
+     * see in-concert#7).
+     */
+    startingTenantId?: string;
   }): Promise<import('../db/collections').TriggerScheduleDoc[]> {
     if (this.config.mode === 'rest') {
       const q = new URLSearchParams();
       if (params?.definitionId) q.set('definitionId', params.definitionId);
       if (params?.status) q.set('status', params.status);
       if (params?.triggerType) q.set('triggerType', params.triggerType);
+      if (params?.startingTenantId) q.set('startingTenantId', params.startingTenantId);
       const res = await fetch(`${this.config.baseUrl}/v1/trigger-schedules?${q}`);
       if (!res.ok) throw new Error(`List trigger schedules failed: ${res.status}`);
       const json = (await res.json()) as {
@@ -857,7 +904,37 @@ export class BpmnEngineClient {
     if (params?.definitionId) filter.definitionId = params.definitionId;
     if (params?.status) filter.status = params.status;
     if (params?.triggerType) filter.triggerType = params.triggerType;
+    if (params?.startingTenantId) filter.startingTenantId = params.startingTenantId;
     return TriggerSchedules.find(filter).sort({ createdAt: -1 }).toArray();
+  }
+
+  /**
+   * Fetch a single trigger schedule by its public `scheduleId`. Returns
+   * `null` if no schedule with that id exists. Preferred over reaching
+   * into Mongo directly from host code — the schedule's document shape
+   * is an internal contract that may evolve across releases.
+   */
+  async getTriggerSchedule(
+    scheduleId: string,
+  ): Promise<import('../db/collections').TriggerScheduleDoc | null> {
+    if (this.config.mode === 'rest') {
+      const res = await fetch(
+        `${this.config.baseUrl}/v1/trigger-schedules/${encodeURIComponent(scheduleId)}`,
+      );
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Get trigger schedule failed: ${res.status}`);
+      return (await res.json()) as import('../db/collections').TriggerScheduleDoc;
+    }
+    const { getCollections } = await import('../db/collections');
+    const { TriggerSchedules } = getCollections(this.config.db);
+    // Match on public scheduleId; fall back to _id for callers passing the
+    // Mongo id (they're equal on current rows, but keeping both accepted is
+    // kinder to legacy code paths).
+    return (
+      (await TriggerSchedules.findOne({ scheduleId })) ??
+      (await TriggerSchedules.findOne({ _id: scheduleId })) ??
+      null
+    );
   }
 
   /**
