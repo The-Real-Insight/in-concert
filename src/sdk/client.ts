@@ -883,6 +883,15 @@ export class BpmnEngineClient {
           const excludeInstanceIds = options?.getExcludedInstanceIds?.() ?? [];
           const cont = await claimContinuation(db, { excludeInstanceIds });
           if (cont) {
+            // eslint-disable-next-line no-console
+            console.log('[in-concert] subscribe claimed', {
+              instanceId: (cont as { instanceId?: string }).instanceId,
+              kind: (cont as { kind?: string }).kind,
+              excludeCount: excludeInstanceIds.length,
+              excluded: excludeInstanceIds.includes(
+                (cont as { instanceId: string }).instanceId,
+              ),
+            });
             const { outbox, events } = await processContinuation(db, cont);
             broadcastAll(outbox, events);
             if (outbox.length > 0) {
