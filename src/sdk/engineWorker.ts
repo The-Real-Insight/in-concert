@@ -196,6 +196,34 @@ export class EngineWorker {
         iter++;
 
         const { outbox, events } = await processContinuation(this.db, cont);
+        // eslint-disable-next-line no-console
+        console.log('[engineWorker] runInstanceWorker: processed', {
+          instanceId,
+          kind: (cont as { kind?: string }).kind,
+          outboxCount: outbox.length,
+          outboxKinds: outbox.map((o) => o.kind),
+          eventTypes: events.map((e) => e.type),
+        });
+        // Snapshot the DB state right after processing so we can tell whether
+        // a newly-inserted follow-up continuation is visible to the next
+        // claim — Mongo transaction commit vs read-visibility races are the
+        // most likely cause of a spurious "quiescent" here.
+        const { getCollections } = await import('../db/collections');
+        const { Continuations } = getCollections(this.db);
+        const contsAfter = await Continuations.find(
+          { instanceId },
+          { projection: { _id: 1, kind: 1, status: 1, dueAt: 1 } }
+        ).toArray();
+        // eslint-disable-next-line no-console
+        console.log('[engineWorker] runInstanceWorker: continuations after processed', {
+          instanceId,
+          rows: contsAfter.map((c) => ({
+            id: (c as { _id: string })._id,
+            kind: (c as { kind: string }).kind,
+            status: (c as { status: string }).status,
+            dueAt: (c as { dueAt: Date }).dueAt,
+          })),
+        });
         broadcastAll(outbox, events);
         if (outbox.length > 0) {
           await markOutboxSent(this.db, outbox.map((o) => o._id));
