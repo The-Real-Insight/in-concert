@@ -30,6 +30,27 @@
 
 ## What's new
 
+### Singleton engine worker — one claim loop, no races
+
+**Breaking change in local mode.** Every entry point that advanced a process — `run()`, `recover()`, the trigger scheduler, the outbox dispatcher — used to own its own claim loop against the continuation queue. Under load, two loops live at once could race for the same row; the engine's version-conflict path handled it correctly on paper, but the races surfaced in the wild as duplicate callbacks, missed dispatches, and intermittent test failures that *looked* like engine bugs and weren't.
+
+The new release collapses all claim-and-dispatch into **one worker per client**, subscribed to a Mongo change stream for low-latency delivery and a fallback poll for delayed work and stream gaps. `run(instanceId)` no longer claims — it registers a waiter with the worker and awaits the quiescence signal. No read-after-write games, no exclusion lists, no simultaneous claimers.
+
+```typescript
+// Before (0.3.x and earlier):
+engine.init({ onServiceCall, onWorkItem, onDecision });
+await engine.run(instanceId);
+
+// After (current):
+engine.init({ onServiceCall, onWorkItem, onDecision });
+engine.startEngineWorker();         // ← required before run() in local mode
+await engine.run(instanceId);
+// graceful shutdown:
+await engine.stopEngineWorker();
+```
+
+REST mode is unaffected — the in-concert server runs its own worker. The legacy `processUntilComplete()` still works for self-contained test scripts and tools that don't want a long-lived worker. The two patterns must not be mixed on the same instance in the same process. [Full migration + reference](./docs/sdk/usage.md#recoveroptions)
+
 ### Transparent engine — your BPMN extension attributes flow straight to your plugins
 
 **What stayed hard-coded inside the library for too long now belongs to the plugin.** Before this release, adding a new extension attribute to your BPMN — or an entirely new start-trigger type — meant cutting a library release: the parser knew the attribute names, the deploy path knew how to reshape them, the SDK's `extractEvents` had a hard-coded `'timer' | 'connector'` split. That's gone.

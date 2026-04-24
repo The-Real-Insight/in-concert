@@ -10,6 +10,22 @@ Versions are published to npm automatically on push to `main`.
 ## [Unreleased]
 
 ### Changed (breaking)
+- **Singleton engine worker — `startEngineWorker()` required before `run()` in local mode.** Every entry point that advanced a process — `run()`, `recover()`, the trigger scheduler, the outbox dispatcher — used to own its own claim loop against `Continuations`. Two loops live at once could race for the same row, with one attempt rolling back via the version-conflict path. Under load the races manifested as duplicate callbacks, missed dispatches, and flaky tests that looked like engine bugs but were orchestration bugs. The singleton refactor collapses all claim-and-dispatch into one worker per client (`EngineWorker`), subscribed to a Mongo change stream for low-latency delivery and a fallback poll for delayed work / stream gaps. `run(instanceId)` now registers a waiter with the worker and awaits its quiescence signal — no claim loop there, no exclusion lists, no read-after-write games. Consequence for consumers:
+
+  ```typescript
+  // Before:
+  engine.init(handlers);
+  await engine.run(instanceId);
+
+  // After:
+  engine.init(handlers);
+  engine.startEngineWorker();     // required — run() throws without it
+  await engine.run(instanceId);
+  // on graceful shutdown:
+  await engine.stopEngineWorker();
+  ```
+
+  `run(instanceId, handlers, options)` keeps its pre-singleton signature for source compatibility but **both extra arguments are ignored** — the worker uses the `init()` handlers, and there's no `maxIterations` to cap (the worker runs until `stopEngineWorker()`). Passing `handlers` logs a console warning. Legacy `processUntilComplete` still works (owns its own inline claim loop, no worker required) and is kept for self-contained scripts; **do not mix it with the singleton worker on the same instance** — that reopens the race the worker was built to avoid. REST mode is unaffected; the in-concert server runs its own worker. See the "Standard startup pattern" in [`docs/sdk/usage.md`](./docs/sdk/usage.md#recoveroptions) for the full migration.
 - **Per-tenant `TriggerSchedule` rows** ([issue #7](https://github.com/The-Real-Insight/in-concert/issues/7)). The unique index on `TriggerSchedule` moves from `(definitionId, startEventId)` to `(definitionId, startEventId, startingTenantId)`. A single workflow definition may now have one schedule row per start event **per tenant** — the owner tenant (the `tenantId` passed to `deploy`) gets its row at deploy time, and procurer tenants get their own cloned rows the first time they call `activateSchedules(definitionId, { startingTenantId })`. Cloned rows start from the owner's current config, overlay the call's `configOverrides`, and reset runtime state (`cursor: null`, `credentials: null`, `status: 'PAUSED'` unless the plugin sets `deployStatus`). Tenants run independently from then on: separate credentials, cursor, fire history, pause/resume state. **Redeploy is owner-scoped**: overwriting a definition rewrites the owner's row and prunes orphans *only under the owner's `startingTenantId`* — procurer rows are left alone, so a procurer's `configOverrides` survive every owner redeploy. **Deactivate is tenant-scoped**: `deactivateSchedules(definitionId, { startingTenantId })` pauses only the caller's row; omitting the option reverts to the legacy bulk behaviour and pauses every row for the definition. Legacy single-tenant deploys (no `tenantId` passed to `deploy`) continue to produce one row with `startingTenantId` unset, and legacy `activateSchedules(definitionId)` / `deactivateSchedules(definitionId)` calls still match that row by absence of the field. The old `definitionId_1_startEventId_1` index is dropped at `ensureIndexes` time; hosts that pinned against it must re-run startup to pick up the new shape. Migration is expected to be no-op for existing single-tenant installs; multi-tenant installs that already had the legacy index collide with per-tenant rows should drop and reseed before upgrading.
 
 ### Added

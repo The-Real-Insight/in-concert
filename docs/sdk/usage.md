@@ -23,9 +23,10 @@ Same API in both modes; switch with config.
   - [Constructor](#constructor) · [init](#initconfig) · [getServiceVocabulary](#getservicevocabulary) · [extractEvents](#extractevents-bpmnxml-) · [deploy](#deployparams) · [startInstance](#startinstanceparams) · [getInstance](#getinstanceinstanceid) · [purgeInstance](#purgeinstanceinstanceid) · [getState](#getstateinstanceid)
   - [completeUserTask](#completeusertaskinstanceid-workitemid-options) · [completeExternalTask](#completeexternaltaskinstanceid-workitemid-options) · [completeWorkItem](#completeworkiteminstanceid-workitemid-options)
   - [activateSchedules](#activateschedulesdefinitionid-options) · [deactivateSchedules](#deactivateschedulesdefinitionid) · [recover](#recoveroptions)
+  - [startEngineWorker](#startengineworkeroptions) · [stopEngineWorker](#stopengineworker) · [run](#runinstanceid)
 - [Callbacks for User Tasks and Service Tasks](#callbacks-for-user-tasks-and-service-tasks)
   - [User Tasks](#user-tasks) · [Service Tasks](#service-tasks-push-based-no-polling)
-  - [submitDecision](#submitdecisioninstanceid-decisionid-options) · [processUntilComplete](#processuntilcompleteinstanceid-handlers-options) · [subscribeToCallbacks](#subscribetocallbackscallback) · [startTriggerScheduler](#starttriggerscheduleroptions)
+  - [submitDecision](#submitdecisioninstanceid-decisionid-options) · [processUntilComplete (legacy)](#processuntilcompleteinstanceid-handlers-options--legacy) · [subscribeToCallbacks](#subscribetocallbackscallback) · [startTriggerScheduler](#starttriggerscheduleroptions)
 - [Example: Linear Process](#example-linear-process-local-mode)
 - [Example: XOR Gateway](#example-xor-gateway-local-mode)
 - [When to Use Each Mode](#when-to-use-each-mode)
@@ -423,9 +424,9 @@ await client.deactivateSchedules(definitionId);
 
 ### recover(options?)
 
-Restore in-flight work after a server restart. Local mode only.
+Restore in-flight work after a server restart, then hand off to the singleton engine worker. Local mode only.
 
-`recover()` is the engine's crash-recovery entry point. Call it **once at server startup**, after `init()` and before the first `run()`. It resumes anything the previous process was doing: continuations that were mid-step, callbacks that were persisted but never delivered, tokens sitting in the queue.
+`recover()` is the engine's crash-recovery entry point. It reclaims stuck continuations, re-dispatches outbox callbacks that committed but weren't delivered, and drains the queue synchronously. **It does not replace the engine worker** — under the singleton-worker model (current), you call `startEngineWorker()` right after `recover()` to take over ongoing claim-and-dispatch for all future work.
 
 #### Standard startup pattern
 
@@ -439,18 +440,35 @@ engine.init({
   onDecision,
 });
 
-// 2. Resume whatever the previous process left behind.
+// 2. (Optional but recommended) Crash recovery before the worker claims
+//    anything: sweep expired leases, re-dispatch orphaned outbox rows,
+//    drain pending continuations with the init handlers.
 await engine.recover();
 
-// 3. From here, business as usual.
-//    - User-initiated starts:
+// 3. Start the singleton engine worker. After this point, ALL continuation
+//    claiming and callback dispatch happens in one place — no race between
+//    multiple claim loops (triggers, run(), recover()). Required before
+//    any run() call.
+engine.startEngineWorker();
+
+// 4. Drive individual instances. run() registers interest with the worker
+//    and awaits its "instance quiescent" signal (terminal status OR no
+//    more claimable work for this instance).
 await engine.run(instanceId);
-//    - Timer / connector schedules call run() internally.
+
+// 5. On graceful shutdown, drain in-flight work:
+await engine.stopEngineWorker();
 ```
+
+#### Why `startEngineWorker()` exists
+
+Before the singleton refactor, every entry point that needed to advance a process — `run()`, `recover()`, the trigger scheduler, the outbox dispatcher — owned its own claim loop. Two of them running at once could claim the same continuation row and race through `processContinuation`, with one attempt rolling back via the version-conflict path. Under load, the races manifested as duplicate callbacks, missed dispatches, and flaky test flakiness that looked like engine bugs but were orchestration bugs.
+
+The singleton worker collapses all claim-and-dispatch into one loop per client, subscribed to a Mongo change stream so new continuations are processed as soon as they're visible (with a fallback poll for delayed/timer work and stream gaps). `run()` doesn't claim anymore — it registers a waiter with the worker and resolves when the worker signals the instance is quiescent.
 
 #### Handlers are required
 
-`recover()` can re-deliver `onServiceCall`, `onWorkItem`, `onDecision`, and `onMultiInstanceResolve` callbacks for work that was in flight when the previous process died. Without handlers, those callbacks would be silently dropped — so `recover()` **throws** if neither `init()` nor `options.handlers` provides them.
+`recover()` can re-deliver `onServiceCall`, `onWorkItem`, `onDecision`, and `onMultiInstanceResolve` callbacks for work that was in flight when the previous process died. Without handlers, those callbacks would be silently dropped — so `recover()` **throws** if neither `init()` nor `options.handlers` provides them. `startEngineWorker()` similarly requires `init()` to have been called first.
 
 ```typescript
 // Uses init handlers
@@ -756,9 +774,89 @@ Pick any namespace prefix — `acme:`, `myco:`, `tri:`, whatever suits your voca
 
 ---
 
-### processUntilComplete(instanceId, handlers?, options?)
+### startEngineWorker(options?)
 
-Process until instance reaches a terminal state. **Local mode only.** Uses handlers from `init()` when omitted. Invokes handlers for each callback—no polling.
+Start the in-process continuation worker. **Local mode only.** In REST mode this is a no-op — the in-concert server runs its own worker loop.
+
+Call once at server start, after `init()`, before any `run()`. The worker is a singleton per client instance: it owns all continuation claiming and callback dispatch. Safe to call more than once (idempotent).
+
+```typescript
+engine.init({ onServiceCall, onWorkItem, onDecision });
+engine.startEngineWorker();
+// ...later:
+await engine.run(instanceId);
+```
+
+#### Options
+
+| Field | Default | Meaning |
+|---|---|---|
+| `fallbackPollMs` | `5000` | How often the worker scans for delayed work (due timers) and covers any change-stream gaps. The primary delivery path is the Mongo change stream; the poll is a safety net. |
+| `poolCap` | `16` | Max concurrent instance-workers. Caps parallelism across different instance ids. |
+| `ownership` | `SingleServerOwnership` | Per-server ownership policy. The default accepts every candidate (suitable for single-server deployments). Swap in a DB-backed implementation to coordinate claims across multiple server processes. |
+
+```typescript
+engine.startEngineWorker({
+  fallbackPollMs: 2000,
+  poolCap: 32,
+});
+```
+
+#### Throws
+
+- If `init()` was not called first.
+
+---
+
+### stopEngineWorker()
+
+Stop the in-process continuation worker, draining any in-flight instance-workers to completion. Idempotent — no-op if never started or already stopped. **Local mode only.**
+
+```typescript
+process.on('SIGTERM', async () => {
+  await engine.stopEngineWorker();
+  process.exit(0);
+});
+```
+
+Returns after every instance-worker currently processing has reached quiescence — it will not interrupt a handler mid-call.
+
+---
+
+### run(instanceId)
+
+Run the given instance until it reaches a terminal state (`COMPLETED`/`TERMINATED`/`FAILED`) or becomes quiescent (waiting at a user task, timer, or message). **Local mode only. Requires `startEngineWorker()` first.**
+
+Internally this registers a waiter with the engine worker and awaits its quiescence signal — no claim loop is owned here, no race against the singleton dispatcher.
+
+```typescript
+const { status } = await engine.run(instanceId);
+// status === 'COMPLETED' | 'TERMINATED' | 'FAILED' | 'RUNNING'
+//   'RUNNING' means quiescent: waiting for external input (user task,
+//   timer, message), not finished.
+```
+
+#### Migration from pre-singleton code
+
+The signature accepts legacy `handlers` and `options` arguments for source compatibility, but **both are ignored**:
+
+| Argument | Old behavior | New behavior |
+|---|---|---|
+| `handlers` | Override per call | Ignored; worker uses the `init()` handlers. Passing it logs a console warning. |
+| `options.maxIterations` | Cap the claim loop | Ignored; there is no claim loop here. The worker runs indefinitely until `stopEngineWorker()`. |
+
+#### Throws
+
+- If called in REST mode.
+- If `startEngineWorker()` hasn't been called.
+
+---
+
+### processUntilComplete(instanceId, handlers?, options?) — legacy
+
+> **Legacy alternative to `run()` + `startEngineWorker()`.** Owns its own inline claim loop, does not require a background worker. Kept for self-contained test scripts and tools that don't want a long-lived singleton. New code should prefer `run()` with the singleton worker — mixing both paths in the same process on the same instance reopens the race the singleton was built to avoid.
+
+Process until instance reaches a terminal state. **Local mode only.** Uses handlers from `init()` when omitted. Invokes handlers for each callback — no polling, no background worker.
 
 ```typescript
 const result = await client.processUntilComplete(instanceId, {
@@ -770,7 +868,6 @@ const result = await client.processUntilComplete(instanceId, {
     }
   },
   onDecision: async (item) => {
-    // Evaluate transition, submit choice
     await client.submitDecision(item.instanceId, item.payload.decisionId, {
       selectedFlowIds: [chosenFlowId],
     });
