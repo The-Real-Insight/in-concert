@@ -173,8 +173,27 @@ export class EngineWorker {
       // eslint-disable-next-line no-console
       console.log('[engineWorker] runInstanceWorker: enter', { instanceId });
       let iter = 0;
+      // Bounded retry window for the self-write visibility gap: when a
+      // previous iteration's handler inserted a follow-up continuation (e.g.
+      // `completeExternalTask` → WORK_COMPLETED, or `processContinuation`'s
+      // transactional insertion of TOKEN_AT_NODE), the immediately-next
+      // `findOneAndUpdate` often misses it on Atlas-style replica sets even
+      // though both calls target the primary. Poll briefly before concluding
+      // the instance is quiescent. 500 ms is well above the observed gap
+      // (<100 ms) and still fast enough to not stall user-waiting tasks.
+      const quiescenceRetryMaxMs = 500;
+      const quiescenceRetryStepMs = 25;
       while (!this.stopped) {
-        const cont = await claimContinuation(this.db, { instanceId });
+        let cont = await claimContinuation(this.db, { instanceId });
+        if (!cont) {
+          // Before declaring quiescent, allow a short window for a
+          // just-committed follow-up continuation to become visible.
+          const started = Date.now();
+          while (!cont && Date.now() - started < quiescenceRetryMaxMs) {
+            await new Promise((r) => setTimeout(r, quiescenceRetryStepMs));
+            cont = await claimContinuation(this.db, { instanceId });
+          }
+        }
         if (!cont) {
           // No more work for this instance; we're quiescent or terminal.
           const instance = await getInstance(this.db, instanceId);
