@@ -725,11 +725,25 @@ export class BpmnEngineClient {
     const handoffWaitStepMs = 50;
     for (let i = 0; i < maxIter; i++) {
       let cont = await claimContinuation(db, { instanceId });
+      if (cont) {
+        // eslint-disable-next-line no-console
+        console.log('[in-concert] run() claimed', {
+          instanceId,
+          iter: i,
+          kind: (cont as { kind?: string }).kind,
+        });
+      }
       if (!cont) {
         // Fast terminal check: if the instance is already finished, no
         // amount of waiting will produce work.
         const instance = await getInstance(db, instanceId);
         const status = instance?.status ?? 'UNKNOWN';
+        // eslint-disable-next-line no-console
+        console.log('[in-concert] run() claim returned null', {
+          instanceId,
+          iter: i,
+          instanceStatus: status,
+        });
         if (status !== 'RUNNING') {
           return { status };
         }
@@ -760,6 +774,14 @@ export class BpmnEngineClient {
       }
 
       const { outbox, events } = await processContinuation(db, cont);
+      // eslint-disable-next-line no-console
+      console.log('[in-concert] run() processed', {
+        instanceId,
+        iter: i,
+        kind: (cont as { kind?: string }).kind,
+        outboxCount: outbox.length,
+        eventTypes: events.map((e) => e.type),
+      });
       broadcastAll(outbox, events);
       if (outbox.length > 0) {
         await markOutboxSent(db, outbox.map((o) => o._id));
