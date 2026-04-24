@@ -45,6 +45,29 @@ export async function claimContinuation(
     },
     { sort: { dueAt: 1 }, readConcern: { level: 'majority' } }
   );
+  if (!result && options?.instanceId) {
+    // Diagnostic: what IS in the collection for this instance right now?
+    // If the READY row exists but findOneAndUpdate returned null, that's
+    // the readConcern-on-findAndModify issue.
+    const any = await Continuations.find({ instanceId: options.instanceId })
+      .project({ _id: 1, kind: 1, status: 1, dueAt: 1, attempts: 1 })
+      .toArray();
+    // eslint-disable-next-line no-console
+    console.log('[claimContinuation] NULL for instance — raw rows:', {
+      instanceId: options.instanceId,
+      nowIso: now.toISOString(),
+      rows: any.map((r) => {
+        const d = r as { _id?: unknown; kind?: unknown; status?: unknown; dueAt?: unknown; attempts?: unknown };
+        return {
+          _id: d._id,
+          kind: d.kind,
+          status: d.status,
+          dueAt: (d.dueAt as Date)?.toISOString?.() ?? d.dueAt,
+          attempts: d.attempts,
+        };
+      }),
+    });
+  }
   return result;
 }
 
