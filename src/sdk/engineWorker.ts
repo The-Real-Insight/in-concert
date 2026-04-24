@@ -74,6 +74,8 @@ export class EngineWorker {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
+    // eslint-disable-next-line no-console
+    console.log('[engineWorker] start()', { pollMs: this.pollMs, poolCap: this.poolCap });
     void this.pollLoop();
   }
 
@@ -102,6 +104,13 @@ export class EngineWorker {
       list.push({ resolve, reject });
       this.waiters.set(instanceId, list);
     });
+    // eslint-disable-next-line no-console
+    console.log('[engineWorker] awaitQuiescent', {
+      instanceId,
+      inFlight: this.inFlight.has(instanceId),
+      inFlightCount: this.inFlight.size,
+      stopped: this.stopped,
+    });
     // Force this instance to be considered on the very next tick instead of
     // waiting up to `pollMs` for the loop to wake on its own. Safe to call
     // even if a worker already exists — `ensureInstanceWorker` is a no-op in
@@ -115,16 +124,26 @@ export class EngineWorker {
    * Honors `InstanceOwnership`: returns early if ownership declines.
    */
   private async ensureInstanceWorker(instanceId: string): Promise<void> {
-    if (this.inFlight.has(instanceId)) return;
+    if (this.inFlight.has(instanceId)) {
+      // eslint-disable-next-line no-console
+      console.log('[engineWorker] ensureInstanceWorker: already in-flight', { instanceId });
+      return;
+    }
     if (this.inFlight.size >= this.poolCap) {
-      // Pool full. The poll loop will pick up this instance as soon as a slot
-      // frees; the waiter stays registered.
+      // eslint-disable-next-line no-console
+      console.log('[engineWorker] ensureInstanceWorker: pool full', { instanceId });
       return;
     }
     const decision = await this.ownership.shouldProcess(instanceId);
-    if (decision !== 'process') return;
+    if (decision !== 'process') {
+      // eslint-disable-next-line no-console
+      console.log('[engineWorker] ensureInstanceWorker: ownership declined', { instanceId });
+      return;
+    }
     await this.ownership.onClaim(instanceId);
 
+    // eslint-disable-next-line no-console
+    console.log('[engineWorker] ensureInstanceWorker: spawning', { instanceId });
     const promise = this.runInstanceWorker(instanceId).finally(async () => {
       this.inFlight.delete(instanceId);
       try {
@@ -151,14 +170,30 @@ export class EngineWorker {
     const { markOutboxSent } = await import('../workers/outbox-dispatcher');
 
     try {
+      // eslint-disable-next-line no-console
+      console.log('[engineWorker] runInstanceWorker: enter', { instanceId });
+      let iter = 0;
       while (!this.stopped) {
         const cont = await claimContinuation(this.db, { instanceId });
         if (!cont) {
           // No more work for this instance; we're quiescent or terminal.
           const instance = await getInstance(this.db, instanceId);
+          // eslint-disable-next-line no-console
+          console.log('[engineWorker] runInstanceWorker: quiescent', {
+            instanceId,
+            iter,
+            instanceStatus: instance?.status ?? 'UNKNOWN',
+          });
           this.notifyWaiters(instanceId, { status: instance?.status ?? 'UNKNOWN' });
           return;
         }
+        // eslint-disable-next-line no-console
+        console.log('[engineWorker] runInstanceWorker: claimed', {
+          instanceId,
+          iter,
+          kind: (cont as { kind?: string }).kind,
+        });
+        iter++;
 
         const { outbox, events } = await processContinuation(this.db, cont);
         broadcastAll(outbox, events);
@@ -297,6 +332,14 @@ export class EngineWorker {
             { $match: filter },
             { $group: { _id: '$instanceId' } },
           ]).toArray()) as Array<{ _id: string }>;
+
+          if (candidates.length > 0) {
+            // eslint-disable-next-line no-console
+            console.log('[engineWorker] pollLoop candidates', {
+              candidateCount: candidates.length,
+              candidateIds: candidates.map((c) => c._id).slice(0, 5),
+            });
+          }
 
           for (const { _id: instanceId } of candidates) {
             if (this.inFlight.size >= this.poolCap) break;
