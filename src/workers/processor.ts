@@ -24,6 +24,14 @@ export async function claimContinuation(
   } else if (options?.excludeInstanceIds && options.excludeInstanceIds.length > 0) {
     filter.instanceId = { $nin: options.excludeInstanceIds };
   }
+  // readConcern: 'majority' is load-bearing. `startInstance` /
+  // `completeWorkItem` / `processContinuation` write their continuations with
+  // default (majority) write concern; an immediately-subsequent
+  // `findOneAndUpdate` from a different implicit session will otherwise race
+  // with replica-set snapshot propagation and return null even though the
+  // row is committed. Forcing a majority-committed read guarantees
+  // read-your-writes consistency across the SDK's continuation writers, no
+  // timing games.
   const result = await Continuations.findOneAndUpdate(
     filter,
     {
@@ -35,7 +43,7 @@ export async function claimContinuation(
       },
       $inc: { attempts: 1 },
     },
-    { sort: { dueAt: 1 } }
+    { sort: { dueAt: 1 }, readConcern: { level: 'majority' } }
   );
   return result;
 }

@@ -20,8 +20,27 @@
  *     they notify any `run()` waiters with the instance's current status
  *     (quiescent `RUNNING`, or terminal `COMPLETED`/`TERMINATED`/`FAILED`).
  *
+ * Read-your-writes consistency: `claimContinuation` uses
+ * `readConcern: 'majority'` so it's guaranteed to see any majority-committed
+ * write (which is the default write concern on replica sets for the
+ * continuation inserts in `startInstance`, `completeWorkItem`, and
+ * `processContinuation`). Without this, the previous design papered over a
+ * cross-session visibility gap with retry timeouts; the majority read makes
+ * the claim correct-by-construction.
+ *
  * The main seam for future multi-server scaleout is `InstanceOwnership`;
  * nothing else in this module needs to change to add DB-backed leases.
+ *
+ * FUTURE (Layer 3 reactive): replace the 100 ms poll loop with a MongoDB
+ * change stream watching `Continuations` for `insert` events where
+ * `status: 'READY'`. On each event, call `ensureInstanceWorker(instanceId)`.
+ * This eliminates polling entirely (latency from write to dispatch drops
+ * from up to `pollMs` to a few ms), and scales cleanly across multiple
+ * servers since every server sees the same firehose — ownership decides who
+ * actually takes the instance. Keep a slow fallback poll (5–10 s) for the
+ * case where the change stream reconnects past a resume-token gap. Needs a
+ * replica-set-backed Mongo (Atlas fits) and resume-token persistence for
+ * crash recovery. Scope: ~150 LOC, no API changes.
  */
 import type { Db } from 'mongodb';
 import type { CallbackHandlers, CallbackItem } from './types';
@@ -74,8 +93,6 @@ export class EngineWorker {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
-    // eslint-disable-next-line no-console
-    console.log('[engineWorker] start()', { pollMs: this.pollMs, poolCap: this.poolCap });
     void this.pollLoop();
   }
 
@@ -104,13 +121,6 @@ export class EngineWorker {
       list.push({ resolve, reject });
       this.waiters.set(instanceId, list);
     });
-    // eslint-disable-next-line no-console
-    console.log('[engineWorker] awaitQuiescent', {
-      instanceId,
-      inFlight: this.inFlight.has(instanceId),
-      inFlightCount: this.inFlight.size,
-      stopped: this.stopped,
-    });
     // Force this instance to be considered on the very next tick instead of
     // waiting up to `pollMs` for the loop to wake on its own. Safe to call
     // even if a worker already exists — `ensureInstanceWorker` is a no-op in
@@ -124,26 +134,16 @@ export class EngineWorker {
    * Honors `InstanceOwnership`: returns early if ownership declines.
    */
   private async ensureInstanceWorker(instanceId: string): Promise<void> {
-    if (this.inFlight.has(instanceId)) {
-      // eslint-disable-next-line no-console
-      console.log('[engineWorker] ensureInstanceWorker: already in-flight', { instanceId });
-      return;
-    }
+    if (this.inFlight.has(instanceId)) return;
     if (this.inFlight.size >= this.poolCap) {
-      // eslint-disable-next-line no-console
-      console.log('[engineWorker] ensureInstanceWorker: pool full', { instanceId });
+      // Pool full. The poll loop will pick up this instance as soon as a slot
+      // frees; the waiter stays registered.
       return;
     }
     const decision = await this.ownership.shouldProcess(instanceId);
-    if (decision !== 'process') {
-      // eslint-disable-next-line no-console
-      console.log('[engineWorker] ensureInstanceWorker: ownership declined', { instanceId });
-      return;
-    }
+    if (decision !== 'process') return;
     await this.ownership.onClaim(instanceId);
 
-    // eslint-disable-next-line no-console
-    console.log('[engineWorker] ensureInstanceWorker: spawning', { instanceId });
     const promise = this.runInstanceWorker(instanceId).finally(async () => {
       this.inFlight.delete(instanceId);
       try {
@@ -169,114 +169,19 @@ export class EngineWorker {
     const { broadcastAll } = await import('../ws/broadcast');
     const { markOutboxSent } = await import('../workers/outbox-dispatcher');
 
-    const { getCollections } = await import('../db/collections');
-    const { Continuations } = getCollections(this.db);
-
     try {
-      // eslint-disable-next-line no-console
-      console.log('[engineWorker] runInstanceWorker: enter', { instanceId });
-      let iter = 0;
-      // Bounded retry window for the self-write visibility gap: on Atlas
-      // replica sets a just-committed continuation isn't always immediately
-      // visible to an in-process `findOneAndUpdate`, even though both calls
-      // target the primary. We've observed gaps up to ~1 s for the initial
-      // START after `startInstance`, so the window has to be generous enough
-      // to cover that while still letting user-waiting tasks (real quiescent
-      // state) return promptly.
-      //
-      // Exit-early rule: if during the retry we confirm the instance is
-      // terminal (COMPLETED/TERMINATED/FAILED), stop waiting — no future
-      // continuation can appear.
-      const quiescenceRetryMaxMs = 3_000;
-      const quiescenceRetryStepMs = 25;
       while (!this.stopped) {
-        let cont = await claimContinuation(this.db, { instanceId });
+        // `claimContinuation` uses `readConcern: 'majority'`, so a null return
+        // means the instance has genuinely no claimable work — not that a
+        // just-committed row is hiding behind a snapshot lag.
+        const cont = await claimContinuation(this.db, { instanceId });
         if (!cont) {
-          // Diagnose: does the row actually exist in the DB even though
-          // claim can't find it? If so, we have a claim/lease problem
-          // (different class of bug from visibility).
-          const readyCount = await Continuations.countDocuments({
-            instanceId,
-            status: 'READY',
-          });
-          const inProgressCount = await Continuations.countDocuments({
-            instanceId,
-            status: 'IN_PROGRESS',
-          });
-          // eslint-disable-next-line no-console
-          console.log('[engineWorker] runInstanceWorker: claim returned null', {
-            instanceId,
-            iter,
-            readyCount,
-            inProgressCount,
-          });
-
-          const started = Date.now();
-          while (!cont && Date.now() - started < quiescenceRetryMaxMs) {
-            await new Promise((r) => setTimeout(r, quiescenceRetryStepMs));
-            // Early exit: don't keep polling a terminal instance.
-            const statusDoc = await getInstance(this.db, instanceId);
-            const status = statusDoc?.status;
-            if (status && status !== 'RUNNING') break;
-            cont = await claimContinuation(this.db, { instanceId });
-          }
-          if (cont) {
-            // eslint-disable-next-line no-console
-            console.log('[engineWorker] runInstanceWorker: retry claimed', {
-              instanceId,
-              iter,
-              afterMs: Date.now() - started,
-              kind: (cont as { kind?: string }).kind,
-            });
-          }
-        }
-        if (!cont) {
-          // No more work for this instance; we're quiescent or terminal.
           const instance = await getInstance(this.db, instanceId);
-          // eslint-disable-next-line no-console
-          console.log('[engineWorker] runInstanceWorker: quiescent', {
-            instanceId,
-            iter,
-            instanceStatus: instance?.status ?? 'UNKNOWN',
-          });
           this.notifyWaiters(instanceId, { status: instance?.status ?? 'UNKNOWN' });
           return;
         }
-        // eslint-disable-next-line no-console
-        console.log('[engineWorker] runInstanceWorker: claimed', {
-          instanceId,
-          iter,
-          kind: (cont as { kind?: string }).kind,
-        });
-        iter++;
 
         const { outbox, events } = await processContinuation(this.db, cont);
-        // eslint-disable-next-line no-console
-        console.log('[engineWorker] runInstanceWorker: processed', {
-          instanceId,
-          kind: (cont as { kind?: string }).kind,
-          outboxCount: outbox.length,
-          outboxKinds: outbox.map((o) => o.kind),
-          eventTypes: events.map((e) => e.type),
-        });
-        // Snapshot the DB state right after processing so we can tell whether
-        // a newly-inserted follow-up continuation is visible to the next
-        // claim — Mongo transaction commit vs read-visibility races are the
-        // most likely cause of a spurious "quiescent" here.
-        const contsAfter = await Continuations.find(
-          { instanceId },
-          { projection: { _id: 1, kind: 1, status: 1, dueAt: 1 } }
-        ).toArray();
-        // eslint-disable-next-line no-console
-        console.log('[engineWorker] runInstanceWorker: continuations after processed', {
-          instanceId,
-          rows: contsAfter.map((c) => ({
-            id: (c as { _id: string })._id,
-            kind: (c as { kind: string }).kind,
-            status: (c as { status: string }).status,
-            dueAt: (c as { dueAt: Date }).dueAt,
-          })),
-        });
         broadcastAll(outbox, events);
         if (outbox.length > 0) {
           await markOutboxSent(this.db, outbox.map((o) => o._id));
@@ -392,6 +297,10 @@ export class EngineWorker {
    * currently being drained, and spawns an instance-worker per candidate up
    * to the pool cap. Sleeps `pollMs` between ticks (interruptible via
    * `wake()` so `awaitQuiescent` gets immediate attention).
+   *
+   * The aggregate uses default read concern (local); we're only using it to
+   * decide which instances to *consider*. Whether we actually claim a row
+   * is decided by `claimContinuation`, which is majority-consistent.
    */
   private async pollLoop(): Promise<void> {
     const { getCollections } = await import('../db/collections');
@@ -413,14 +322,6 @@ export class EngineWorker {
             { $match: filter },
             { $group: { _id: '$instanceId' } },
           ]).toArray()) as Array<{ _id: string }>;
-
-          if (candidates.length > 0) {
-            // eslint-disable-next-line no-console
-            console.log('[engineWorker] pollLoop candidates', {
-              candidateCount: candidates.length,
-              candidateIds: candidates.map((c) => c._id).slice(0, 5),
-            });
-          }
 
           for (const { _id: instanceId } of candidates) {
             if (this.inFlight.size >= this.poolCap) break;
