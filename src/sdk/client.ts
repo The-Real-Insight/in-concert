@@ -834,8 +834,14 @@ export class BpmnEngineClient {
               }
             }
           }
-        } catch (_err) {
-          // Ignore; loop continues
+        } catch (err) {
+          // Surface polling-loop failures instead of silently swallowing them.
+          // Previously any throw from claimContinuation / processContinuation
+          // (e.g. a Mongo version conflict leaving a continuation leased) was
+          // invisible — callers saw an instance that never progressed with no
+          // log to explain why. Keep looping on error; just make the failure
+          // diagnosable.
+          console.error('[in-concert] subscribe poll failed:', err);
         }
         if (!stopped) await new Promise((r) => setTimeout(r, POLL_MS));
       }
