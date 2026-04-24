@@ -1,55 +1,49 @@
 /**
- * EngineWorker: singleton continuation dispatcher.
+ * EngineWorker: singleton continuation dispatcher, change-stream-driven.
  *
- * Replaces the two pre-existing loops (per-call `processUntilComplete` owned
- * by `run()`, and the background `_subscribeLocal` poller owned by
- * `subscribeToCallbacks`). A single in-process worker claims every
- * continuation, dispatches to callback handlers, and publishes lifecycle
- * events that `run()` awaits. No exclusion list, no race.
+ * Replaces the old poll-and-claim loops with a MongoDB change stream on the
+ * `Continuations` collection. When a continuation is inserted (or an
+ * expired-lease sweep transitions one back to READY), the stream emits an
+ * event — we pick up the `instanceId` from `fullDocument` and spawn an
+ * instance-worker to drain that instance. Change stream events are read from
+ * the oplog, which means by the time we receive one the write is durable and
+ * visible to any subsequent `claimContinuation`. No read-after-write race,
+ * no retry loops, no tuned timeouts.
  *
  * Concurrency model:
- *   - One poller finds distinct instanceIds that have READY continuations and
- *     are not already being drained.
- *   - For each candidate, ownership decides whether this server should take
- *     it (`InstanceOwnership.shouldProcess`). In single-server mode this is
- *     always yes; in multi-server mode it checks a DB-backed lease.
+ *   - One change stream subscribes to `Continuations` inserts/updates where
+ *     `fullDocument.status == 'READY'`. Each event surfaces a candidate
+ *     `instanceId`.
+ *   - For each candidate, `InstanceOwnership.shouldProcess` decides whether
+ *     this server accepts it. Single-server mode accepts everything; the
+ *     multi-server DB-lease implementation swaps in here without touching
+ *     the rest of this module.
  *   - Each accepted candidate gets an instance-worker. Within one instance,
- *     continuations are processed strictly in FIFO order (serial). Across
- *     instances, workers run in parallel up to `poolCap`.
+ *     continuations are processed in strict FIFO order. Across instances,
+ *     workers run in parallel up to `poolCap`.
  *   - Instance-workers exit when the instance has no more claimable work;
  *     they notify any `run()` waiters with the instance's current status
  *     (quiescent `RUNNING`, or terminal `COMPLETED`/`TERMINATED`/`FAILED`).
  *
- * Read-your-writes consistency: `claimContinuation` uses
- * `readConcern: 'majority'` so it's guaranteed to see any majority-committed
- * write (which is the default write concern on replica sets for the
- * continuation inserts in `startInstance`, `completeWorkItem`, and
- * `processContinuation`). Without this, the previous design papered over a
- * cross-session visibility gap with retry timeouts; the majority read makes
- * the claim correct-by-construction.
+ * Fallback poll: a slow safety-net poll (default 5 s) covers two cases the
+ * change stream alone can't: (1) delayed continuations with `dueAt` in the
+ * future — change stream fired at insert time but the work isn't yet ripe —
+ * and (2) resume-token gaps after a long reconnect (if the oplog rotated
+ * past our resume position, we'd miss events). The poll rescans for
+ * READY + due continuations and re-triggers `ensureInstanceWorker`.
  *
- * The main seam for future multi-server scaleout is `InstanceOwnership`;
- * nothing else in this module needs to change to add DB-backed leases.
- *
- * FUTURE (Layer 3 reactive): replace the 100 ms poll loop with a MongoDB
- * change stream watching `Continuations` for `insert` events where
- * `status: 'READY'`. On each event, call `ensureInstanceWorker(instanceId)`.
- * This eliminates polling entirely (latency from write to dispatch drops
- * from up to `pollMs` to a few ms), and scales cleanly across multiple
- * servers since every server sees the same firehose — ownership decides who
- * actually takes the instance. Keep a slow fallback poll (5–10 s) for the
- * case where the change stream reconnects past a resume-token gap. Needs a
- * replica-set-backed Mongo (Atlas fits) and resume-token persistence for
- * crash recovery. Scope: ~150 LOC, no API changes.
+ * Requirements: MongoDB 3.6+ replica set (standalone mongod does not support
+ * change streams). Atlas, any self-hosted replica set, or a single-node
+ * `mongod --replSet rs0` all work.
  */
-import type { Db } from 'mongodb';
+import type { ChangeStream, Db } from 'mongodb';
 import type { CallbackHandlers, CallbackItem } from './types';
 import type { InstanceOwnership } from './ownership';
 import { SingleServerOwnership } from './ownership';
 
 export type EngineWorkerOptions = {
-  /** Poll interval (ms) when looking for new instances with work. Default 100. */
-  pollMs?: number;
+  /** Fallback poll interval (ms) for delayed work and change-stream gaps. Default 5000. */
+  fallbackPollMs?: number;
   /** Max concurrent instance-workers. Default 16. */
   poolCap?: number;
   /**
@@ -69,7 +63,7 @@ type Waiter = {
 export class EngineWorker {
   private db: Db;
   private handlers: CallbackHandlers;
-  private pollMs: number;
+  private fallbackPollMs: number;
   private poolCap: number;
   private ownership: InstanceOwnership;
 
@@ -78,29 +72,39 @@ export class EngineWorker {
   private inFlight: Map<string, Promise<void>> = new Map();
   /** run() callers awaiting quiescence for an instance. */
   private waiters: Map<string, Waiter[]> = new Map();
-  /** Wakes the poll loop out of its sleep so `run()` gets immediate attention. */
-  private wake: (() => void) | null = null;
+  /** Current change stream handle; closed on stop(). */
+  private changeStream: ChangeStream | null = null;
 
   constructor(db: Db, handlers: CallbackHandlers, options?: EngineWorkerOptions) {
     this.db = db;
     this.handlers = handlers;
-    this.pollMs = options?.pollMs ?? 100;
+    this.fallbackPollMs = options?.fallbackPollMs ?? 5_000;
     this.poolCap = options?.poolCap ?? 16;
     this.ownership = options?.ownership ?? new SingleServerOwnership();
   }
 
-  /** Start the poll loop. Idempotent. */
+  /** Start the change stream + fallback poll. Idempotent. */
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
-    void this.pollLoop();
+    void this.runChangeStream();
+    void this.runFallbackPoll();
   }
 
-  /** Stop the poll loop. In-flight instance-workers drain to completion. */
+  /**
+   * Stop the change stream and fallback poll. In-flight instance-workers
+   * drain to completion.
+   */
   async stop(): Promise<void> {
     this.stopped = true;
-    this.wake?.();
-    // Wait for in-flight workers to finish.
+    if (this.changeStream) {
+      try {
+        await this.changeStream.close();
+      } catch {
+        /* best effort */
+      }
+      this.changeStream = null;
+    }
     const inFlight = Array.from(this.inFlight.values());
     await Promise.allSettled(inFlight);
   }
@@ -110,10 +114,10 @@ export class EngineWorker {
    * process reached a waiting point or hit a terminal state). Result carries
    * the instance's current status.
    *
-   * Also ensures an instance-worker is spawned for `instanceId`, so a caller
-   * who just wrote a START continuation doesn't have to wait for the next
-   * poll tick — and a caller whose instance is already terminal gets notified
-   * on the next microtask.
+   * Also ensures an instance-worker is spawned for `instanceId` immediately,
+   * so callers who just wrote a continuation don't have to wait for the
+   * change stream to loop around — and callers whose instance is already
+   * quiescent get notified on the next microtask.
    */
   awaitQuiescent(instanceId: string): Promise<QuiescenceResult> {
     const p = new Promise<QuiescenceResult>((resolve, reject) => {
@@ -121,10 +125,6 @@ export class EngineWorker {
       list.push({ resolve, reject });
       this.waiters.set(instanceId, list);
     });
-    // Force this instance to be considered on the very next tick instead of
-    // waiting up to `pollMs` for the loop to wake on its own. Safe to call
-    // even if a worker already exists — `ensureInstanceWorker` is a no-op in
-    // that case.
     void this.ensureInstanceWorker(instanceId);
     return p;
   }
@@ -136,8 +136,8 @@ export class EngineWorker {
   private async ensureInstanceWorker(instanceId: string): Promise<void> {
     if (this.inFlight.has(instanceId)) return;
     if (this.inFlight.size >= this.poolCap) {
-      // Pool full. The poll loop will pick up this instance as soon as a slot
-      // frees; the waiter stays registered.
+      // Pool full. The fallback poll (or the next change event) will retry;
+      // the waiter stays registered.
       return;
     }
     const decision = await this.ownership.shouldProcess(instanceId);
@@ -171,9 +171,6 @@ export class EngineWorker {
 
     try {
       while (!this.stopped) {
-        // `claimContinuation` uses `readConcern: 'majority'`, so a null return
-        // means the instance has genuinely no claimable work — not that a
-        // just-committed row is hiding behind a snapshot lag.
         const cont = await claimContinuation(this.db, { instanceId });
         if (!cont) {
           const instance = await getInstance(this.db, instanceId);
@@ -217,9 +214,7 @@ export class EngineWorker {
         }
       }
     } catch (err) {
-      // Instance-worker failure: reject all waiters for this instance. The
-      // next poll tick can re-spawn if there's still work; for now, the
-      // caller sees the error.
+      // Instance-worker failure: reject all waiters for this instance.
       this.rejectWaiters(instanceId, err);
     }
   }
@@ -293,16 +288,85 @@ export class EngineWorker {
   }
 
   /**
-   * Main poll loop. Finds instances with READY continuations that aren't
-   * currently being drained, and spawns an instance-worker per candidate up
-   * to the pool cap. Sleeps `pollMs` between ticks (interruptible via
-   * `wake()` so `awaitQuiescent` gets immediate attention).
+   * Subscribe to the `Continuations` change stream. We pick up every insert
+   * (newly-written continuation) and every update that sets `status` back
+   * to `READY` (the lease-sweeper recovering a stalled IN_PROGRESS row).
+   * For each event, we derive the `instanceId` from `fullDocument` and ask
+   * `ensureInstanceWorker` to take it.
    *
-   * The aggregate uses default read concern (local); we're only using it to
-   * decide which instances to *consider*. Whether we actually claim a row
-   * is decided by `claimContinuation`, which is majority-consistent.
+   * Auto-reconnect: the driver's ChangeStream retries transient errors
+   * internally. On fatal errors we catch, sleep briefly, and re-open the
+   * stream — the fallback poll covers any events we might have missed
+   * during the downtime.
    */
-  private async pollLoop(): Promise<void> {
+  private async runChangeStream(): Promise<void> {
+    const { getCollections } = await import('../db/collections');
+    const { Continuations } = getCollections(this.db);
+
+    const pipeline = [
+      {
+        $match: {
+          $or: [
+            { operationType: 'insert', 'fullDocument.status': 'READY' },
+            // Sweeper-revived leases: update that sets status back to READY.
+            {
+              operationType: 'update',
+              'fullDocument.status': 'READY',
+              'updateDescription.updatedFields.status': 'READY',
+            },
+          ],
+        },
+      },
+    ];
+
+    while (!this.stopped) {
+      let stream: ChangeStream | null = null;
+      try {
+        stream = Continuations.watch(pipeline, {
+          fullDocument: 'updateLookup',
+        });
+        this.changeStream = stream;
+        for await (const change of stream) {
+          if (this.stopped) break;
+          const doc = (change as { fullDocument?: Record<string, unknown> }).fullDocument;
+          if (!doc) continue;
+          const instanceId = doc.instanceId as string | undefined;
+          if (!instanceId) continue;
+          const dueAt = doc.dueAt as Date | undefined;
+          if (dueAt && dueAt.getTime() > Date.now()) {
+            // Delayed continuation — let the fallback poll pick it up when
+            // it's due. Don't hold an instance-worker slot waiting.
+            continue;
+          }
+          void this.ensureInstanceWorker(instanceId);
+        }
+      } catch (err) {
+        if (this.stopped) break;
+        // eslint-disable-next-line no-console
+        console.error('[in-concert] change stream error; reopening:', err);
+        await new Promise((r) => setTimeout(r, 1_000));
+      } finally {
+        if (stream) {
+          try {
+            await stream.close();
+          } catch {
+            /* best effort */
+          }
+        }
+        this.changeStream = null;
+      }
+    }
+  }
+
+  /**
+   * Slow safety-net poll. Finds instances with READY + due continuations
+   * that aren't already in-flight and spawns instance-workers for them.
+   * Covers two cases the change stream doesn't: (1) delayed continuations
+   * with `dueAt` in the future (event fired at insert, but claim must wait
+   * until the due time), and (2) any event the stream missed during a
+   * reconnect past a resume-token gap.
+   */
+  private async runFallbackPoll(): Promise<void> {
     const { getCollections } = await import('../db/collections');
     const { Continuations } = getCollections(this.db);
 
@@ -325,28 +389,15 @@ export class EngineWorker {
 
           for (const { _id: instanceId } of candidates) {
             if (this.inFlight.size >= this.poolCap) break;
-            // ensureInstanceWorker is re-entrant-safe; it checks inFlight
-            // and pool cap itself.
             await this.ensureInstanceWorker(instanceId);
           }
         }
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.error('[in-concert] engine worker poll failed:', err);
+        console.error('[in-concert] fallback poll failed:', err);
       }
-
       if (this.stopped) break;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          this.wake = null;
-          resolve();
-        }, this.pollMs);
-        this.wake = () => {
-          clearTimeout(timer);
-          this.wake = null;
-          resolve();
-        };
-      });
+      await new Promise((r) => setTimeout(r, this.fallbackPollMs));
     }
   }
 
