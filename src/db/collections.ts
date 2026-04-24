@@ -456,8 +456,18 @@ export function getCollections(database: Db) {
     ProcessInstanceEvents: database.collection<ProcessInstanceEventDoc>(
       COLLECTION_NAMES.ProcessInstanceEvent
     ),
+    // writeConcern: 'majority' is load-bearing for the claim race.
+    // `claimContinuation` uses `readConcern: 'majority'` to read a
+    // majority-committed snapshot; that only works if the matching write
+    // was also majority-committed before returning. Without it, `startInstance`
+    // (and other continuation writers) can return before the insert has
+    // propagated, and a subsequent `run(instanceId) → awaitQuiescent →
+    // claimContinuation` can miss the START continuation, treat the instance
+    // as quiescent, and resolve the waiter before any work has been
+    // dispatched. Pinning majority here closes the window at the source.
     Continuations: database.collection<ContinuationDoc>(
-      COLLECTION_NAMES.Continuation
+      COLLECTION_NAMES.Continuation,
+      { writeConcern: { w: 'majority' } }
     ),
     Outbox: database.collection<OutboxDoc>(COLLECTION_NAMES.Outbox),
     HumanTasks: database.collection<HumanTaskDoc>(COLLECTION_NAMES.HumanTask),

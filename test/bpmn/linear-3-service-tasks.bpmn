@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  id="Defs_Linear3Service"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:process id="Process_Linear3Service" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1"/>
+    <bpmn:serviceTask id="Task_A" name="A"/>
+    <bpmn:serviceTask id="Task_B" name="B"/>
+    <bpmn:serviceTask id="Task_C" name="C"/>
+    <bpmn:endEvent id="EndEvent_1"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_A"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_A" targetRef="Task_B"/>
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_B" targetRef="Task_C"/>
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Task_C" targetRef="EndEvent_1"/>
+  </bpmn:process>
+</bpmn:definitions>
