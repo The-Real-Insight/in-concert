@@ -1189,9 +1189,21 @@ export class BpmnEngineClient {
   // ── Bulk schedule management ────────────────────────────────────────────────
 
   /**
-   * Activate all schedules (timers + connectors) for a definition.
-   * Sets Graph credentials on all connector schedules and resumes everything.
-   * One call to go from PAUSED (after deploy) to ACTIVE (polling/firing).
+   * Activate all schedules (timers + connectors) for a definition, scoped to
+   * the caller's tenant. Tenant-scoped means:
+   *
+   *   - If a `TriggerSchedule` row already exists for (definitionId × start
+   *     event × startingTenantId), it's updated: status → ACTIVE, creds and
+   *     config-overrides applied.
+   *   - If no such row exists (the procurer's first activate), a new row is
+   *     cloned from the owner-tenant's row for that start event, then creds
+   *     and config-overrides are applied on top. Two tenants running the
+   *     same workflow end up with two independent rows — independent creds,
+   *     independent cursor, independent fire state.
+   *
+   * `startingTenantId` is required for the per-tenant pathway to make sense.
+   * When omitted (legacy single-tenant callers), this method falls back to
+   * the original "flip every row for this definition" semantics.
    */
   async activateSchedules(
     definitionId: string,
@@ -1212,8 +1224,9 @@ export class BpmnEngineClient {
     const { getCollections } = await import('../db/collections');
     const { TriggerSchedules } = getCollections(this.config.db);
     const now = new Date();
+    const tenantId = options?.startingTenantId;
 
-    // Non-timer triggers (mailbox, sharepoint, …): activate + optional credentials.
+    // Build the `$set` payload common to both connector and timer rows.
     const connectorSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
     if (options?.graphCredentials) {
       const gc = options.graphCredentials;
@@ -1222,8 +1235,8 @@ export class BpmnEngineClient {
       connectorSet['config.clientId'] = gc.clientId;
       connectorSet['config.clientSecret'] = gc.clientSecret;
     }
-    if (options?.startingTenantId) {
-      connectorSet.startingTenantId = options.startingTenantId;
+    if (tenantId) {
+      connectorSet.startingTenantId = tenantId;
     }
     // Per-tenant config overrides: written as dotted `config.<key>` so only
     // the named attrs are replaced and BPMN-authored defaults for untouched
@@ -1236,31 +1249,126 @@ export class BpmnEngineClient {
         connectorSet[`config.${k}`] = v;
       }
     }
-    await TriggerSchedules.updateMany(
-      { definitionId, triggerType: { $ne: 'timer' } },
-      { $set: connectorSet },
-    );
+
+    // Per-tenant path: clone owner rows for this tenant when missing, then
+    // apply the activate `$set`.
+    if (tenantId) {
+      await this._ensureTenantRowsExist(TriggerSchedules, definitionId, tenantId);
+    }
+
+    // Non-timer triggers (mailbox, sharepoint, …): activate + optional credentials.
+    const connectorFilter: Record<string, unknown> = {
+      definitionId,
+      triggerType: { $ne: 'timer' },
+    };
+    if (tenantId) connectorFilter.startingTenantId = tenantId;
+    await TriggerSchedules.updateMany(connectorFilter, { $set: connectorSet });
 
     // Timer triggers: activate (unless EXHAUSTED).
     const timerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
-    if (options?.startingTenantId) {
-      timerSet.startingTenantId = options.startingTenantId;
-    }
-    await TriggerSchedules.updateMany(
-      { definitionId, triggerType: 'timer', status: { $ne: 'EXHAUSTED' } },
-      { $set: timerSet },
-    );
+    if (tenantId) timerSet.startingTenantId = tenantId;
+    const timerFilter: Record<string, unknown> = {
+      definitionId,
+      triggerType: 'timer',
+      status: { $ne: 'EXHAUSTED' },
+    };
+    if (tenantId) timerFilter.startingTenantId = tenantId;
+    await TriggerSchedules.updateMany(timerFilter, { $set: timerSet });
   }
 
   /**
-   * Deactivate all schedules (timers + connectors) for a definition.
-   * Pauses everything — no more polling or firing until activateSchedules is called.
+   * Ensure per-tenant schedule rows exist for this definition. For every
+   * owner row (startingTenantId === definition.tenantId) that doesn't yet
+   * have a sibling row for the given `tenantId`, clone the owner row with a
+   * fresh `_id` / `scheduleId`, a cleared cursor/credentials, and the
+   * caller's tenant id. Result: subsequent `updateMany({ startingTenantId:
+   * tenantId })` in `activateSchedules` finds a row to update for every
+   * start event the owner authored.
    */
-  async deactivateSchedules(definitionId: string): Promise<void> {
+  private async _ensureTenantRowsExist(
+    TriggerSchedules: import('mongodb').Collection<import('../db/collections').TriggerScheduleDoc>,
+    definitionId: string,
+    tenantId: string,
+  ): Promise<void> {
+    // Only reached from the local-mode branch of activateSchedules.
+    if (this.config.mode !== 'local') return;
+    const { getCollections } = await import('../db/collections');
+    const { ProcessDefinitions } = getCollections(this.config.db);
+    const defDoc = await ProcessDefinitions.findOne(
+      { _id: definitionId },
+      { projection: { tenantId: 1 } },
+    );
+    const ownerTenantId = (defDoc as { tenantId?: string } | null)?.tenantId;
+
+    // Rows already present for this tenant — nothing to clone for those
+    // start events.
+    const existing = await TriggerSchedules.find(
+      { definitionId, startingTenantId: tenantId },
+      { projection: { startEventId: 1 } },
+    ).toArray();
+    const haveTenantRows = new Set(existing.map((r) => r.startEventId));
+
+    // Source rows to clone from: owner's rows for this definition. If the
+    // definition has no recorded tenantId, fall back to any row for this
+    // definition — useful for demo / anonymous deployments.
+    const sourceFilter: Record<string, unknown> = { definitionId };
+    if (ownerTenantId) sourceFilter.startingTenantId = ownerTenantId;
+    const sources = await TriggerSchedules.find(sourceFilter).toArray();
+
+    const now = new Date();
+    for (const src of sources) {
+      if (haveTenantRows.has(src.startEventId)) continue;
+      // Caller is the owner tenant itself: no clone needed, the existing row
+      // already belongs to them.
+      if (ownerTenantId && ownerTenantId === tenantId) continue;
+
+      const cloned: import('../db/collections').TriggerScheduleDoc = {
+        ...src,
+        _id: uuidv4(),
+        scheduleId: uuidv4(),
+        startingTenantId: tenantId,
+        // Each tenant's schedule has its own cursor and credentials — don't
+        // inherit either from the owner. `config` is cloned so author-level
+        // defaults carry; caller's `configOverrides` are applied afterwards.
+        cursor: null,
+        credentials: null,
+        // Deployed-as-PAUSED — the caller's subsequent updateMany flips it.
+        status: 'PAUSED',
+        createdAt: now,
+        updatedAt: now,
+      };
+      // Strip runtime/lease fields so the clone starts idle.
+      delete (cloned as Record<string, unknown>).ownerId;
+      delete (cloned as Record<string, unknown>).leaseUntil;
+      delete (cloned as Record<string, unknown>).lastFiredAt;
+      delete (cloned as Record<string, unknown>).lastError;
+      try {
+        await TriggerSchedules.insertOne(cloned);
+      } catch (_err) {
+        // Unique-index race with a concurrent activate for the same tenant.
+        // Next `updateMany` will pick up whichever row won.
+      }
+    }
+  }
+
+  /**
+   * Deactivate schedules for a definition. Tenant-scoped when
+   * `startingTenantId` is passed — only the caller's schedule rows are paused,
+   * other tenants keep running. Legacy callers (no tenant) fall back to the
+   * original "pause every ACTIVE row for this definition" semantics.
+   */
+  async deactivateSchedules(
+    definitionId: string,
+    options?: { startingTenantId?: string },
+  ): Promise<void> {
     if (this.config.mode === 'rest') {
       const res = await fetch(
         `${this.config.baseUrl}/v1/definitions/${definitionId}/schedules/deactivate`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options ?? {}),
+        },
       );
       if (!res.ok) throw new Error(`Deactivate schedules failed: ${res.status}`);
       return;
@@ -1268,8 +1376,10 @@ export class BpmnEngineClient {
     const { getCollections } = await import('../db/collections');
     const { TriggerSchedules } = getCollections(this.config.db);
     const now = new Date();
+    const filter: Record<string, unknown> = { definitionId, status: 'ACTIVE' };
+    if (options?.startingTenantId) filter.startingTenantId = options.startingTenantId;
     await TriggerSchedules.updateMany(
-      { definitionId, status: 'ACTIVE' },
+      filter,
       { $set: { status: 'PAUSED', updatedAt: now } },
     );
   }

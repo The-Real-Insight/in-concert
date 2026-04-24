@@ -80,9 +80,21 @@ export async function ensureIndexes(db: Db): Promise<void> {
     .collection(COLLECTION_NAMES.TriggerSchedule)
     .createIndex({ scheduleId: 1 }, { unique: true });
 
-  await db
-    .collection(COLLECTION_NAMES.TriggerSchedule)
-    .createIndex({ definitionId: 1, startEventId: 1 }, { unique: true });
+  // Per-tenant uniqueness: a single workflow may have one schedule per
+  // start event PER tenant. Two tenants running the same workflow get
+  // independent schedule rows (each with their own credentials, cursor,
+  // and fire state). The legacy `(definitionId, startEventId)` unique
+  // index is dropped if present — it collided with per-tenant rows.
+  const triggerSchedules = db.collection(COLLECTION_NAMES.TriggerSchedule);
+  try {
+    await triggerSchedules.dropIndex('definitionId_1_startEventId_1');
+  } catch (_err) {
+    /* index doesn't exist on fresh DBs — fine */
+  }
+  await triggerSchedules.createIndex(
+    { definitionId: 1, startEventId: 1, startingTenantId: 1 },
+    { unique: true },
+  );
 
   await db
     .collection(COLLECTION_NAMES.TriggerSchedule)

@@ -287,6 +287,7 @@ export async function getInstance(
 ): Promise<{
   _id: string;
   definitionId: string;
+  tenantId?: string;
   conversationId?: string;
   status: string;
   createdAt: Date;
@@ -297,11 +298,12 @@ export async function getInstance(
   const { ProcessInstances } = getCollections(db);
   const doc = await ProcessInstances.findOne(
     { _id: instanceId },
-    { projection: { _id: 1, definitionId: 1, conversationId: 1, status: 1, createdAt: 1, endedAt: 1, startedBy: 1, startedByDetails: 1 } }
+    { projection: { _id: 1, definitionId: 1, tenantId: 1, conversationId: 1, status: 1, createdAt: 1, endedAt: 1, startedBy: 1, startedByDetails: 1 } }
   );
   return doc as {
     _id: string;
     definitionId: string;
+    tenantId?: string;
     conversationId?: string;
     status: string;
     createdAt: Date;

@@ -67,6 +67,17 @@ export type StartInstanceResult = {
 
 export type InstanceSummary = {
   _id: string;
+  /**
+   * Definition this instance belongs to. Useful for callbacks that need to
+   * resolve back to the ProcessDefinition (e.g. for tenant fallback).
+   */
+  definitionId: string;
+  /**
+   * Tenant that activated the originating schedule (for trigger-started
+   * instances) or that started the instance via an authenticated call.
+   * Host-side tenant-scoped queries and access checks look here.
+   */
+  tenantId?: string;
   conversationId?: string;
   status: 'RUNNING' | 'COMPLETED' | 'TERMINATED' | 'FAILED';
   createdAt: Date;

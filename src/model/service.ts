@@ -105,13 +105,21 @@ function resolveTriggerClaims(
  * extension-attribute vocabularies — it delegates entirely to plugins via
  * {@link StartTrigger.claimFromBpmn}.
  *
+ * Per-tenant model: deploy writes exactly one row per start event, keyed to
+ * the **owner tenant** (the definition's `tenantId`). Rows owned by other
+ * tenants (created when those tenants called `activateSchedules`) are NOT
+ * touched — redeploying an owner's workflow never clobbers procurer state.
+ *
  * Orphan rows (start events removed from the BPMN, or whose claiming trigger
- * was deregistered) are deleted.
+ * was deregistered) are deleted *only for the owner tenant*. Procurer rows
+ * for a removed start event are left alone — they'll reject at activate time
+ * the next time the tenant tries to fire them (the start event is gone).
  */
 async function syncTriggerSchedules(
   db: Db,
   definitionId: string,
   graph: NormalizedGraph,
+  ownerTenantId: string | undefined,
 ): Promise<void> {
   const { TriggerSchedules } = getCollections(db);
   const registry = getDefaultTriggerRegistry();
@@ -135,8 +143,12 @@ async function syncTriggerSchedules(
 
   const now = new Date();
   const activeStartEventIds = claims.map((c) => c.node.id);
+  // Scope the orphan cleanup to the owner tenant: redeploying the owner's
+  // workflow must not remove procurer rows (which may still be valid until
+  // those tenants re-activate or their workflow gets removed).
   await TriggerSchedules.deleteMany({
     definitionId,
+    startingTenantId: ownerTenantId,
     ...(activeStartEventIds.length > 0
       ? { startEventId: { $nin: activeStartEventIds } }
       : {}),
@@ -171,23 +183,43 @@ async function syncTriggerSchedules(
       setClause.status = forcedStatus;
     }
 
+    // Match filter uses `$eq` + `{ $exists: false }` fallback so undefined
+    // ownerTenantId (legacy / demo deploys) matches the single no-tenant row.
+    const matchFilter: Record<string, unknown> = {
+      definitionId,
+      startEventId: node.id,
+      triggerType: trigger.triggerType,
+    };
+    if (ownerTenantId) {
+      matchFilter.startingTenantId = ownerTenantId;
+    } else {
+      matchFilter.$or = [
+        { startingTenantId: { $exists: false } },
+        { startingTenantId: null },
+      ];
+    }
+
+    // Only write startingTenantId on insert when we have one — otherwise
+    // Mongo persists an explicit `null` and `listTriggerSchedules()` sees a
+    // row indistinguishable from the per-tenant shape. Undefined stays
+    // omitted from the doc, matching the legacy test's expectations.
+    const setOnInsertBase: Record<string, unknown> = {
+      _id: uuidv4(),
+      scheduleId: uuidv4(),
+      definitionId,
+      startEventId: node.id,
+      triggerType: trigger.triggerType,
+      cursor: null,
+      credentials: null,
+      initialPolicy: trigger.defaultInitialPolicy,
+      createdAt: now,
+      ...(forcedStatus === undefined ? { status: 'PAUSED' } : {}),
+    };
+    if (ownerTenantId) setOnInsertBase.startingTenantId = ownerTenantId;
+
     await TriggerSchedules.updateOne(
-      { definitionId, startEventId: node.id, triggerType: trigger.triggerType },
-      {
-        $set: setClause,
-        $setOnInsert: {
-          _id: uuidv4(),
-          scheduleId: uuidv4(),
-          definitionId,
-          startEventId: node.id,
-          triggerType: trigger.triggerType,
-          cursor: null,
-          credentials: null,
-          initialPolicy: trigger.defaultInitialPolicy,
-          createdAt: now,
-          ...(forcedStatus === undefined ? { status: 'PAUSED' } : {}),
-        },
-      },
+      matchFilter,
+      { $set: setClause, $setOnInsert: setOnInsertBase },
       { upsert: true },
     );
   }
@@ -229,7 +261,7 @@ export async function deployDefinition(
         },
       }
     );
-    await syncTriggerSchedules(db, existing._id, graph);
+    await syncTriggerSchedules(db, existing._id, graph, params.tenantId);
     return { definitionId: existing._id };
   }
 
@@ -246,7 +278,7 @@ export async function deployDefinition(
     deployedAt: now,
   });
 
-  await syncTriggerSchedules(db, definitionId, graph);
+  await syncTriggerSchedules(db, definitionId, graph, params.tenantId);
 
   return { definitionId };
 }

@@ -567,19 +567,31 @@ apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: R
         connectorSet[`config.${k}`] = v;
       }
     }
-    await TriggerSchedules.updateMany(
-      { definitionId, triggerType: { $ne: 'timer' } },
-      { $set: connectorSet },
-    );
+    // Scope the bulk update to the caller's tenant when provided. Without
+    // this, two tenants sharing a workflow would clobber each other's
+    // per-schedule state on every activate.
+    const connectorFilter: Record<string, unknown> = {
+      definitionId,
+      triggerType: { $ne: 'timer' },
+    };
+    if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
+      connectorFilter.startingTenantId = startingTenantId;
+    }
+    await TriggerSchedules.updateMany(connectorFilter, { $set: connectorSet });
 
     const triggerSet: Record<string, unknown> = { status: 'ACTIVE', updatedAt: now };
     if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
       triggerSet.startingTenantId = startingTenantId;
     }
-    await TriggerSchedules.updateMany(
-      { definitionId, triggerType: 'timer', status: { $ne: 'EXHAUSTED' } },
-      { $set: triggerSet },
-    );
+    const timerFilter: Record<string, unknown> = {
+      definitionId,
+      triggerType: 'timer',
+      status: { $ne: 'EXHAUSTED' },
+    };
+    if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
+      timerFilter.startingTenantId = startingTenantId;
+    }
+    await TriggerSchedules.updateMany(timerFilter, { $set: triggerSet });
 
     res.json({ accepted: true });
   } catch (err) {
@@ -590,12 +602,17 @@ apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: R
 apiRouter.post('/v1/definitions/:definitionId/schedules/deactivate', async (req: Request, res: Response) => {
   try {
     const { definitionId } = req.params;
+    const { startingTenantId } = (req.body ?? {}) as { startingTenantId?: string };
     const db = getDb();
     const { TriggerSchedules } = getCollections(db);
     const now = new Date();
 
+    const filter: Record<string, unknown> = { definitionId, status: 'ACTIVE' };
+    if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
+      filter.startingTenantId = startingTenantId;
+    }
     await TriggerSchedules.updateMany(
-      { definitionId, status: 'ACTIVE' },
+      filter,
       { $set: { status: 'PAUSED', updatedAt: now } },
     );
 

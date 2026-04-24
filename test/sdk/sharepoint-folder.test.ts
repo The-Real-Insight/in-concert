@@ -446,9 +446,17 @@ describe('SharePoint folder trigger — onFileReceived hook', () => {
   });
 
   it('propagates schedule.startingTenantId to ProcessInstance.tenantId', async () => {
-    // Deploy, activate with a tenant, and verify the created instance
-    // carries the tenantId — required for host-side tenant-scoped lists.
-    const definitionId = await deploySharePointProcess();
+    // Deploy with an owner tenant, activate with the same tenant (a no-op
+    // clone), and verify the created instance carries the tenantId — required
+    // for host-side tenant-scoped lists.
+    const bpmnXml = loadBpmn('sharepoint-folder-start.bpmn');
+    const { definitionId } = await client.deploy({
+      id: 'sp-folder',
+      name: 'SharePoint Folder',
+      version: '1',
+      bpmnXml,
+      tenantId: 'tenant-xyz',
+    });
     await client.activateSchedules(definitionId, {
       startingTenantId: 'tenant-xyz',
       graphCredentials: { tenantId: 'x', clientId: 'x', clientSecret: 'x' },
