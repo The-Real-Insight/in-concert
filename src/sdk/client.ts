@@ -711,14 +711,52 @@ export class BpmnEngineClient {
     const { getInstance } = await import('../instance/service');
     const { broadcastAll } = await import('../ws/broadcast');
     const { markOutboxSent } = await import('../workers/outbox-dispatcher');
+    const { getCollections } = await import('../db/collections');
     const maxIter = options?.maxIterations ?? 500;
 
     const db = (this.config as { mode: 'local'; db: Db }).db;
+    const { Continuations } = getCollections(db);
+    // Bounded retry window (ms) for handoff races: when claim returns null but
+    // another worker (subscribe loop, recover loop) has the instance's next
+    // continuation IN_PROGRESS, we need to wait for it to commit the next
+    // READY continuation instead of bailing with `status: RUNNING` and
+    // leaving the instance stranded.
+    const handoffWaitMaxMs = 2_000;
+    const handoffWaitStepMs = 50;
     for (let i = 0; i < maxIter; i++) {
-      const cont = await claimContinuation(db, { instanceId });
+      let cont = await claimContinuation(db, { instanceId });
       if (!cont) {
+        // Fast terminal check: if the instance is already finished, no
+        // amount of waiting will produce work.
         const instance = await getInstance(db, instanceId);
-        return { status: instance?.status ?? 'UNKNOWN' };
+        const status = instance?.status ?? 'UNKNOWN';
+        if (status !== 'RUNNING') {
+          return { status };
+        }
+        // Instance is RUNNING but we got nothing. This happens when a
+        // concurrent worker claimed the prior continuation (e.g. START) and
+        // hasn't yet committed the follow-up TOKEN_AT_NODE. Poll briefly
+        // until a claimable continuation appears or we're confident the
+        // instance is quiescent (waiting at a user task / timer / message).
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < handoffWaitMaxMs) {
+          const inProgress = await Continuations.findOne(
+            { instanceId, status: 'IN_PROGRESS' },
+            { projection: { _id: 1 } }
+          );
+          const ready = await Continuations.findOne(
+            { instanceId, status: 'READY' },
+            { projection: { _id: 1 } }
+          );
+          if (!inProgress && !ready) break; // quiescent — stop waiting
+          await new Promise((r) => setTimeout(r, handoffWaitStepMs));
+          cont = await claimContinuation(db, { instanceId });
+          if (cont) break;
+        }
+        if (!cont) {
+          const latest = await getInstance(db, instanceId);
+          return { status: latest?.status ?? status };
+        }
       }
 
       const { outbox, events } = await processContinuation(db, cont);
