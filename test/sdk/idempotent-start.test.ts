@@ -149,21 +149,26 @@ describe('startInstance idempotency', () => {
         await client.completeExternalTask(item.instanceId, item.payload.workItemId);
       },
     });
+    client.startEngineWorker();
 
-    const first = await startInstance(db, {
-      commandId: uuidv4(),
-      definitionId,
-      idempotencyKey: 'runnable',
-    });
-    const second = await startInstance(db, {
-      commandId: uuidv4(),
-      definitionId,
-      idempotencyKey: 'runnable',
-    });
-    expect(second.instanceId).toBe(first.instanceId);
+    try {
+      const first = await startInstance(db, {
+        commandId: uuidv4(),
+        definitionId,
+        idempotencyKey: 'runnable',
+      });
+      const second = await startInstance(db, {
+        commandId: uuidv4(),
+        definitionId,
+        idempotencyKey: 'runnable',
+      });
+      expect(second.instanceId).toBe(first.instanceId);
 
-    const { status } = await client.run(first.instanceId);
-    expect(status).toBe('COMPLETED');
-    expect(serviceCalls).toBe(1);
+      const { status } = await client.run(first.instanceId);
+      expect(status).toBe('COMPLETED');
+      expect(serviceCalls).toBe(1);
+    } finally {
+      await client.stopEngineWorker();
+    }
   });
 });

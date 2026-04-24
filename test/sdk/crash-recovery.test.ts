@@ -198,58 +198,77 @@ describe('end-to-end crash simulation', () => {
         await client.completeExternalTask(item.instanceId, item.payload.workItemId);
       },
     });
-    const { definitionId } = await client.deploy({
-      id: `crash-cont-${uuidv4().slice(0, 8)}`,
-      name: 'Crash Cont',
-      version: '1',
-      bpmnXml: loadBpmn('start-service-task-end.bpmn'),
-    });
 
-    // 2. Start the instance — creates a READY START continuation.
-    const { instanceId } = await client.startInstance({ commandId: uuidv4(), definitionId });
+    // Note: we intentionally do NOT start the engine worker yet. The first
+    // half of the test simulates a crash by manually claiming the START
+    // continuation before any worker sees it — if the singleton were
+    // running it would race against us for the row.
 
-    const { Continuations, ProcessInstances } = getCollections(db);
-    const startCont = await Continuations.findOne({ instanceId, status: 'READY' });
-    expect(startCont).not.toBeNull();
+    try {
+      const { definitionId } = await client.deploy({
+        id: `crash-cont-${uuidv4().slice(0, 8)}`,
+        name: 'Crash Cont',
+        version: '1',
+        bpmnXml: loadBpmn('start-service-task-end.bpmn'),
+      });
 
-    // 3. Crash simulation: claim the continuation and never call
-    //    processContinuation. The worker died between claim and process.
-    //    Note: findOneAndUpdate returns the pre-update doc by default, so we
-    //    check the actual DB state instead of the return value.
-    const claimed = await claimContinuation(db, { instanceId });
-    expect(claimed?._id).toBe(startCont!._id);
-    const claimedRow = await Continuations.findOne({ _id: claimed!._id });
-    expect(claimedRow?.status).toBe('IN_PROGRESS');
-    expect(claimedRow?.leaseUntil).toBeDefined();
+      // 2. Start the instance — creates a READY START continuation.
+      const { instanceId } = await client.startInstance({ commandId: uuidv4(), definitionId });
 
-    // 4. Force the lease into the past (emulating a lease that outlived the
-    //    worker's process).
-    await Continuations.updateOne(
-      { _id: claimed!._id },
-      { $set: { leaseUntil: new Date(Date.now() - 60_000) } },
-    );
+      const { Continuations, ProcessInstances } = getCollections(db);
+      const startCont = await Continuations.findOne({ instanceId, status: 'READY' });
+      expect(startCont).not.toBeNull();
 
-    // Confirm run() alone can't progress the instance — the continuation is
-    // still IN_PROGRESS, so claimContinuation returns null.
-    const runBefore = await client.run(instanceId, undefined, { maxIterations: 5 });
-    expect(runBefore.status).toBe('RUNNING');
-    const instanceMid = await ProcessInstances.findOne({ _id: instanceId });
-    expect(instanceMid?.status).toBe('RUNNING');
+      // 3. Crash simulation: claim the continuation and never call
+      //    processContinuation. The worker died between claim and process.
+      //    Note: findOneAndUpdate returns the pre-update doc by default, so we
+      //    check the actual DB state instead of the return value.
+      const claimed = await claimContinuation(db, { instanceId });
+      expect(claimed?._id).toBe(startCont!._id);
+      const claimedRow = await Continuations.findOne({ _id: claimed!._id });
+      expect(claimedRow?.status).toBe('IN_PROGRESS');
+      expect(claimedRow?.leaseUntil).toBeDefined();
 
-    // 5. Sweep — this is the recovery primitive that should un-stick things.
-    const swept = await sweepExpiredLeases(db);
-    expect(swept.continuations).toBeGreaterThanOrEqual(1);
+      // 4. Force the lease into the past (emulating a lease that outlived the
+      //    worker's process).
+      await Continuations.updateOne(
+        { _id: claimed!._id },
+        { $set: { leaseUntil: new Date(Date.now() - 60_000) } },
+      );
 
-    const reclaimed = await Continuations.findOne({ _id: claimed!._id });
-    expect(reclaimed?.status).toBe('READY');
+      // NOW start the engine worker — the world after a crash, restarting
+      // fresh with a stuck continuation still in the DB.
+      client.startEngineWorker();
 
-    // 6. Now run() can drive the instance to completion.
-    const runAfter = await client.run(instanceId);
-    expect(runAfter.status).toBe('COMPLETED');
-    expect(serviceCalls).toHaveLength(1);
+      // Confirm run() alone can't progress the instance — the continuation is
+      // still IN_PROGRESS, so claimContinuation returns null and the engine
+      // worker reports the current instance status (RUNNING).
+      const runBefore = await client.run(instanceId);
+      expect(runBefore.status).toBe('RUNNING');
+      const instanceMid = await ProcessInstances.findOne({ _id: instanceId });
+      expect(instanceMid?.status).toBe('RUNNING');
 
-    const instanceFinal = await ProcessInstances.findOne({ _id: instanceId });
-    expect(instanceFinal?.status).toBe('COMPLETED');
+      // 5. Sweep — this is the recovery primitive that should un-stick things.
+      //    The sweep transitions the stuck row IN_PROGRESS → READY. Under the
+      //    singleton engine-worker model, the worker reacts to that change
+      //    (change-stream + fallback poll) and may immediately claim the row
+      //    back to IN_PROGRESS before our next `findOne` lands — that's the
+      //    intended behavior of the unstick-then-process pipeline. We assert
+      //    the intent via swept.continuations and then prove end-to-end
+      //    recovery by running the instance to COMPLETED below.
+      const swept = await sweepExpiredLeases(db);
+      expect(swept.continuations).toBeGreaterThanOrEqual(1);
+
+      // 6. run() drives the instance to completion.
+      const runAfter = await client.run(instanceId);
+      expect(runAfter.status).toBe('COMPLETED');
+      expect(serviceCalls).toHaveLength(1);
+
+      const instanceFinal = await ProcessInstances.findOne({ _id: instanceId });
+      expect(instanceFinal?.status).toBe('COMPLETED');
+    } finally {
+      await client.stopEngineWorker();
+    }
   });
 
   it('persisted-but-undispatched outbox row is picked up by dispatcher and delivered', async () => {

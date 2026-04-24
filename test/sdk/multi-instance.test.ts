@@ -82,9 +82,11 @@ beforeAll(async () => {
       }
     },
   });
+  client.startEngineWorker();
 });
 
 afterAll(async () => {
+  await client.stopEngineWorker();
   unsubscribeProjection?.();
   await teardownDb();
 });
@@ -145,6 +147,12 @@ describe('SDK: multi-instance', () => {
     const FIXED_ITEMS = [{ id: 'x', label: 'First' }, { id: 'y', label: 'Second' }];
     const resolvedItems: unknown[] = [];
 
+    // Two engine workers on the same Mongo would race for rows. Stop the
+    // main client's worker (started in beforeAll) so only `testClient`'s
+    // worker — with this test's bespoke handlers — processes continuations.
+    // Restarted at the end to leave the suite state as expected.
+    await client.stopEngineWorker();
+
     const testClient = new BpmnEngineClient({ mode: 'local', db });
     testClient.init({
       onMultiInstanceResolve: async () => ({ items: FIXED_ITEMS }),
@@ -159,24 +167,33 @@ describe('SDK: multi-instance', () => {
         }
       },
     });
+    testClient.startEngineWorker();
 
-    const bpmn = loadBpmn('multi-instance-service-task.bpmn');
-    const name = uniqueName('MI_Index');
-    const { definitionId } = await testClient.deploy({
-      id: name,
-      name,
-      version: '1',
-      bpmnXml: bpmn,
-    });
+    try {
+      const bpmn = loadBpmn('multi-instance-service-task.bpmn');
+      const name = uniqueName('MI_Index');
+      const { definitionId } = await testClient.deploy({
+        id: name,
+        name,
+        version: '1',
+        bpmnXml: bpmn,
+      });
 
-    const { instanceId } = await testClient.startInstance({
-      commandId: uuidv4(),
-      definitionId,
-      user: MOCK_USER,
-    });
+      const { instanceId } = await testClient.startInstance({
+        commandId: uuidv4(),
+        definitionId,
+        user: MOCK_USER,
+      });
 
-    await testClient.run(instanceId);
+      await testClient.run(instanceId);
 
-    expect(resolvedItems).toEqual(FIXED_ITEMS);
+      expect(resolvedItems).toEqual(FIXED_ITEMS);
+    } finally {
+      await testClient.stopEngineWorker();
+      // Restart the main worker so afterAll's stopEngineWorker is a clean
+      // teardown (calling stop on a never-started worker is a no-op anyway,
+      // but restoring symmetry keeps the suite reasoning simple).
+      client.startEngineWorker();
+    }
   });
 });

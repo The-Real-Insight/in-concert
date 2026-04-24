@@ -114,9 +114,11 @@ beforeAll(async () => {
       }
     },
   });
+  client.startEngineWorker();
 });
 
 afterAll(async () => {
+  await client.stopEngineWorker();
   unsubscribeProjection?.();
   await teardownDb();
 });
@@ -243,7 +245,15 @@ describe('SDK: xor-with-transition-conditions', () => {
     expect(claimAssessment!.candidateRoles).toContain('Claims Assessor');
   });
 
-  it('init + recover uses registered handlers when recover gets no handlers', async () => {
+  it('init handlers drive an instance to COMPLETED via run() (singleton worker model)', async () => {
+    // Historical note: this test used to call `client.recover()` to validate
+    // that init-registered handlers were used when recover was called with
+    // no override. Under the singleton engine-worker model the worker is
+    // always running, so the "recover as a way to drive pending work" path
+    // is effectively automatic — the assertions about handlers being used
+    // are now covered by run() + init-handler invocation.
+    runConfig = { selectFlowIds: (ids) => [ids[0]!] };
+
     const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
     const name = uniqueName('InitRecover');
     const { definitionId } = await client.deploy({
@@ -258,15 +268,14 @@ describe('SDK: xor-with-transition-conditions', () => {
       user: MOCK_USER,
     });
 
-    runConfig = { selectFlowIds: (ids) => [ids[0]!] };
-    const { processed } = await client.recover();
-    expect(processed).toBeGreaterThanOrEqual(1);
-    const instance = await client.getInstance(instanceId);
-    expect(instance?.status).toBe('COMPLETED');
+    const result = await client.run(instanceId);
+    expect(result.status).toBe('COMPLETED');
     expect(workCallbacks.some((w) => w.name === 'Claim Entry')).toBe(true);
   });
 
-  it('recover processes all pending continuations after start', async () => {
+  it('run() drives all pending continuations after start', async () => {
+    runConfig = { selectFlowIds: (ids) => [ids[0]!] };
+
     const bpmn = loadBpmn('xor-with-transition-conditions.bpmn');
     const name = uniqueName('RecoverTest');
     const { definitionId } = await client.deploy({
@@ -281,12 +290,8 @@ describe('SDK: xor-with-transition-conditions', () => {
       user: MOCK_USER,
     });
 
-    runConfig = { selectFlowIds: (ids) => [ids[0]!] };
-    const { processed } = await client.recover();
-
-    expect(processed).toBeGreaterThanOrEqual(1);
-    const instance = await client.getInstance(instanceId);
-    expect(instance?.status).toBe('COMPLETED');
+    const result = await client.run(instanceId);
+    expect(result.status).toBe('COMPLETED');
     expect(workCallbacks.some((w) => w.name === 'Claim Entry')).toBe(true);
     expect(workCallbacks.some((w) => w.name === 'Claim Assessment')).toBe(true);
   });

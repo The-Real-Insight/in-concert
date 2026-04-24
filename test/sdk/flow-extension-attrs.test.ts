@@ -58,32 +58,37 @@ describe('custom extension attributes on sequence flows', () => {
         /* unused */
       },
     });
+    client.startEngineWorker();
 
-    const { definitionId } = await client.deploy({
-      id: `flow-attrs-${uuidv4().slice(0, 8)}`,
-      name: 'Flow Attrs',
-      version: '1',
-      bpmnXml: loadBpmn('xor-custom-flow-attrs.bpmn'),
-    });
-    const { instanceId } = await client.startInstance({ commandId: uuidv4(), definitionId });
-    await client.run(instanceId);
+    try {
+      const { definitionId } = await client.deploy({
+        id: `flow-attrs-${uuidv4().slice(0, 8)}`,
+        name: 'Flow Attrs',
+        version: '1',
+        bpmnXml: loadBpmn('xor-custom-flow-attrs.bpmn'),
+      });
+      const { instanceId } = await client.startInstance({ commandId: uuidv4(), definitionId });
+      await client.run(instanceId);
 
-    expect(capturedTransitions).toHaveLength(1);
-    const transitions = capturedTransitions[0]!;
-    const approve = transitions.find((t) => t.flowId === 'Flow_Approve');
-    const reject = transitions.find((t) => t.flowId === 'Flow_Reject');
+      expect(capturedTransitions).toHaveLength(1);
+      const transitions = capturedTransitions[0]!;
+      const approve = transitions.find((t) => t.flowId === 'Flow_Approve');
+      const reject = transitions.find((t) => t.flowId === 'Flow_Reject');
 
-    // Approve carries three acme:* attrs verbatim.
-    expect(approve?.attrs).toEqual({
-      'acme:condition1': 'amount_below_threshold',
-      'acme:condition2': 'customer_tier_premium',
-      'acme:explanation': 'Small orders from premium customers are auto-approved',
-    });
+      // Approve carries three acme:* attrs verbatim.
+      expect(approve?.attrs).toEqual({
+        'acme:condition1': 'amount_below_threshold',
+        'acme:condition2': 'customer_tier_premium',
+        'acme:explanation': 'Small orders from premium customers are auto-approved',
+      });
 
-    // Reject carries one acme:* attr.
-    expect(reject?.attrs).toEqual({
-      'acme:explanation': 'Everything else goes to manual review',
-    });
+      // Reject carries one acme:* attr.
+      expect(reject?.attrs).toEqual({
+        'acme:explanation': 'Everything else goes to manual review',
+      });
+    } finally {
+      await client.stopEngineWorker();
+    }
   });
 
   it('transitions without extension attributes omit `attrs` entirely', async () => {
@@ -101,20 +106,25 @@ describe('custom extension attributes on sequence flows', () => {
         /* unused */
       },
     });
+    client.startEngineWorker();
 
-    // Use the existing plain XOR fixture — no acme:* attrs anywhere.
-    const { definitionId } = await client.deploy({
-      id: `plain-xor-${uuidv4().slice(0, 8)}`,
-      name: 'Plain XOR',
-      version: '1',
-      bpmnXml: loadBpmn('xor-split-with-default.bpmn'),
-    });
-    const { instanceId } = await client.startInstance({ commandId: uuidv4(), definitionId });
-    await client.run(instanceId);
+    try {
+      // Use the existing plain XOR fixture — no acme:* attrs anywhere.
+      const { definitionId } = await client.deploy({
+        id: `plain-xor-${uuidv4().slice(0, 8)}`,
+        name: 'Plain XOR',
+        version: '1',
+        bpmnXml: loadBpmn('xor-split-with-default.bpmn'),
+      });
+      const { instanceId } = await client.startInstance({ commandId: uuidv4(), definitionId });
+      await client.run(instanceId);
 
-    expect(captured).not.toBeNull();
-    for (const t of captured!) {
-      expect(t.attrs).toBeUndefined();
+      expect(captured).not.toBeNull();
+      for (const t of captured!) {
+        expect(t.attrs).toBeUndefined();
+      }
+    } finally {
+      await client.stopEngineWorker();
     }
   });
 });

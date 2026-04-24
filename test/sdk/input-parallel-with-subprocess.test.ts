@@ -46,9 +46,11 @@ beforeAll(async () => {
       await client.completeExternalTask(item.instanceId, item.payload.workItemId);
     },
   });
+  client.startEngineWorker();
 });
 
 afterAll(async () => {
+  await client.stopEngineWorker();
   unsubscribeProjection?.();
   await teardownDb();
 });
