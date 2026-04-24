@@ -127,4 +127,57 @@ describe('Graph mailbox message start event', () => {
     const schedules = await client.listConnectorSchedules({ definitionId });
     expect(schedules).toHaveLength(0);
   });
+
+  it('activateSchedules configOverrides merges per-tenant values into schedule.config', async () => {
+    const bpmnXml = loadBpmn('graph-mailbox-start.bpmn');
+    const { definitionId } = await client.deploy({
+      id: 'graph-mailbox-cfg',
+      name: 'Graph Mailbox Cfg',
+      version: '1',
+      bpmnXml,
+    });
+
+    // BPMN default is ada@the-real-insight.com; tenant overrides the mailbox.
+    const before = (await client.listConnectorSchedules({ definitionId }))[0];
+    expect(before.config.mailbox).toBe('ada@the-real-insight.com');
+    expect(before.config.pollingIntervalMs).toBeUndefined();
+
+    await client.activateSchedules(definitionId, {
+      startingTenantId: 'tenant-x',
+      configOverrides: {
+        mailbox: 'tenant-x@the-real-insight.com',
+        pollingIntervalMs: '45000', // attr the BPMN didn't set — adds it
+      },
+    });
+
+    const after = (await client.listConnectorSchedules({ definitionId }))[0];
+    expect(after.status).toBe('ACTIVE');
+    expect(after.startingTenantId).toBe('tenant-x');
+    // Override takes effect for the named key…
+    expect(after.config.mailbox).toBe('tenant-x@the-real-insight.com');
+    // …and a key the BPMN didn't set shows up verbatim from the override.
+    expect(after.config.pollingIntervalMs).toBe('45000');
+    // Keys the tenant didn't touch are untouched (verified by the blank-skip
+    // test below — which activates without overrides for the same field).
+  });
+
+  it('activateSchedules configOverrides skips empty values so blanks do not wipe defaults', async () => {
+    const bpmnXml = loadBpmn('graph-mailbox-start.bpmn');
+    const { definitionId } = await client.deploy({
+      id: 'graph-mailbox-cfg-blank',
+      name: 'Graph Mailbox Cfg Blank',
+      version: '1',
+      bpmnXml,
+    });
+
+    await client.activateSchedules(definitionId, {
+      startingTenantId: 'tenant-y',
+      configOverrides: {
+        mailbox: '', // blank — should not wipe the BPMN default
+      },
+    });
+
+    const after = (await client.listConnectorSchedules({ definitionId }))[0];
+    expect(after.config.mailbox).toBe('ada@the-real-insight.com');
+  });
 });

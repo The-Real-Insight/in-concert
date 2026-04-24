@@ -503,9 +503,10 @@ apiRouter.put('/v1/connector-schedules/:scheduleId/credentials', async (req: Req
 apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: Request, res: Response) => {
   try {
     const { definitionId } = req.params;
-    const { graphCredentials, startingTenantId } = req.body as {
+    const { graphCredentials, startingTenantId, configOverrides } = req.body as {
       graphCredentials?: { tenantId: string; clientId: string; clientSecret: string };
       startingTenantId?: string;
+      configOverrides?: Record<string, string>;
     };
     const db = getDb();
     const { TriggerSchedules } = getCollections(db);
@@ -520,6 +521,13 @@ apiRouter.post('/v1/definitions/:definitionId/schedules/activate', async (req: R
     }
     if (typeof startingTenantId === 'string' && startingTenantId.length > 0) {
       connectorSet.startingTenantId = startingTenantId;
+    }
+    if (configOverrides && typeof configOverrides === 'object') {
+      for (const [k, v] of Object.entries(configOverrides)) {
+        if (v == null) continue;
+        if (typeof v === 'string' && v.length === 0) continue;
+        connectorSet[`config.${k}`] = v;
+      }
     }
     await TriggerSchedules.updateMany(
       { definitionId, triggerType: { $ne: 'timer' } },

@@ -35,6 +35,18 @@ export type ActivateSchedulesOptions = {
    * email/timer get `ProcessInstances.tenantId` from this (not from the process definition).
    */
   startingTenantId?: string;
+  /**
+   * Per-tenant overrides merged into every non-timer `TriggerSchedule.config`
+   * for this definition. Keys are written as dotted `config.<key>` via `$set`,
+   * so BPMN-authored defaults for attrs the tenant didn't specify stay intact
+   * and only named fields are replaced. Empty / null values are skipped so a
+   * tenant-left-blank field doesn't wipe out the author's default.
+   *
+   * Typical use: the portal stores per-procurement values (mailbox for a
+   * graph-mailbox workflow, siteUrl/driveName/folderPath for sharepoint-folder)
+   * and the host forwards them here at activate time.
+   */
+  configOverrides?: Record<string, string>;
 };
 
 export type StartInstanceParams = {

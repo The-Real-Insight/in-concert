@@ -1148,6 +1148,17 @@ export class BpmnEngineClient {
     if (options?.startingTenantId) {
       connectorSet.startingTenantId = options.startingTenantId;
     }
+    // Per-tenant config overrides: written as dotted `config.<key>` so only
+    // the named attrs are replaced and BPMN-authored defaults for untouched
+    // fields stay intact. Empty strings and nullish values are skipped so
+    // leaving a field blank in the portal doesn't wipe out a default.
+    if (options?.configOverrides) {
+      for (const [k, v] of Object.entries(options.configOverrides)) {
+        if (v == null) continue;
+        if (typeof v === 'string' && v.length === 0) continue;
+        connectorSet[`config.${k}`] = v;
+      }
+    }
     await TriggerSchedules.updateMany(
       { definitionId, triggerType: { $ne: 'timer' } },
       { $set: connectorSet },
