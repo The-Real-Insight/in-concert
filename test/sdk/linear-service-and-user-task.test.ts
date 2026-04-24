@@ -54,9 +54,11 @@ beforeAll(async () => {
       await client.completeExternalTask(item.instanceId, item.payload.workItemId);
     },
   });
+  client.startEngineWorker();
 });
 
 afterAll(async () => {
+  await client.stopEngineWorker();
   unsubscribeProjection?.();
   await teardownDb();
 });
@@ -189,9 +191,9 @@ describe('SDK: linear-service-and-user-task', () => {
     );
   });
 
-  it('subscribeToCallbacks receives and logs task properties', async () => {
+  it('init() handlers receive and log task properties (observation)', async () => {
     const bpmn = loadBpmn('linear-service-and-user-task.bpmn');
-    const name = uniqueName('CaseProcess_Subscribe');
+    const name = uniqueName('CaseProcess_Observe');
     const { definitionId } = await client.deploy({
       id: name,
       name,
@@ -199,29 +201,25 @@ describe('SDK: linear-service-and-user-task', () => {
       bpmnXml: bpmn,
     });
 
+    // Tell the shared onWorkItem handler to observe but not auto-complete
+    // this task — we want to inspect callback metadata before completing.
+    runConfig.skipTaskNames = ['EnterCaseData'];
+
     const { instanceId } = await client.startInstance({
       commandId: uuidv4(),
       definitionId,
       user: MOCK_USER,
     });
 
-    let unsub: () => void;
-    await new Promise<void>((resolve) => {
-      unsub = client.subscribeToCallbacks((item) => {
-        if (item.instanceId !== instanceId) return;
-        onCallback(item);
-        if (callbackLog.some((c) => c.name === 'EnterCaseData')) {
-          unsub!();
-          resolve();
-        }
-      });
-    });
+    // run() returns once the process is quiescent (waiting at EnterCaseData).
+    await client.run(instanceId);
 
     expect(callbackLog.length).toBeGreaterThanOrEqual(1);
     expect(callbackLog[0]!.name).toBe('EnterCaseData');
     expect(callbackLog[0]!.role).toBe('FrontOffice');
 
-    // Complete first work item (subscribe logged but did not complete), then process rest
+    // Complete the skipped user task and run the remainder.
+    runConfig.skipTaskNames = [];
     await client.completeUserTask(instanceId, callbackLog[0]!.workItemId, { user: MOCK_USER });
     await client.run(instanceId);
   });

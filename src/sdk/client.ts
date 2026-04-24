@@ -18,6 +18,7 @@ import type {
   CallbackHandlers,
   EngineInitConfig,
 } from './types';
+import { EngineWorker, type EngineWorkerOptions } from './engineWorker';
 
 export type SdkConfigRest = {
   mode: 'rest';
@@ -36,6 +37,7 @@ export class BpmnEngineClient {
   private initHandlers: CallbackHandlers | null = null;
   private serviceVocabulary: Record<string, unknown> | null = null;
   private _onMailReceived: EngineInitConfig['onMailReceived'] | null = null;
+  private engineWorker: EngineWorker | null = null;
 
   constructor(config: SdkConfig) {
     emitEngineAttributionNoticeOnce();
@@ -679,19 +681,92 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Run instance until terminal (COMPLETED/TERMINATED/FAILED) or quiescent.
-   * Uses handlers from init() unless overridden. Local mode only.
+   * Start the in-process continuation worker. Call once at server start,
+   * after `init()`. Local mode only. In REST mode this is a no-op — the
+   * in-concert server runs its own worker loop.
+   *
+   * The worker is a singleton per client instance: it owns all continuation
+   * claiming and callback dispatch. `run(instanceId)` just registers interest
+   * and awaits the worker's "instance quiescent" signal — no per-caller
+   * claim loops, no exclusion lists.
+   *
+   * Safe to call more than once (idempotent). Options tune pool size and
+   * poll cadence; the default ownership impl is single-server (every
+   * instance processed locally).
+   */
+  startEngineWorker(options?: EngineWorkerOptions): void {
+    if (this.config.mode !== 'local') {
+      return; // REST mode: server runs its own worker
+    }
+    if (!this.initHandlers) {
+      throw new Error('startEngineWorker requires init() to be called first');
+    }
+    if (this.engineWorker) {
+      return; // already started
+    }
+    this.engineWorker = new EngineWorker(this.config.db, this.initHandlers, options);
+    this.engineWorker.start();
+  }
+
+  /**
+   * Stop the in-process continuation worker, draining any in-flight
+   * instance-workers to completion. Idempotent; no-op if never started or
+   * already stopped.
+   */
+  async stopEngineWorker(): Promise<void> {
+    if (!this.engineWorker) return;
+    const worker = this.engineWorker;
+    this.engineWorker = null;
+    await worker.stop();
+  }
+
+  /**
+   * Run the given instance until it reaches a terminal state
+   * (COMPLETED/TERMINATED/FAILED) or becomes quiescent (waiting at a user
+   * task, timer, or message). Requires `startEngineWorker()` to be running.
+   *
+   * Internally this just registers a waiter with the engine worker and awaits
+   * its quiescence signal — no claim loop owned here, no race against the
+   * background dispatcher (there isn't one; the engine worker is the only
+   * claimer).
+   *
+   * `handlers` parameter is kept for API compatibility but is ignored — the
+   * engine worker uses the handlers passed to `init()`. Pass handlers via
+   * `init()` before calling `startEngineWorker()`.
    */
   async run(
     instanceId: string,
     handlers?: CallbackHandlers,
-    options?: { maxIterations?: number }
+    _options?: { maxIterations?: number }
   ): Promise<{ status: string }> {
-    return this.processUntilComplete(instanceId, handlers, options);
+    if (this.config.mode !== 'local') {
+      throw new Error('run() is only available in local mode');
+    }
+    if (handlers !== undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[in-concert] run(): per-call handlers are ignored in the singleton engine worker model — handlers are taken from init().'
+      );
+    }
+    if (!this.engineWorker) {
+      throw new Error(
+        'run() requires startEngineWorker() to be called at server boot. ' +
+          'Call engine.init(handlers); engine.startEngineWorker(); before run().'
+      );
+    }
+    return this.engineWorker.awaitQuiescent(instanceId);
   }
 
   /**
-   * @deprecated Use run() for programmer's view. Same behavior.
+   * Legacy standalone run: claims and processes continuations for a single
+   * instance in-line, using the handlers passed here (or via `init()`). Does
+   * NOT require `startEngineWorker()` — it owns its own claim loop.
+   *
+   * **Do not mix with `startEngineWorker() + run()` in the same process for
+   * the same instance**: both paths claim the same rows, which reopens the
+   * race the singleton was built to avoid. New code should prefer
+   * `run()` + the engine worker. This method is kept as a self-contained
+   * entry point for tests and tools that don't want a long-lived singleton.
    */
   async processUntilComplete(
     instanceId: string,
@@ -711,77 +786,17 @@ export class BpmnEngineClient {
     const { getInstance } = await import('../instance/service');
     const { broadcastAll } = await import('../ws/broadcast');
     const { markOutboxSent } = await import('../workers/outbox-dispatcher');
-    const { getCollections } = await import('../db/collections');
     const maxIter = options?.maxIterations ?? 500;
 
     const db = (this.config as { mode: 'local'; db: Db }).db;
-    const { Continuations } = getCollections(db);
-    // Bounded retry window (ms) for handoff races: when claim returns null but
-    // another worker (subscribe loop, recover loop) has the instance's next
-    // continuation IN_PROGRESS, we need to wait for it to commit the next
-    // READY continuation instead of bailing with `status: RUNNING` and
-    // leaving the instance stranded.
-    const handoffWaitMaxMs = 2_000;
-    const handoffWaitStepMs = 50;
     for (let i = 0; i < maxIter; i++) {
-      let cont = await claimContinuation(db, { instanceId });
-      if (cont) {
-        // eslint-disable-next-line no-console
-        console.log('[in-concert] run() claimed', {
-          instanceId,
-          iter: i,
-          kind: (cont as { kind?: string }).kind,
-        });
-      }
+      const cont = await claimContinuation(db, { instanceId });
       if (!cont) {
-        // Fast terminal check: if the instance is already finished, no
-        // amount of waiting will produce work.
         const instance = await getInstance(db, instanceId);
-        const status = instance?.status ?? 'UNKNOWN';
-        // eslint-disable-next-line no-console
-        console.log('[in-concert] run() claim returned null', {
-          instanceId,
-          iter: i,
-          instanceStatus: status,
-        });
-        if (status !== 'RUNNING') {
-          return { status };
-        }
-        // Instance is RUNNING but we got nothing. This happens when a
-        // concurrent worker claimed the prior continuation (e.g. START) and
-        // hasn't yet committed the follow-up TOKEN_AT_NODE. Poll briefly
-        // until a claimable continuation appears or we're confident the
-        // instance is quiescent (waiting at a user task / timer / message).
-        const startedAt = Date.now();
-        while (Date.now() - startedAt < handoffWaitMaxMs) {
-          const inProgress = await Continuations.findOne(
-            { instanceId, status: 'IN_PROGRESS' },
-            { projection: { _id: 1 } }
-          );
-          const ready = await Continuations.findOne(
-            { instanceId, status: 'READY' },
-            { projection: { _id: 1 } }
-          );
-          if (!inProgress && !ready) break; // quiescent — stop waiting
-          await new Promise((r) => setTimeout(r, handoffWaitStepMs));
-          cont = await claimContinuation(db, { instanceId });
-          if (cont) break;
-        }
-        if (!cont) {
-          const latest = await getInstance(db, instanceId);
-          return { status: latest?.status ?? status };
-        }
+        return { status: instance?.status ?? 'UNKNOWN' };
       }
 
       const { outbox, events } = await processContinuation(db, cont);
-      // eslint-disable-next-line no-console
-      console.log('[in-concert] run() processed', {
-        instanceId,
-        iter: i,
-        kind: (cont as { kind?: string }).kind,
-        outboxCount: outbox.length,
-        eventTypes: events.map((e) => e.type),
-      });
       broadcastAll(outbox, events);
       if (outbox.length > 0) {
         await markOutboxSent(db, outbox.map((o) => o._id));
@@ -835,7 +850,7 @@ export class BpmnEngineClient {
               instanceId: string;
               payload: import('./types').CallbackWorkPayload;
             });
-        }
+          }
         }
         if (ob.kind === 'CALLBACK_DECISION' && h.onDecision) {
           await h.onDecision(item as {
@@ -852,70 +867,22 @@ export class BpmnEngineClient {
   }
 
   /**
-   * Subscribe to callback events (work items, decisions).
-   * REST: WebSocket at /ws. Local: internal engine loop (MongoDB passive).
-   * Returns unsubscribe function.
+   * Subscribe to callback events over WebSocket (REST mode only). Local mode
+   * callers should use {@link init} + {@link startEngineWorker}; the singleton
+   * engine worker dispatches callbacks directly to the handlers passed to
+   * `init()`.
+   *
+   * @throws if called in local mode — that path previously spun up a
+   * background poller that raced the `run()` claim loop; the singleton
+   * replaces both.
    */
-  subscribeToCallbacks(
-    callback: (item: CallbackItem) => void,
-    options?: { getExcludedInstanceIds?: () => string[] }
-  ): () => void {
+  subscribeToCallbacks(callback: (item: CallbackItem) => void): () => void {
     if (this.config.mode === 'local') {
-      return this._subscribeLocal(callback, options);
+      throw new Error(
+        'subscribeToCallbacks is not supported in local mode. Use init() + startEngineWorker(); handlers passed to init() receive callbacks directly.'
+      );
     }
     return this._subscribeRest(callback);
-  }
-
-  private _subscribeLocal(
-    callback: (item: CallbackItem) => void,
-    options?: { getExcludedInstanceIds?: () => string[] }
-  ): () => void {
-    if (this.config.mode !== 'local') throw new Error('Expected local config');
-    const db = this.config.db;
-    let stopped = false;
-    const POLL_MS = 100;
-    void (async () => {
-      const { claimContinuation, processContinuation } = await import('../workers/processor');
-      const { broadcastAll } = await import('../ws/broadcast');
-      const { markOutboxSent } = await import('../workers/outbox-dispatcher');
-      while (!stopped) {
-        try {
-          const excludeInstanceIds = options?.getExcludedInstanceIds?.() ?? [];
-          const cont = await claimContinuation(db, { excludeInstanceIds });
-          if (cont) {
-            // eslint-disable-next-line no-console
-            console.log('[in-concert] subscribe claimed', {
-              instanceId: (cont as { instanceId?: string }).instanceId,
-              kind: (cont as { kind?: string }).kind,
-              excludeCount: excludeInstanceIds.length,
-              excluded: excludeInstanceIds.includes(
-                (cont as { instanceId: string }).instanceId,
-              ),
-            });
-            const { outbox, events } = await processContinuation(db, cont);
-            broadcastAll(outbox, events);
-            if (outbox.length > 0) {
-              await markOutboxSent(db, outbox.map((o) => o._id));
-            }
-            for (const ob of outbox) {
-              if (!stopped) {
-                callback({ kind: ob.kind, instanceId: ob.instanceId, payload: ob.payload } as CallbackItem);
-              }
-            }
-          }
-        } catch (err) {
-          // Surface polling-loop failures instead of silently swallowing them.
-          // Previously any throw from claimContinuation / processContinuation
-          // (e.g. a Mongo version conflict leaving a continuation leased) was
-          // invisible — callers saw an instance that never progressed with no
-          // log to explain why. Keep looping on error; just make the failure
-          // diagnosable.
-          console.error('[in-concert] subscribe poll failed:', err);
-        }
-        if (!stopped) await new Promise((r) => setTimeout(r, POLL_MS));
-      }
-    })();
-    return () => { stopped = true; };
   }
 
   private _subscribeRest(callback: (item: CallbackItem) => void): () => void {

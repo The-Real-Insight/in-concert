@@ -16,6 +16,13 @@
  * const client = new BpmnEngineClient({ mode: 'local', db });
  */
 export { BpmnEngineClient } from './client';
+export { EngineWorker } from './engineWorker';
+export type { EngineWorkerOptions } from './engineWorker';
+export {
+  SingleServerOwnership,
+  type InstanceOwnership,
+  type OwnershipDecision,
+} from './ownership';
 export { TriSdk } from './facade';
 export type { ValidationIssue } from '../model/validator';
 export type {
