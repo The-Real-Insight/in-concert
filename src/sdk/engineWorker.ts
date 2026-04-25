@@ -125,8 +125,6 @@ export class EngineWorker {
       list.push({ resolve, reject });
       this.waiters.set(instanceId, list);
     });
-    // eslint-disable-next-line no-console
-    console.log('[EngineWorker] awaitQuiescent registered waiter', { instanceId, inFlightHas: this.inFlight.has(instanceId) });
     void this.ensureInstanceWorker(instanceId);
     return p;
   }
@@ -135,26 +133,21 @@ export class EngineWorker {
    * Spawn an instance-worker for `instanceId` if one is not already running.
    * Honors `InstanceOwnership`: returns early if ownership declines.
    *
-   * Reservation is SYNCHRONOUS: we set `inFlight` before any `await`, so two
-   * parallel callers (e.g. the change stream firing on the START insert and
+   * Reservation is SYNCHRONOUS: `inFlight.set` runs before any `await`, so
+   * parallel callers (the change stream firing on a continuation insert and
    * `awaitQuiescent` from `client.run()`) cannot both pass the guard and
-   * spawn duplicate workers for the same instance. If duplicates did spawn,
-   * they would race on `claimContinuation`; the loser would get null on a
-   * fresh instance, call `notifyWaiters`, and resolve `run()` before the
-   * winner dispatched any task. The caller would then see an empty worklist,
-   * detach, and clear run context before the first callback fires.
+   * spawn duplicate workers for the same instance. If they did, the two
+   * workers would race on `claimContinuation` and the loser would get null,
+   * call `notifyWaiters`, and resolve `run()` before the winner dispatched
+   * any task.
    */
   private ensureInstanceWorker(instanceId: string): void {
-    if (this.inFlight.has(instanceId)) {
-      // eslint-disable-next-line no-console
-      console.log('[EngineWorker] ensureInstanceWorker skip (already in flight)', { instanceId });
-      return;
-    }
+    if (this.inFlight.has(instanceId)) return;
     if (this.inFlight.size >= this.poolCap) {
+      // Pool full. The fallback poll (or the next change event) will retry;
+      // the waiter stays registered.
       return;
     }
-    // eslint-disable-next-line no-console
-    console.log('[EngineWorker] ensureInstanceWorker SPAWN', { instanceId, waiters: this.waiters.get(instanceId)?.length ?? 0 });
     const promise = this.runWithOwnership(instanceId).finally(() => {
       this.inFlight.delete(instanceId);
     });
@@ -196,24 +189,13 @@ export class EngineWorker {
     const { markOutboxSent } = await import('../workers/outbox-dispatcher');
 
     try {
-      let iter = 0;
       while (!this.stopped) {
-        iter += 1;
         const cont = await claimContinuation(this.db, { instanceId });
         if (!cont) {
           const instance = await getInstance(this.db, instanceId);
-          // eslint-disable-next-line no-console
-          console.log('[EngineWorker] claim returned NULL -> notifyWaiters', {
-            instanceId,
-            iter,
-            instanceStatus: instance?.status ?? 'UNKNOWN',
-            waiters: this.waiters.get(instanceId)?.length ?? 0,
-          });
           this.notifyWaiters(instanceId, { status: instance?.status ?? 'UNKNOWN' });
           return;
         }
-        // eslint-disable-next-line no-console
-        console.log('[EngineWorker] claimed', { instanceId, iter, kind: cont.kind, contId: cont._id });
 
         const { outbox, events } = await processContinuation(this.db, cont);
         broadcastAll(outbox, events);
@@ -440,8 +422,6 @@ export class EngineWorker {
 
   private notifyWaiters(instanceId: string, result: QuiescenceResult): void {
     const list = this.waiters.get(instanceId);
-    // eslint-disable-next-line no-console
-    console.log('[EngineWorker] notifyWaiters', { instanceId, status: result.status, waiterCount: list?.length ?? 0 });
     if (!list || list.length === 0) return;
     this.waiters.delete(instanceId);
     for (const w of list) {

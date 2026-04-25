@@ -24,14 +24,6 @@ export async function claimContinuation(
   } else if (options?.excludeInstanceIds && options.excludeInstanceIds.length > 0) {
     filter.instanceId = { $nin: options.excludeInstanceIds };
   }
-  // readConcern: 'majority' is load-bearing. `startInstance` /
-  // `completeWorkItem` / `processContinuation` write their continuations with
-  // default (majority) write concern; an immediately-subsequent
-  // `findOneAndUpdate` from a different implicit session will otherwise race
-  // with replica-set snapshot propagation and return null even though the
-  // row is committed. Forcing a majority-committed read guarantees
-  // read-your-writes consistency across the SDK's continuation writers, no
-  // timing games.
   const result = await Continuations.findOneAndUpdate(
     filter,
     {
@@ -45,29 +37,6 @@ export async function claimContinuation(
     },
     { sort: { dueAt: 1 }, readConcern: { level: 'majority' } }
   );
-  if (!result && options?.instanceId) {
-    // Diagnostic: what IS in the collection for this instance right now?
-    // If the READY row exists but findOneAndUpdate returned null, that's
-    // the readConcern-on-findAndModify issue.
-    const any = await Continuations.find({ instanceId: options.instanceId })
-      .project({ _id: 1, kind: 1, status: 1, dueAt: 1, attempts: 1 })
-      .toArray();
-    // eslint-disable-next-line no-console
-    console.log('[claimContinuation] NULL for instance — raw rows:', {
-      instanceId: options.instanceId,
-      nowIso: now.toISOString(),
-      rows: any.map((r) => {
-        const d = r as { _id?: unknown; kind?: unknown; status?: unknown; dueAt?: unknown; attempts?: unknown };
-        return {
-          _id: d._id,
-          kind: d.kind,
-          status: d.status,
-          dueAt: (d.dueAt as Date)?.toISOString?.() ?? d.dueAt,
-          attempts: d.attempts,
-        };
-      }),
-    });
-  }
   return result;
 }
 
@@ -116,16 +85,7 @@ export async function processContinuation(
   let outboxWithIds: OutboxDoc[] = [];
   const session = db.client.startSession();
   try {
-    // writeConcern: 'majority' is load-bearing for cross-session
-    // read-your-writes on follow-up continuations. Transactions use their
-    // own write concern, bypassing collection-level defaults, so we pin it
-    // explicitly here: when this transaction commits a follow-up
-    // WORK_COMPLETED/new-task continuation, the next `claimContinuation`
-    // in the instance-worker loop (or in a separate process) is guaranteed
-    // to see it via its `readConcern: 'majority'` read. Pair mirrors the
-    // one on `startInstance`.
-    await session.withTransaction(
-      async () => {
+    await session.withTransaction(async () => {
       const opts = { session };
       const numEvents = result.events.length;
 
@@ -210,9 +170,7 @@ export async function processContinuation(
         { $set: { status: 'DONE', updatedAt: now } },
         opts
       );
-      },
-      { writeConcern: { w: 'majority' }, readConcern: { level: 'majority' } }
-    );
+    });
     return { outbox: outboxWithIds, events: result.events };
   } finally {
     await session.endSession();

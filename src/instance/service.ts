@@ -78,20 +78,9 @@ export async function startInstance(
     } else {
       const session = db.client.startSession();
       try {
-        // writeConcern: 'majority' is load-bearing. Transactions use their
-        // own write concern, NOT the collection-level one — so the Continuations
-        // collection's majority default is bypassed inside withTransaction.
-        // Without this, the START continuation can commit before majority
-        // propagation, and a subsequent `claimContinuation` with
-        // readConcern: 'majority' from a different session reads a stale
-        // snapshot, returns null, and the engine worker wrongly declares
-        // the instance quiescent before dispatching any task.
-        await session.withTransaction(
-          async () => {
-            await writeStartInstance(db, instanceId, params, session);
-          },
-          { writeConcern: { w: 'majority' }, readConcern: { level: 'majority' } }
-        );
+        await session.withTransaction(async () => {
+          await writeStartInstance(db, instanceId, params, session);
+        });
       } finally {
         await session.endSession();
       }
