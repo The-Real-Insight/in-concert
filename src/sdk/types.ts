@@ -125,7 +125,7 @@ export type WorkItemRef = {
   nodeId: string;
   tokenId: string;
   scopeId: string;
-  kind: 'SERVICE_TASK' | 'USER_TASK' | 'CALL_ACTIVITY';
+  kind: 'SERVICE_TASK' | 'USER_TASK' | 'CALL_ACTIVITY' | 'SUB_PROCESS';
   status: string;
   createdAt: Date;
 };
@@ -146,7 +146,7 @@ export type CallbackWorkPayload = {
   nodeId: string;
   tokenId: string;
   scopeId: string;
-  kind: 'serviceTask' | 'userTask';
+  kind: 'serviceTask' | 'userTask' | 'subProcess';
   name?: string;
   lane?: string; // BPMN lane name (role)
   /** tri:roleId from pool/lane; used for worklist filtering by user roleAssignments */
@@ -243,6 +243,20 @@ export type CallbackHandlers = {
     instanceId: string;
     payload: CallbackWorkPayload;
   }) => void | Promise<void>;
+  /**
+   * Called for `<bpmn:subProcess>` nodes that have NO inner start event but
+   * carry extensions (typical pattern: an opaque pointer to a separately
+   * deployed process via `tri:toolId`). The handler is expected to start a
+   * child instance and later complete the parent work item via
+   * `completeExternalTask()` once the child terminates. Embedded
+   * sub-processes (with an inner start event) bypass this and continue to
+   * be walked by the engine internally.
+   */
+  onSubProcess?: (item: {
+    kind: 'CALLBACK_WORK';
+    instanceId: string;
+    payload: CallbackWorkPayload;
+  }) => void | Promise<void>;
   /** Called for XOR gateway decisions. Choose flow, then submitDecision(). */
   onDecision?: (item: {
     kind: 'CALLBACK_DECISION';
@@ -311,6 +325,7 @@ export type MailReceivedResult = {
 export type EngineInitConfig = {
   onWorkItem?: CallbackHandlers['onWorkItem'];
   onServiceCall?: CallbackHandlers['onServiceCall'];
+  onSubProcess?: CallbackHandlers['onSubProcess'];
   onDecision?: CallbackHandlers['onDecision'];
   onMultiInstanceResolve?: CallbackHandlers['onMultiInstanceResolve'];
   /**

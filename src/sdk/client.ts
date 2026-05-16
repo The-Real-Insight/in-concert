@@ -52,6 +52,7 @@ export class BpmnEngineClient {
     this.initHandlers = {
       onWorkItem: config.onWorkItem,
       onServiceCall: config.onServiceCall,
+      onSubProcess: config.onSubProcess,
       onDecision: config.onDecision,
       onMultiInstanceResolve: config.onMultiInstanceResolve,
     };
@@ -625,7 +626,11 @@ export class BpmnEngineClient {
       throw new Error('recover is only available in local mode');
     }
     const handlers = options?.handlers ?? this.initHandlers;
-    const hasWork = handlers?.onWorkItem || handlers?.onServiceCall || handlers?.onDecision;
+    const hasWork =
+      handlers?.onWorkItem ||
+      handlers?.onServiceCall ||
+      handlers?.onSubProcess ||
+      handlers?.onDecision;
     const hasMi = !!handlers?.onMultiInstanceResolve;
     if (!hasWork && !hasMi) {
       throw new Error('recover requires init() handlers or options.handlers');
@@ -670,6 +675,9 @@ export class BpmnEngineClient {
           }
           if (p.kind === 'serviceTask' && handlers.onServiceCall) {
             await handlers.onServiceCall(item as { kind: 'CALLBACK_WORK'; instanceId: string; payload: import('./types').CallbackWorkPayload });
+          }
+          if (p.kind === 'subProcess' && handlers.onSubProcess) {
+            await handlers.onSubProcess(item as { kind: 'CALLBACK_WORK'; instanceId: string; payload: import('./types').CallbackWorkPayload });
           }
         }
         if (ob.kind === 'CALLBACK_DECISION' && handlers.onDecision) {
@@ -777,7 +785,8 @@ export class BpmnEngineClient {
       throw new Error('processUntilComplete is only available in local mode');
     }
     const h = handlers ?? this.initHandlers;
-    const hasWorkHandlers = h?.onWorkItem || h?.onServiceCall || h?.onDecision;
+    const hasWorkHandlers =
+      h?.onWorkItem || h?.onServiceCall || h?.onSubProcess || h?.onDecision;
     const hasMiHandler = !!h?.onMultiInstanceResolve;
     if (!hasWorkHandlers && !hasMiHandler) {
       throw new Error('processUntilComplete requires init() handlers or handlers argument');
@@ -846,6 +855,13 @@ export class BpmnEngineClient {
           }
           if (p.kind === 'serviceTask' && h.onServiceCall) {
             await h.onServiceCall(item as {
+              kind: 'CALLBACK_WORK';
+              instanceId: string;
+              payload: import('./types').CallbackWorkPayload;
+            });
+          }
+          if (p.kind === 'subProcess' && h.onSubProcess) {
+            await h.onSubProcess(item as {
               kind: 'CALLBACK_WORK';
               instanceId: string;
               payload: import('./types').CallbackWorkPayload;

@@ -213,7 +213,73 @@ export function applyTransition(
     } else if (node.type === 'subProcess') {
       const startIds = graph.subprocessStartNodeIds?.[nodeId];
       if (!startIds?.length) {
-        return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
+        // External sub-process: a <bpmn:subProcess> with no inner start event but
+        // carrying extensions (typically `tri:toolId`) is an opaque pointer to a
+        // separately deployed process. The engine cannot walk a body it does not
+        // have, so it emits a work item and a CALLBACK_WORK with kind=subProcess.
+        // The host's onSubProcess handler is responsible for starting the child
+        // instance and, on child terminal, calling completeExternalTask().
+        const hasExtensions = node.extensions && Object.keys(node.extensions).length > 0;
+        if (!hasExtensions) {
+          // Empty sub-process with no extensions: nothing to dispatch, nothing to
+          // walk. Preserve the legacy silent no-op for backwards compatibility.
+          return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
+        }
+
+        const workItemId = uuidv4();
+        const idx = tokens.findIndex((t) => t.tokenId === tokenId);
+        if (idx >= 0) {
+          tokens[idx] = { ...tokens[idx], status: 'WAITING' };
+          patchTokens(() => tokens);
+        }
+
+        waits.workItems = [
+          ...waits.workItems,
+          {
+            workItemId,
+            nodeId,
+            tokenId,
+            scopeId,
+            kind: 'SUB_PROCESS',
+            status: 'OPEN',
+            createdAt: now,
+          },
+        ];
+        statePatch.waits = waits;
+
+        emit('WORK_ITEM_CREATED', { workItemId, nodeId, tokenId, scopeId });
+
+        outbox.push({
+          instanceId: state._id,
+          rootInstanceId: state._id,
+          kind: 'CALLBACK_WORK',
+          destination: { url: '' },
+          payload: {
+            workItemId,
+            instanceId: state._id,
+            nodeId,
+            tokenId,
+            scopeId,
+            kind: 'subProcess' as const,
+            ...(node.name != null && { name: node.name }),
+            ...(node.laneRef != null && { lane: node.laneRef }),
+            ...(node.roleId != null && { roleId: node.roleId }),
+            ...(node.extensions && Object.keys(node.extensions).length > 0 && {
+              extensions: node.extensions,
+            }),
+            ...(node.extensions?.['tri:parameterOverwrites'] != null && {
+              parameterOverwrites: node.extensions['tri:parameterOverwrites'],
+            }),
+          },
+          status: 'READY',
+          attempts: 0,
+          nextAttemptAt: now,
+          idempotencyKey: `subprocess-${workItemId}`,
+          createdAt: now,
+          updatedAt: now,
+        } as Omit<OutboxDoc, '_id'>);
+
+        return { events, statePatch, newContinuations, outbox };
       }
       const newScopeId = uuidv4();
       emit('SCOPE_CREATED', { scopeId: newScopeId, kind: 'SUBPROCESS', nodeId, parentScopeId: scopeId });

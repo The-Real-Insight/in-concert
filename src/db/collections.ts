@@ -140,7 +140,7 @@ export type WorkItemRef = {
   nodeId: string;
   tokenId: string;
   scopeId: string;
-  kind: 'SERVICE_TASK' | 'USER_TASK' | 'CALL_ACTIVITY';
+  kind: 'SERVICE_TASK' | 'USER_TASK' | 'CALL_ACTIVITY' | 'SUB_PROCESS';
   status: WorkItemStatus;
   createdAt: Date;
   correlationHints?: Record<string, unknown>;

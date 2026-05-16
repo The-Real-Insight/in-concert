@@ -295,6 +295,15 @@ export class EngineWorker {
           }
         );
       }
+      if (p.kind === 'subProcess' && this.handlers.onSubProcess) {
+        await this.handlers.onSubProcess(
+          item as {
+            kind: 'CALLBACK_WORK';
+            instanceId: string;
+            payload: import('./types').CallbackWorkPayload;
+          }
+        );
+      }
     } else if (ob.kind === 'CALLBACK_DECISION' && this.handlers.onDecision) {
       await this.handlers.onDecision(
         item as {
