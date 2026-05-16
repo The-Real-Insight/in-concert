@@ -279,6 +279,9 @@ export function applyTransition(
           updatedAt: now,
         } as Omit<OutboxDoc, '_id'>);
 
+        statePatch.version = state.version + 1;
+        statePatch.lastEventSeq = lastSeq;
+        statePatch.updatedAt = now;
         return { events, statePatch, newContinuations, outbox };
       }
       const newScopeId = uuidv4();
