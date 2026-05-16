@@ -30,6 +30,52 @@
 
 ## What's new
 
+### Pluggable sub-processes — call out to anything, the engine keeps the books
+
+**The body of a `bpmn:subProcess` no longer has to live in the same BPMN file.** When a sub-process element carries extensions but no inner start event, in-concert treats it as an opaque pointer to *something the host knows how to invoke* and emits a new `onSubProcess` callback. You decide what the pointer means: another deployed in-concert process, an external workflow service, a serverless step function, a third-party orchestrator, a human-approval queue, a long-running async job. Anything that eventually says "done" through `completeExternalTask()`.
+
+```xml
+<!-- A sub-process with no inner body — just attributes your handler understands. -->
+<bpmn:subProcess id="Activity_Resolve" name="Resolve incident"
+  acme:processRef="incident-resolution-v3"
+  acme:priority="P1" />
+```
+
+```typescript
+engine.init({
+  onSubProcess: async ({ instanceId, payload }) => {
+    const ref = payload.extensions?.['acme:processRef'];
+    const priority = payload.extensions?.['acme:priority'];
+
+    // You decide what "invoke" means. Start a child process in another
+    // engine, hit a webhook, enqueue work, page an operator — whatever.
+    // The engine doesn't care.
+    const handle = await myDispatcher.start(ref, { priority });
+
+    // Record the linkage somewhere you control, so you can complete the
+    // parent when the work finishes:
+    await myLinkTable.insert({
+      parentInstanceId: instanceId,
+      parentWorkItemId: payload.workItemId,
+      childHandle: handle,
+    });
+
+    // Don't complete here — the parent stays paused.
+  },
+});
+```
+
+Minutes, hours, or days later, when the work finishes — look up the parent and resume:
+
+```typescript
+// From your own listener / poller / webhook — whatever fits the thing you dispatched to.
+await engine.completeExternalTask(parentInstanceId, parentWorkItemId, { output });
+```
+
+The parent picks up exactly where it left off. Crucially, **the engine doesn't shed responsibility just because you took over dispatch.** The parent token sits in `WAITING`. A `SUB_PROCESS` work item is recorded in `waits.workItems`. The event log captures `WORK_ITEM_CREATED` for the dispatch. If your process crashes between the child finishing and `completeExternalTask` returning, the work item is still `IN_PROGRESS` in the database — your own boot-time reconcile replays it. **Durability stays with the engine; flexibility goes to you.**
+
+Embedded sub-processes (with an inner start event) keep working the same way — the engine walks them internally as it always did. The new callback fires *only* for sub-process elements that have no inner body and carry extensions, so every existing model is unchanged. [Full sub-process guide](./docs/sdk/usage.md)
+
 ### Singleton engine worker — one claim loop, no races
 
 **Breaking change in local mode.** Every entry point that advanced a process — `run()`, `recover()`, the trigger scheduler, the outbox dispatcher — used to own its own claim loop against the continuation queue. Under load, two loops live at once could race for the same row; the engine's version-conflict path handled it correctly on paper, but the races surfaced in the wild as duplicate callbacks, missed dispatches, and intermittent test failures that *looked* like engine bugs and weren't.
