@@ -265,10 +265,10 @@ function parseStartEventSelfAttrs(xml: string): Record<string, Record<string, st
   return result;
 }
 
-/** Extract custom extension attributes (ns:attr) from task nodes. Generic—no tri-specific logic. */
+/** Extract custom extension attributes (ns:attr) from task/sub-process/call-activity nodes. Generic—no tri-specific logic. */
 function parseExtensionAttributesByNode(xml: string): Record<string, Record<string, string>> {
   const result: Record<string, Record<string, string>> = {};
-  const tagRe = /<(?:bpmn:serviceTask|bpmn:userTask)\s+id="([^"]+)"([^>]*)>/gi;
+  const tagRe = /<(?:bpmn:serviceTask|bpmn:userTask|bpmn:subProcess|bpmn:callActivity)\s+id="([^"]+)"([^>]*)>/gi;
   let m;
   while ((m = tagRe.exec(xml))) {
     const nodeId = m[1];
