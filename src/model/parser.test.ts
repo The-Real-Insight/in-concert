@@ -63,6 +63,23 @@ describe('parseBpmnXml', () => {
     expect(graph.nodes['Task_MI']?.extensions?.['tri:multiInstanceData']).toBe('processList');
   });
 
+  it('parses tri:multiInstanceData on bpmn:subProcess into multiInstance', async () => {
+    const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">
+  <bpmn:process id="Process_1" isExecutable="true">
+    <bpmn:startEvent id="Start_1"/>
+    <bpmn:subProcess id="Sub_MI" name="Approve Items" tri:toolId="approval-tool" tri:multiInstanceData="items"/>
+    <bpmn:endEvent id="End_1"/>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start_1" targetRef="Sub_MI"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Sub_MI" targetRef="End_1"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+    const graph = await parseBpmnXml(bpmn);
+    expect(graph.nodes['Sub_MI']?.multiInstance).toEqual({ data: 'items' });
+    expect(graph.nodes['Sub_MI']?.extensions?.['tri:multiInstanceData']).toBe('items');
+    expect(graph.nodes['Sub_MI']?.extensions?.['tri:toolId']).toBe('approval-tool');
+  });
+
   it('parses tri:condition on sequenceFlow into conditionExpression', async () => {
     const bpmn = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:tri="http://tri.com/schema/bpmn">

@@ -469,7 +469,12 @@ export async function parseBpmnXml(xml: string): Promise<NormalizedGraph> {
       if (nodeExtensions) {
         node.extensions = nodeExtensions;
         const miData = nodeExtensions['tri:multiInstanceData'];
-        if (miData != null && (type === 'bpmn:ServiceTask' || type === 'bpmn:UserTask')) {
+        if (
+          miData != null &&
+          (type === 'bpmn:ServiceTask' ||
+            type === 'bpmn:UserTask' ||
+            type === 'bpmn:SubProcess')
+        ) {
           node.multiInstance = { data: miData };
         }
       }

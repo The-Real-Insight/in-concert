@@ -143,6 +143,85 @@ describe('SDK: multi-instance', () => {
     expect(workCallbacks.every((c) => c.multiInstanceData === 'processList')).toBe(true);
   });
 
+  it('fans out external sub-process: onMultiInstanceResolve then N onSubProcess calls', async () => {
+    const FIXED_ITEMS = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    const subProcessCallbacks: Array<{
+      workItemId: string;
+      executionIndex?: number;
+      loopCounter?: number;
+      totalItems?: number;
+      multiInstanceData?: string;
+      conversationMode?: string;
+    }> = [];
+    const resolveSubProcessCallbacks: Array<{ nodeId: string; kind: string }> = [];
+
+    // Stop the suite's main worker so only `testClient` processes
+    // continuations during this test (same rationale as the other sub-test).
+    await client.stopEngineWorker();
+
+    const testClient = new BpmnEngineClient({ mode: 'local', db });
+    testClient.init({
+      onMultiInstanceResolve: async (item) => {
+        resolveSubProcessCallbacks.push({
+          nodeId: item.payload.nodeId,
+          kind: item.payload.kind,
+        });
+        return { items: FIXED_ITEMS };
+      },
+      onSubProcess: async (item) => {
+        const p = item.payload;
+        subProcessCallbacks.push({
+          workItemId: p.workItemId,
+          executionIndex: p.executionIndex,
+          loopCounter: p.loopCounter,
+          totalItems: p.totalItems,
+          multiInstanceData: p.multiInstanceData,
+          conversationMode: p.extensions?.['tri:conversationMode'],
+        });
+        // Each MI iteration completes its own work item; engine joins on its
+        // own once all completions arrive.
+        await testClient.completeExternalTask(item.instanceId, p.workItemId, {});
+      },
+    });
+    testClient.startEngineWorker();
+
+    try {
+      const bpmn = loadBpmn('multi-instance-sub-process.bpmn');
+      const name = uniqueName('MI_Sub');
+      const { definitionId } = await testClient.deploy({
+        id: name,
+        name,
+        version: '1',
+        bpmnXml: bpmn,
+      });
+
+      const { instanceId } = await testClient.startInstance({
+        commandId: uuidv4(),
+        definitionId,
+        user: MOCK_USER,
+      });
+
+      const result = await testClient.run(instanceId);
+      expect(result.status).toBe('COMPLETED');
+
+      expect(resolveSubProcessCallbacks).toHaveLength(1);
+      expect(resolveSubProcessCallbacks[0]).toMatchObject({
+        nodeId: 'Activity_MISub',
+        kind: 'subProcess',
+      });
+
+      expect(subProcessCallbacks).toHaveLength(3);
+      expect(subProcessCallbacks.map((c) => c.executionIndex).sort()).toEqual([0, 1, 2]);
+      expect(subProcessCallbacks.every((c) => c.totalItems === 3)).toBe(true);
+      expect(subProcessCallbacks.every((c) => c.multiInstanceData === 'items')).toBe(true);
+      // tri:conversationMode passes through unchanged for the host to consume.
+      expect(subProcessCallbacks.every((c) => c.conversationMode === 'new')).toBe(true);
+    } finally {
+      await testClient.stopEngineWorker();
+      client.startEngineWorker();
+    }
+  });
+
   it('handler can use executionIndex to access item from resolve callback', async () => {
     const FIXED_ITEMS = [{ id: 'x', label: 'First' }, { id: 'y', label: 'Second' }];
     const resolvedItems: unknown[] = [];
