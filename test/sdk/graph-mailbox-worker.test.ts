@@ -298,4 +298,106 @@ describe('Graph mailbox trigger', () => {
     const fired = await fireMailbox();
     expect(fired).toBe(false);
   });
+
+  describe('tri:subjectPattern filter', () => {
+    async function deployFilteredMailboxProcess(): Promise<string> {
+      const bpmnXml = loadBpmn('graph-mailbox-subject-filter.bpmn');
+      const { definitionId } = await client.deploy({
+        id: 'graph-mailbox-subject-filter',
+        name: 'Graph Mailbox Subject Filter',
+        version: '1',
+        bpmnXml,
+      });
+      const schedules = await client.listConnectorSchedules({ definitionId });
+      if (schedules.length > 0) {
+        await client.resumeConnectorSchedule(schedules[0]._id);
+        const { TriggerSchedules } = getCollections(db);
+        await TriggerSchedules.updateOne(
+          { _id: schedules[0]._id },
+          { $set: { lastFiredAt: new Date(0) } },
+        );
+      }
+      return definitionId;
+    }
+
+    it('starts an instance only for subjects matching the pattern', async () => {
+      const definitionId = await deployFilteredMailboxProcess();
+      pollMailbox.mockResolvedValueOnce([
+        makeEmail({ id: 'msg-001', subject: 'Newsletter Mai 2026' }),
+        makeEmail({
+          id: 'msg-002',
+          subject: 'Bestellung: 12345',
+          receivedDateTime: new Date(Date.now() + 1000).toISOString(),
+        }),
+        makeEmail({
+          id: 'msg-003',
+          subject: 'Re: Bestellung: 67890',
+          receivedDateTime: new Date(Date.now() + 2000).toISOString(),
+        }),
+      ]);
+
+      const seenSubjects: string[] = [];
+      setOnMailReceived(async (event) => {
+        seenSubjects.push(event.email.subject);
+      });
+
+      await fireMailbox();
+
+      const { ProcessInstances } = getCollections(db);
+      const instances = await ProcessInstances.find({ definitionId }).toArray();
+      // 'Bestellung: 12345' matches; 'Newsletter…' and 'Re: Bestellung…' do not
+      // (the anchored pattern rejects the 'Re: ' prefix).
+      expect(instances).toHaveLength(1);
+      expect(instances[0].businessKey).toBe('email:msg-002');
+      expect(seenSubjects).toEqual(['Bestellung: 12345']);
+      // All three mails are marked as read so non-matching mails don't loop.
+      expect(markAsRead).toHaveBeenCalledTimes(3);
+    });
+
+    it('rejects an invalid regex at deploy time', async () => {
+      const bpmnXml = loadBpmn('graph-mailbox-subject-filter.bpmn').replace(
+        'tri:subjectPattern="^Bestellung:\\s+.+$"',
+        'tri:subjectPattern="["',
+      );
+      await expect(
+        client.deploy({
+          id: 'graph-mailbox-bad-regex',
+          name: 'Bad Regex',
+          version: '1',
+          bpmnXml,
+        }),
+      ).rejects.toThrow(/tri:subjectPattern/);
+    });
+
+    it('treats empty pattern as no filter', async () => {
+      const bpmnXml = loadBpmn('graph-mailbox-subject-filter.bpmn').replace(
+        'tri:subjectPattern="^Bestellung:\\s+.+$"',
+        'tri:subjectPattern=""',
+      );
+      const { definitionId } = await client.deploy({
+        id: 'graph-mailbox-empty-pattern',
+        name: 'Empty Pattern',
+        version: '1',
+        bpmnXml,
+      });
+      const schedules = await client.listConnectorSchedules({ definitionId });
+      if (schedules.length > 0) {
+        await client.resumeConnectorSchedule(schedules[0]._id);
+        const { TriggerSchedules } = getCollections(db);
+        await TriggerSchedules.updateOne(
+          { _id: schedules[0]._id },
+          { $set: { lastFiredAt: new Date(0) } },
+        );
+      }
+
+      pollMailbox.mockResolvedValueOnce([
+        makeEmail({ id: 'msg-001', subject: 'Anything goes' }),
+      ]);
+      await fireMailbox();
+
+      const { ProcessInstances } = getCollections(db);
+      const instances = await ProcessInstances.find({ definitionId }).toArray();
+      expect(instances).toHaveLength(1);
+    });
+  });
 });

@@ -30,6 +30,22 @@
 
 ## What's new
 
+### Mailbox triggers — filter by subject before you spend an instance
+
+**Same mailbox, different processes, picked apart by subject.** The `graph-mailbox` trigger now accepts an optional `tri:subjectPattern` regex on its `<bpmn:message>`. Mails whose subject doesn't match never become a process instance — no idempotency lookup, no attachment download, no host callback, no `terminate` cleanup. The non-matching mail is marked as read so it doesn't loop on the next poll, and the trigger report books it as `dropped('subject-mismatch')` so operators can tell "filter too tight" from "inbox quiet."
+
+```xml
+<!-- Start a process only for mails whose subject looks like a purchase order. -->
+<bpmn:message id="Msg_OrderIntake"
+  tri:connectorType="graph-mailbox"
+  tri:mailbox="orders@acme.com"
+  tri:subjectPattern="^Bestellung:\s+.+$" />
+```
+
+Multiple processes can share an inbox and dispatch by subject pattern: one filter for `^Bestellung:`, another for `^Reklamation:`, a third without a pattern as the catch-all. The trigger compiles the regex once per fire, and **rejects the deploy if the pattern doesn't parse** — you find out at deploy time, not at 3am when the first non-matching mail arrives.
+
+Before this release, the only way to drop a mail was an `onMailReceived` host callback returning `{ skip: true }` — by which point an instance was already created, attachments were already listed, and a `TERMINATE` had to clean up after itself. Subject filtering at the trigger layer is cheaper, clearer in observability, and modelable in pure BPMN.
+
 ### Multi-instance sub-processes — one node, N parallel branches
 
 **A long-missing piece is finally in.** Multi-instance markers on `bpmn:subProcess` are now first-class. Drop `tri:multiInstanceData` on a sub-process and the engine asks your handler for the item list, fans out into one `onSubProcess` invocation per item, and only advances the parent token once **all** iterations have completed. The same semantics that have worked on `serviceTask` and `userTask` since day one — finally available on sub-processes.
