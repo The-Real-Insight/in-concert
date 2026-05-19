@@ -226,6 +226,60 @@ export function applyTransition(
           return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
         }
 
+        // Multi-instance external sub-process: emit a resolve callback first;
+        // host calls submitMultiInstanceData(items) → engine then fans out into
+        // N SUB_PROCESS work items via the MULTI_INSTANCE_RESOLVED handler
+        // (mirrors the serviceTask / userTask MI path below).
+        const multiInstance = (node as NodeDef & { multiInstance?: { data?: string } }).multiInstance;
+        if (multiInstance) {
+          const idx = tokens.findIndex((t) => t.tokenId === tokenId);
+          if (idx >= 0) {
+            tokens[idx] = { ...tokens[idx], status: 'CONSUMED' };
+            patchTokens(() => tokens);
+          }
+          emit('TOKEN_CONSUMED', { tokenId });
+
+          const miKey = `${nodeId}-${scopeId}`;
+          const miPending = { ...(state.multiInstancePending ?? {}) };
+          miPending[miKey] = { nodeId, scopeId, parentTokenId: tokenId, totalItems: 0, completedCount: 0 };
+          statePatch.multiInstancePending = miPending;
+
+          outbox.push({
+            instanceId: state._id,
+            rootInstanceId: state._id,
+            kind: 'CALLBACK_MULTI_INSTANCE_RESOLVE',
+            destination: { url: '' },
+            payload: {
+              instanceId: state._id,
+              nodeId,
+              tokenId,
+              scopeId,
+              kind: 'subProcess' as const,
+              ...(node.name != null && { name: node.name }),
+              ...(node.laneRef != null && { lane: node.laneRef }),
+              ...(node.roleId != null && { roleId: node.roleId }),
+              ...(node.extensions && Object.keys(node.extensions).length > 0 && { extensions: node.extensions }),
+              ...(node.extensions?.['tri:multiInstanceData'] != null && {
+                multiInstanceData: node.extensions['tri:multiInstanceData'],
+              }),
+              ...(node.extensions?.['tri:parameterOverwrites'] != null && {
+                parameterOverwrites: node.extensions['tri:parameterOverwrites'],
+              }),
+            },
+            status: 'READY',
+            attempts: 0,
+            nextAttemptAt: now,
+            idempotencyKey: `mi-resolve-${miKey}`,
+            createdAt: now,
+            updatedAt: now,
+          } as Omit<OutboxDoc, '_id'>);
+
+          statePatch.version = state.version + 1;
+          statePatch.lastEventSeq = lastSeq;
+          statePatch.updatedAt = now;
+          return { events, statePatch, newContinuations, outbox };
+        }
+
         const workItemId = uuidv4();
         const idx = tokens.findIndex((t) => t.tokenId === tokenId);
         if (idx >= 0) {
@@ -677,12 +731,25 @@ export function applyTransition(
     }
 
     const node = graph.nodes[nodeId];
-    if (!node || (node.type !== 'serviceTask' && node.type !== 'userTask')) {
+    if (
+      !node ||
+      (node.type !== 'serviceTask' && node.type !== 'userTask' && node.type !== 'subProcess')
+    ) {
       return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
     }
 
     const totalItems = items.length;
     entry.totalItems = totalItems;
+
+    const workItemKind: 'SERVICE_TASK' | 'USER_TASK' | 'SUB_PROCESS' =
+      node.type === 'serviceTask'
+        ? 'SERVICE_TASK'
+        : node.type === 'userTask'
+        ? 'USER_TASK'
+        : 'SUB_PROCESS';
+    // CALLBACK_WORK payload's `kind` is the BPMN node type (camelCase),
+    // distinct from the work-item `kind` (uppercase enum).
+    const payloadKind = node.type;
 
     const newWorkItems: typeof waits.workItems = [];
     const newTokens: Token[] = [];
@@ -695,7 +762,7 @@ export function applyTransition(
         nodeId,
         tokenId: childTokenId,
         scopeId,
-        kind: node.type === 'serviceTask' ? 'SERVICE_TASK' : 'USER_TASK',
+        kind: workItemKind,
         status: 'OPEN',
         createdAt: now,
         executionIndex: i,
@@ -712,10 +779,13 @@ export function applyTransition(
         destination: { url: '' },
         payload: {
           workItemId,
+          // subProcess CALLBACK_WORK carries the parent instanceId in its
+          // payload (matches the single-instance external sub-process path).
+          ...(node.type === 'subProcess' ? { instanceId: state._id } : {}),
           nodeId,
           tokenId: childTokenId,
           scopeId,
-          kind: node.type,
+          kind: payloadKind,
           executionIndex: i,
           loopCounter: i + 1,
           totalItems,

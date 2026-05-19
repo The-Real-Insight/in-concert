@@ -171,7 +171,7 @@ export type CallbackMultiInstanceResolvePayload = {
   nodeId: string;
   tokenId: string;
   scopeId: string;
-  kind: 'serviceTask' | 'userTask';
+  kind: 'serviceTask' | 'userTask' | 'subProcess';
   name?: string;
   lane?: string;
   roleId?: string;
