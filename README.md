@@ -30,6 +30,40 @@
 
 ## What's new
 
+### Multi-instance sub-processes — one node, N parallel branches
+
+**A long-missing piece is finally in.** Multi-instance markers on `bpmn:subProcess` are now first-class. Drop `tri:multiInstanceData` on a sub-process and the engine asks your handler for the item list, fans out into one `onSubProcess` invocation per item, and only advances the parent token once **all** iterations have completed. The same semantics that have worked on `serviceTask` and `userTask` since day one — finally available on sub-processes.
+
+```xml
+<!-- One sub-process node, multiple invocations — one per resolved item. -->
+<bpmn:subProcess id="Activity_Approvals" name="Collect approvals"
+  acme:processRef="approval-flow"
+  tri:multiInstanceData="approverList" />
+```
+
+```typescript
+engine.init({
+  onMultiInstanceResolve: async ({ payload }) => {
+    // Return the list to fan out over. Each item produces one onSubProcess call.
+    return { items: await myDb.approversFor(payload.instanceId) };
+  },
+  onSubProcess: async ({ instanceId, payload }) => {
+    // executionIndex / loopCounter / totalItems tell you which slot you are.
+    const approvers = await myDb.approversFor(instanceId);
+    const handle = await myDispatcher.start('approval-flow', {
+      approver: approvers[payload.executionIndex!],
+    });
+    await myLinkTable.insert({
+      parentInstanceId: instanceId,
+      parentWorkItemId: payload.workItemId,
+      childHandle: handle,
+    });
+  },
+});
+```
+
+The flow is the familiar MI shape: one `CALLBACK_MULTI_INSTANCE_RESOLVE` lands first, your handler returns the items, then the engine emits N `CALLBACK_WORK` callbacks with `kind: 'subProcess'`, each carrying `executionIndex`, `loopCounter`, and `totalItems`. Every iteration completes its own work item via `completeExternalTask`. When the last completion arrives, the parent token advances — **no manual join logic on your side, no counter you have to maintain.** Sequential vs. parallel is your call: complete iterations in order for sequential semantics, fire them off concurrently otherwise. The engine doesn't constrain timing — it just guards the count.
+
 ### Pluggable sub-processes — call out to anything, the engine keeps the books
 
 **The body of a `bpmn:subProcess` no longer has to live in the same BPMN file.** When a sub-process element carries extensions but no inner start event, in-concert treats it as an opaque pointer to *something the host knows how to invoke* and emits a new `onSubProcess` callback. You decide what the pointer means: another deployed in-concert process, an external workflow service, a serverless step function, a third-party orchestrator, a human-approval queue, a long-running async job. Anything that eventually says "done" through `completeExternalTask()`.
