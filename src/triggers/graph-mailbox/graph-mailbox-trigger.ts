@@ -137,6 +137,20 @@ export class GraphMailboxTrigger implements StartTrigger {
     if (typeof mailbox !== 'string' || mailbox.length === 0) {
       throw new Error('graph-mailbox trigger requires tri:mailbox on the <bpmn:message>');
     }
+    const subjectPattern = def.config['subjectPattern'];
+    if (subjectPattern != null && subjectPattern !== '') {
+      if (typeof subjectPattern !== 'string') {
+        throw new Error('graph-mailbox trigger tri:subjectPattern must be a string regex');
+      }
+      try {
+        new RegExp(subjectPattern);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `graph-mailbox trigger tri:subjectPattern is not a valid regex: ${detail}`,
+        );
+      }
+    }
   }
 
   nextSchedule(
@@ -163,6 +177,19 @@ export class GraphMailboxTrigger implements StartTrigger {
       return { starts: [], nextCursor: invocation.cursor };
     }
 
+    // Optional subject-regex filter (tri:subjectPattern). Compiled once per
+    // fire; validate() has already rejected invalid patterns at deploy time,
+    // but we still guard the RegExp construction defensively.
+    const rawPattern = invocation.definition.config['subjectPattern'];
+    let subjectRegex: RegExp | null = null;
+    if (typeof rawPattern === 'string' && rawPattern.length > 0) {
+      try {
+        subjectRegex = new RegExp(rawPattern);
+      } catch {
+        subjectRegex = null;
+      }
+    }
+
     // The handler hook runs outside the scheduler's transaction — it may
     // download attachments and do other work that can't sit inside a Mongo
     // session. We still need exactly-once instance creation, so we start
@@ -172,6 +199,15 @@ export class GraphMailboxTrigger implements StartTrigger {
     const { ProcessInstances } = getCollections(invocation.db);
 
     for (const email of emails) {
+      // Subject filter runs before any per-mail work: no idempotency lookup,
+      // no instance creation, no attachment download, no callback. Mails that
+      // don't match are marked as read so they don't loop forever on every
+      // poll.
+      if (subjectRegex && !subjectRegex.test(email.subject ?? '')) {
+        invocation.report?.dropped('subject-mismatch');
+        await markAsRead(mailbox, email.id, creds);
+        continue;
+      }
       const idempotencyKey = `${invocation.scheduleId}:${email.id}`;
       const existing = await ProcessInstances.findOne(
         { definitionId: invocation.definition.definitionId, idempotencyKey },
