@@ -1,7 +1,12 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ClientSession, Db } from 'mongodb';
-import { getCollections } from '../db/collections';
+import { getCollections, type InstanceSynopsisSource } from '../db/collections';
 import { getDefinition } from '../model/service';
+
+/** Hard upper bound for synopsis length. Hosts should enforce a tighter
+ *  display ceiling in their prompt — this is the absolute backstop so a
+ *  runaway LLM can't pollute the column. */
+export const INSTANCE_SYNOPSIS_MAX_CHARS = 200;
 
 export type StartInstanceResult = {
   instanceId: string;
@@ -294,11 +299,29 @@ export async function getInstance(
   endedAt?: Date;
   startedBy?: string;
   startedByDetails?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+  instanceSynopsis?: string;
+  instanceSynopsisUpdatedAt?: Date;
+  instanceSynopsisSource?: InstanceSynopsisSource;
 } | null> {
   const { ProcessInstances } = getCollections(db);
   const doc = await ProcessInstances.findOne(
     { _id: instanceId },
-    { projection: { _id: 1, definitionId: 1, tenantId: 1, conversationId: 1, status: 1, createdAt: 1, endedAt: 1, startedBy: 1, startedByDetails: 1 } }
+    {
+      projection: {
+        _id: 1,
+        definitionId: 1,
+        tenantId: 1,
+        conversationId: 1,
+        status: 1,
+        createdAt: 1,
+        endedAt: 1,
+        startedBy: 1,
+        startedByDetails: 1,
+        instanceSynopsis: 1,
+        instanceSynopsisUpdatedAt: 1,
+        instanceSynopsisSource: 1,
+      },
+    }
   );
   return doc as {
     _id: string;
@@ -310,5 +333,150 @@ export async function getInstance(
     endedAt?: Date;
     startedBy?: string;
     startedByDetails?: { email: string; firstName?: string; lastName?: string; phone?: string; photoUrl?: string };
+    instanceSynopsis?: string;
+    instanceSynopsisUpdatedAt?: Date;
+    instanceSynopsisSource?: InstanceSynopsisSource;
   } | null;
+}
+
+/**
+ * Synopsis record returned by {@link getInstanceSynopsis}. Includes the
+ * timestamp so hosts can decide whether to refresh.
+ */
+export type InstanceSynopsis = {
+  text: string;
+  updatedAt: Date;
+  source: InstanceSynopsisSource;
+};
+
+/**
+ * Read the short human-readable label for a process instance, or null if
+ * none has been set. Hosts compare `updatedAt` against their dirty-check
+ * baseline to decide whether the synopsis is stale.
+ */
+export async function getInstanceSynopsis(
+  db: Db,
+  instanceId: string
+): Promise<InstanceSynopsis | null> {
+  const { ProcessInstances } = getCollections(db);
+  const doc = await ProcessInstances.findOne(
+    { _id: instanceId },
+    {
+      projection: {
+        instanceSynopsis: 1,
+        instanceSynopsisUpdatedAt: 1,
+        instanceSynopsisSource: 1,
+      },
+    }
+  );
+  if (!doc) return null;
+  const text = (doc as { instanceSynopsis?: string }).instanceSynopsis;
+  const updatedAt = (doc as { instanceSynopsisUpdatedAt?: Date }).instanceSynopsisUpdatedAt;
+  const source = (doc as { instanceSynopsisSource?: InstanceSynopsisSource })
+    .instanceSynopsisSource;
+  if (typeof text !== 'string' || !(updatedAt instanceof Date) || !source) {
+    return null;
+  }
+  return { text, updatedAt, source };
+}
+
+/**
+ * Write the short human-readable label for a process instance. Policy
+ * (when to generate, how to generate, language, length-in-words) lives
+ * in the host; the platform only enforces the absolute upper bound
+ * `INSTANCE_SYNOPSIS_MAX_CHARS` and rejects empty strings.
+ *
+ * Returns `true` if the row existed and was updated, `false` if no row
+ * matched `instanceId`.
+ */
+export async function setInstanceSynopsis(
+  db: Db,
+  instanceId: string,
+  text: string,
+  options: { source: InstanceSynopsisSource }
+): Promise<boolean> {
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new Error('setInstanceSynopsis: text must be a non-empty string');
+  }
+  if (text.length > INSTANCE_SYNOPSIS_MAX_CHARS) {
+    throw new Error(
+      `setInstanceSynopsis: text exceeds ${INSTANCE_SYNOPSIS_MAX_CHARS}-char ceiling (got ${text.length})`
+    );
+  }
+  const { ProcessInstances } = getCollections(db);
+  const result = await ProcessInstances.updateOne(
+    { _id: instanceId } as any,
+    {
+      $set: {
+        instanceSynopsis: text,
+        instanceSynopsisUpdatedAt: new Date(),
+        instanceSynopsisSource: options.source,
+      },
+    }
+  );
+  return result.matchedCount > 0;
+}
+
+/** One entry returned by {@link completedActivities}. */
+export type CompletedActivity = {
+  /** Sequence number — monotonic per instance, oldest first. */
+  seq: number;
+  /** When the activity finished (TASK_COMPLETED.at). */
+  completedAt: Date;
+  nodeId: string;
+  nodeName?: string;
+  nodeType?: 'userTask' | 'serviceTask';
+  workItemId?: string;
+  completedBy?: string;
+  /** Activity result payload. Omitted unless `includeData` was true. */
+  result?: unknown;
+};
+
+/**
+ * Ordered list of `TASK_COMPLETED` history entries for an instance — the
+ * "what has happened on this case so far" view. Generalized previous-task
+ * helper for synopsis generation, audit views, and the eventual
+ * "explain this case" surface; do not specialize it for one consumer.
+ *
+ * `limit` caps the most-recent N entries (default: all). `includeData`
+ * controls whether the activity result payload is returned (default: no —
+ * it can be large and most consumers only need names + timing).
+ */
+export async function completedActivities(
+  db: Db,
+  instanceId: string,
+  options?: { limit?: number; includeData?: boolean }
+): Promise<CompletedActivity[]> {
+  const { ProcessInstanceHistory } = getCollections(db);
+  const limit = options?.limit;
+  const includeData = options?.includeData === true;
+
+  const projection: Record<string, 1> = {
+    seq: 1,
+    at: 1,
+    nodeId: 1,
+    nodeName: 1,
+    nodeType: 1,
+    workItemId: 1,
+    completedBy: 1,
+  };
+  if (includeData) projection.result = 1;
+
+  let cursor = ProcessInstanceHistory.find(
+    { instanceId, eventType: 'TASK_COMPLETED' },
+    { projection }
+  ).sort({ seq: limit ? -1 : 1 });
+  if (limit && limit > 0) cursor = cursor.limit(limit);
+  const rows = await cursor.toArray();
+  const ordered = limit ? rows.reverse() : rows;
+  return ordered.map(r => ({
+    seq: r.seq,
+    completedAt: (r as { at: Date }).at,
+    nodeId: (r as { nodeId?: string }).nodeId ?? '',
+    nodeName: (r as { nodeName?: string }).nodeName,
+    nodeType: (r as { nodeType?: 'userTask' | 'serviceTask' }).nodeType,
+    workItemId: (r as { workItemId?: string }).workItemId,
+    completedBy: (r as { completedBy?: string }).completedBy,
+    ...(includeData ? { result: (r as { result?: unknown }).result } : {}),
+  }));
 }

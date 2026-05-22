@@ -30,6 +30,31 @@
 
 ## What's new
 
+### Per-instance synopsis — tell parallel cases apart at a glance
+
+**Worklists with twenty rows that all say "Customer Inquiry – 14:23" are unusable.** A new `instanceSynopsis` field on `ProcessInstance` carries a short human-readable label — "von Lisa Palfinger zu Glasscherben in Raum X" — so users can pick the right row without opening it. The platform owns the field, the SDK setter, and an audit-friendly source flag (`auto` vs `manual`). Generation policy stays in the host: prompt, model choice, language, length-in-words are all yours to tune per product.
+
+```typescript
+// In a post-task-completion hook on the host side:
+const previous = await engine.getInstanceSynopsis(instanceId);
+if (previous?.source === 'manual') return;   // user pinned it; don't overwrite
+
+const activities = await engine.completedActivities(instanceId, { limit: 8 });
+const synopsis = await myLlm.summarize({
+  processName, processDescription,
+  activities,
+  dataPool: await myDataPool.snapshot(instanceId),
+  previous: previous?.text,                   // anchor: refine, don't reinvent
+  locale: 'de',
+});
+
+await engine.setInstanceSynopsis(instanceId, synopsis, { source: 'auto' });
+```
+
+Three new SDK methods carry the contract: `getInstanceSynopsis`, `setInstanceSynopsis`, and a generalized `completedActivities` helper that returns the ordered "what has happened on this case so far" view. The synopsis surface is the first consumer of `completedActivities`; audit views and the eventual "explain this case" feature are the obvious next ones.
+
+The platform enforces only the bare backstop — non-empty text, hard 200-char ceiling, source flag preserved — and stays out of generation policy. Manual override is a single call (`setInstanceSynopsis(id, text, { source: 'manual' })`) that the auto path is contractually obliged to respect.
+
 ### Mailbox triggers — filter by subject before you spend an instance
 
 **Same mailbox, different processes, picked apart by subject.** The `graph-mailbox` trigger now accepts an optional `tri:subjectPattern` regex on its `<bpmn:message>`. Mails whose subject doesn't match never become a process instance — no idempotency lookup, no attachment download, no host callback, no `terminate` cleanup. The non-matching mail is marked as read so it doesn't loop on the next poll, and the trigger report books it as `dropped('subject-mismatch')` so operators can tell "filter too tight" from "inbox quiet."

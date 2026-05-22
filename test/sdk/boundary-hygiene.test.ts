@@ -156,3 +156,81 @@ describe('setInstanceMetadata', () => {
     expect(ok).toBe(false);
   });
 });
+
+describe('instance synopsis', () => {
+  async function insertInstance(): Promise<string> {
+    const bpmnXml = loadBpmn('start-service-task-end.bpmn');
+    const { definitionId } = await client.deploy({
+      id: `synopsis-${uuidv4().slice(0, 8)}`,
+      name: 'Synopsis Test',
+      version: '1',
+      bpmnXml,
+    });
+    const { instanceId } = await client.startInstance({
+      commandId: uuidv4(),
+      definitionId,
+    });
+    return instanceId;
+  }
+
+  it('returns null when no synopsis has been set', async () => {
+    const instanceId = await insertInstance();
+    const synopsis = await client.getInstanceSynopsis(instanceId);
+    expect(synopsis).toBeNull();
+  });
+
+  it('round-trips text + source through setInstanceSynopsis / getInstanceSynopsis', async () => {
+    const instanceId = await insertInstance();
+    const ok = await client.setInstanceSynopsis(
+      instanceId,
+      'von Lisa Palfinger zu Glasscherben in Raum X',
+      { source: 'auto' }
+    );
+    expect(ok).toBe(true);
+
+    const synopsis = await client.getInstanceSynopsis(instanceId);
+    expect(synopsis?.text).toBe('von Lisa Palfinger zu Glasscherben in Raum X');
+    expect(synopsis?.source).toBe('auto');
+    expect(synopsis?.updatedAt).toBeInstanceOf(Date);
+  });
+
+  it('records source = manual when a user pins a synopsis', async () => {
+    const instanceId = await insertInstance();
+    await client.setInstanceSynopsis(instanceId, 'auto-generated', { source: 'auto' });
+    await client.setInstanceSynopsis(instanceId, 'manually pinned', { source: 'manual' });
+
+    const synopsis = await client.getInstanceSynopsis(instanceId);
+    expect(synopsis?.text).toBe('manually pinned');
+    expect(synopsis?.source).toBe('manual');
+  });
+
+  it('rejects empty text', async () => {
+    const instanceId = await insertInstance();
+    await expect(
+      client.setInstanceSynopsis(instanceId, '', { source: 'auto' })
+    ).rejects.toThrow(/non-empty/);
+  });
+
+  it('rejects text exceeding the platform ceiling', async () => {
+    const instanceId = await insertInstance();
+    const tooLong = 'x'.repeat(201);
+    await expect(
+      client.setInstanceSynopsis(instanceId, tooLong, { source: 'auto' })
+    ).rejects.toThrow(/ceiling/);
+  });
+
+  it('returns false when the instance does not exist', async () => {
+    const ok = await client.setInstanceSynopsis('no-such-instance', 'hi', { source: 'auto' });
+    expect(ok).toBe(false);
+  });
+
+  it('surfaces synopsis on getInstance summary once set', async () => {
+    const instanceId = await insertInstance();
+    await client.setInstanceSynopsis(instanceId, 'hello world', { source: 'auto' });
+
+    const summary = await client.getInstance(instanceId);
+    expect(summary?.instanceSynopsis).toBe('hello world');
+    expect(summary?.instanceSynopsisSource).toBe('auto');
+    expect(summary?.instanceSynopsisUpdatedAt).toBeInstanceOf(Date);
+  });
+});
