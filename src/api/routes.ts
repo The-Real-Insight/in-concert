@@ -3,7 +3,14 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { config } from '../config';
 import { deployDefinition } from '../model/service';
-import { startInstance, getInstance, purgeInstance } from '../instance/service';
+import {
+  startInstance,
+  getInstance,
+  purgeInstance,
+  getInstanceSynopsis,
+  setInstanceSynopsis,
+  completedActivities,
+} from '../instance/service';
 import { getProcessHistory } from '../history/service';
 import { getCollections, COLLECTION_NAMES } from '../db/collections';
 import { claimContinuation, processContinuation } from '../workers/processor';
@@ -205,6 +212,93 @@ apiRouter.get('/v1/instances/:instanceId/bpmn', async (req: Request, res: Respon
     res.status(500).json({ error: 'Query failed' });
   }
 });
+
+/**
+ * Read the per-instance synopsis (short human-readable label) for display
+ * in worklists / process-instance lists. Returns null when no synopsis has
+ * been set yet — consumers fall back to definition name + creation date.
+ */
+apiRouter.get('/v1/instances/:instanceId/synopsis', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const synopsis = await getInstanceSynopsis(db, req.params.instanceId);
+    if (!synopsis) {
+      // Distinguish "instance missing" from "synopsis not set yet"
+      const instance = await getInstance(db, req.params.instanceId);
+      if (!instance) {
+        res.status(404).json({ error: 'Instance not found' });
+        return;
+      }
+      res.json(null);
+      return;
+    }
+    res.json(synopsis);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Query failed';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * Write the per-instance synopsis. Body: { text: string, source: 'auto' | 'manual' }.
+ * `auto` is the host's hook writing; `manual` is a user pinning a label —
+ * the auto path is expected to respect manual pins by reading the current
+ * source before overwriting.
+ */
+apiRouter.put('/v1/instances/:instanceId/synopsis', async (req: Request, res: Response) => {
+  try {
+    const { text, source } = (req.body ?? {}) as { text?: string; source?: 'auto' | 'manual' };
+    if (typeof text !== 'string' || text.length === 0) {
+      res.status(400).json({ error: 'text must be a non-empty string' });
+      return;
+    }
+    if (source !== 'auto' && source !== 'manual') {
+      res.status(400).json({ error: "source must be 'auto' or 'manual'" });
+      return;
+    }
+    const db = getDb();
+    const ok = await setInstanceSynopsis(db, req.params.instanceId, text, { source });
+    if (!ok) {
+      res.status(404).json({ error: 'Instance not found' });
+      return;
+    }
+    res.json({ updated: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Update failed';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * Ordered list of TASK_COMPLETED history entries for an instance — the
+ * "what has happened on this case so far" view. Query params: `limit`
+ * (cap most-recent N), `includeData=true` (return per-activity result
+ * payloads; default omitted because they can be large).
+ */
+apiRouter.get(
+  '/v1/instances/:instanceId/completed-activities',
+  async (req: Request, res: Response) => {
+    try {
+      const db = getDb();
+      const instance = await getInstance(db, req.params.instanceId);
+      if (!instance) {
+        res.status(404).json({ error: 'Instance not found' });
+        return;
+      }
+      const limitRaw = (req.query.limit as string | undefined) ?? '';
+      const limit = limitRaw ? Number(limitRaw) : undefined;
+      const includeData = (req.query.includeData as string | undefined) === 'true';
+      const entries = await completedActivities(db, req.params.instanceId, {
+        ...(limit && Number.isFinite(limit) && limit > 0 ? { limit } : {}),
+        includeData,
+      });
+      res.json(entries);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Query failed';
+      res.status(500).json({ error: message });
+    }
+  }
+);
 
 apiRouter.get('/v1/instances/:instanceId/history', async (req: Request, res: Response) => {
   try {
