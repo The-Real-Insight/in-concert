@@ -345,6 +345,22 @@ export type MailReceivedResult = {
   skip?: boolean;
 } | void;
 
+/**
+ * Engine-level defaults for the `rss` trigger. Per-schedule credentials
+ * (private feeds) are set via `setTriggerCredentials`; this is only for
+ * process-wide defaults.
+ */
+export type RssConnectorConfig = {
+  /** Default polling interval for rss schedules (ms). Default: 300000 (5 min). */
+  pollingIntervalMs?: number;
+};
+
+/** Re-exported from the rss trigger plugin for host convenience. */
+export type {
+  FeedItemReceivedEvent,
+  FeedItemReceivedResult,
+} from '../triggers/rss/rss-trigger';
+
 export type EngineInitConfig = {
   onWorkItem?: CallbackHandlers['onWorkItem'];
   onServiceCall?: CallbackHandlers['onServiceCall'];
@@ -358,11 +374,22 @@ export type EngineInitConfig = {
    * Return { skip: true } to terminate the instance without running the process.
    */
   onMailReceived?: (event: MailReceivedEvent) => Promise<MailReceivedResult>;
+  /**
+   * Called when the rss connector observes a new feed item.
+   * The instance is already created (you have instanceId) but no token has
+   * advanced yet. Ingest the retrieved XML (`event.item.rawXml`), store domain
+   * data, create conversations — then return. Return { skip: true } to
+   * terminate the instance without running the process.
+   */
+  onFeedItemReceived?: (
+    event: import('../triggers/rss/rss-trigger').FeedItemReceivedEvent,
+  ) => Promise<import('../triggers/rss/rss-trigger').FeedItemReceivedResult>;
   /** Service/tool registry (e.g. tri:toolId → implementation). Handlers use this to resolve and invoke. */
   serviceVocabulary?: Record<string, unknown>;
-  /** Connector credentials. Overrides environment variables when provided. */
+  /** Connector credentials/defaults. Overrides environment variables when provided. */
   connectors?: {
     'graph-mailbox'?: GraphConnectorConfig;
+    'rss'?: RssConnectorConfig;
   };
 };
 

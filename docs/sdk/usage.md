@@ -39,6 +39,7 @@ Same API in both modes; switch with config.
 - [Message start events — Graph mailbox connector](#message-start-events--graph-mailbox-connector)
   - [Engine configuration](#engine-configuration) · [onMailReceived callback](#onmailreceived-callback)
   - [End-to-end example: email-triggered agentic workflow](#end-to-end-example-email-triggered-agentic-workflow)
+- [RSS feed start events](#rss-feed-start-events)
 - [AI-listener start events](#ai-listener-start-events)
   - [How it works](#how-it-works-1) · [LLM response parsing](#llm-response-parsing) · [Bypassing HTTP](#bypassing-http-tests-and-sdk-direct-integration)
 - [Prerequisites](#prerequisites)
@@ -1503,7 +1504,7 @@ Token reaches USER_TASK → Engine creates workItem → Engine emits CALLBACK_WO
 
 ## Start triggers
 
-Start events in in-concert are all **implementations of a single plugin interface**, `StartTrigger`. Timers, Microsoft 365 mailboxes, and SharePoint folders ship as first-party plugins; you can write your own for any external event source (webhooks, S3 buckets, SQS, filesystem watchers, etc.). The engine core contains zero references to specific trigger types — register what you need, strip out what you don't.
+Start events in in-concert are all **implementations of a single plugin interface**, `StartTrigger`. Timers, Microsoft 365 mailboxes, SharePoint folders, and RSS/Atom feeds ship as first-party plugins; you can write your own for any external event source (webhooks, S3 buckets, SQS, filesystem watchers, etc.). The engine core contains zero references to specific trigger types — register what you need, strip out what you don't.
 
 ### Built-in triggers
 
@@ -1512,6 +1513,7 @@ Start events in in-concert are all **implementations of a single plugin interfac
 | `timer` | Fires on a schedule (ISO 8601, cron, RRULE, date-times, durations) | [Timer start events](#timer-start-events) |
 | `graph-mailbox` | Starts an instance for each unread email in a Microsoft 365 mailbox | [Mailbox start events](#message-start-events--graph-mailbox-connector) |
 | `sharepoint-folder` | Starts an instance when a file arrives in a SharePoint folder | [SharePoint folder README](../../src/triggers/sharepoint-folder/README.md) |
+| `rss` | Starts an instance for each new item on an RSS/Atom feed | [RSS feed start events](#rss-feed-start-events) |
 | `ai-listener` | Polls an MCP-style tool, asks an LLM a yes/no question about the result, fires on "yes" | [AI-listener README](../../src/triggers/ai-listener/README.md) |
 
 ### Writing your own
@@ -2052,6 +2054,76 @@ Redeploy (overwrite) → preserves current status
 ```
 
 The process model never changes. Credentials, polling state, and lifecycle are all managed at runtime through the SDK or REST API.
+
+---
+
+## RSS feed start events
+
+BPMN message start events with `tri:connectorType="rss"` watch an RSS or Atom feed and start one process instance per new item. The engine polls the feed on an interval, deduplicates by item GUID, and — true to the engine's "data lives outside" principle — hands the **retrieved XML** to your host via a callback so you can ingest it however you store domain data.
+
+### Authoring the BPMN
+
+Put the trigger attributes on the `<bpmn:message>` referenced by a message start event (or inline on the start event itself):
+
+```xml
+<bpmn:message id="Msg_Advisories" name="advisory-feed"
+  tri:connectorType="rss"
+  tri:feedUrl="https://example.com/security/advisories.xml"
+  tri:pollIntervalSeconds="300"
+  tri:titlePattern="^Alert:"
+  tri:initialPolicy="skip-existing" />
+
+<bpmn:process id="Process_Advisory" isExecutable="true">
+  <bpmn:startEvent id="Start" name="Advisory published">
+    <bpmn:messageEventDefinition messageRef="Msg_Advisories" />
+  </bpmn:startEvent>
+  <!-- … -->
+</bpmn:process>
+```
+
+| Attribute | Required | Meaning |
+|---|---|---|
+| `tri:connectorType` | ✅ | Must be `rss`. |
+| `tri:feedUrl` | ✅ | HTTP/HTTPS URL of the RSS/Atom feed. |
+| `tri:pollIntervalSeconds` | — | Poll interval (≥ 60). Defaults to 300 (5 min), overridable engine-wide via `connectors.rss.pollingIntervalMs` or `RSS_POLLING_INTERVAL_MS`. |
+| `tri:titlePattern` | — | Regex; items whose title doesn't match are dropped before any instance is created (`dropped('title-mismatch')`). Rejected at deploy time if it doesn't compile. |
+| `tri:initialPolicy` | — | `skip-existing` (default): a fresh deploy primes its cursor without replaying the current feed. `fire-existing`: process the existing backlog on first poll. |
+
+### onFeedItemReceived callback
+
+For each new item the trigger creates the instance (deferred), invokes your callback, then inserts the START continuation — mirroring `onMailReceived`. The callback receives the `instanceId` plus both the raw item XML and the parsed fields:
+
+```typescript
+client.init({
+  onServiceCall: async (item) => { /* … */ },
+  onFeedItemReceived: async (event) => {
+    // event.instanceId   — the just-created (still deferred) instance
+    // event.feedUrl, event.feedTitle
+    // event.item.rawXml  — verbatim <item>/<entry> XML
+    // event.item.{ guid, title, link, pubDate, author, content, contentSnippet, categories, enclosures }
+    await myStore.ingestFeedItem(event.instanceId, event.item.rawXml, event.item);
+
+    // Return { skip: true } to terminate the instance without running the process.
+    if (isDuplicateInOurSystem(event.item.guid)) return { skip: true };
+  },
+});
+```
+
+The XML is bound to the process by `instanceId` — the engine never stores it. If the callback throws, the item is treated as `skip` and the instance is terminated, and the trigger report books the error.
+
+### Exactly-once & credentials
+
+- **Dedup key** is `scheduleId:itemGuid` (GUID, else link, else a content hash), so overlapping polls, retries, and restarts collapse to one instance per item.
+- **Public feeds** need no credentials and deploy **ACTIVE**.
+- **Private feeds** take per-schedule auth via `setTriggerCredentials`, with one of these shapes:
+
+```typescript
+await client.setTriggerCredentials(scheduleId, { kind: 'basic', username: 'u', password: 'p' });
+await client.setTriggerCredentials(scheduleId, { kind: 'bearer', token: 'eyJ…' });
+await client.setTriggerCredentials(scheduleId, { kind: 'header', name: 'X-Api-Key', value: '…' });
+```
+
+Schedule management (list/pause/resume) uses the canonical `*TriggerSchedule` methods like any other trigger — filter with `listTriggerSchedules({ triggerType: 'rss' })`.
 
 ---
 

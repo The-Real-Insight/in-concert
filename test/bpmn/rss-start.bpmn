@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+  xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:tri="http://tri.com/schema/bpmn"
+  id="Defs_Rss"
+  targetNamespace="http://example.com/bpmn">
+
+  <bpmn:message id="Msg_Feed" name="feed-poll"
+    tri:connectorType="rss"
+    tri:feedUrl="https://example.com/feed.xml"
+    tri:pollIntervalSeconds="300" />
+
+  <bpmn:process id="Process_Rss" isExecutable="true">
+
+    <bpmn:startEvent id="Start" name="Feed item received">
+      <bpmn:messageEventDefinition messageRef="Msg_Feed" />
+    </bpmn:startEvent>
+
+    <bpmn:serviceTask id="Task_Process" name="Process feed item"
+      tri:toolId="process-feed-item"/>
+
+    <bpmn:endEvent id="End"/>
+
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="Task_Process"/>
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_Process" targetRef="End"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

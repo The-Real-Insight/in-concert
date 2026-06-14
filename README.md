@@ -30,6 +30,23 @@
 
 ## What's new
 
+### RSS feed triggers — turn any feed into a process
+
+**A new feed item, a new process instance.** The `rss` trigger watches an RSS or Atom feed and starts one process instance per new entry — equivalent to the mailbox and SharePoint-folder triggers, modelable in pure BPMN. Point it at a vendor's release feed, a regulator's announcements, a newsroom, a status page, a SEC/EDGAR feed — anything that publishes XML — and the engine drives a process for each item.
+
+```xml
+<!-- Start a process for every new item on a feed; only items titled "Alert:" … -->
+<bpmn:message id="Msg_Advisories"
+  tri:connectorType="rss"
+  tri:feedUrl="https://example.com/security/advisories.xml"
+  tri:pollIntervalSeconds="300"
+  tri:titlePattern="^Alert:" />
+```
+
+**The retrieved XML lands in your process.** True to the engine's "data lives outside" principle, the trigger never stores feed data itself. For each new item it creates the instance, then hands your `onFeedItemReceived(event)` callback the `instanceId` plus the item — both the **raw `<item>`/`<entry>` XML** (`event.item.rawXml`) and the parsed fields (`title`, `link`, `guid`, `pubDate`, `content`, `enclosures`). You ingest it however your host stores domain data, correlated by `instanceId`; return `{ skip: true }` to drop an item without running the process.
+
+**Exactly-once, no backlog flood.** The item GUID is the dedup key, so overlapping polls, retries, and restarts collapse to a single instance per item. A fresh deploy defaults to `skip-existing` — it primes its cursor against the current feed instead of replaying the whole archive (set `tri:initialPolicy="fire-existing"` to backfill). An optional `tri:titlePattern` regex filters at the trigger layer, and public feeds need no credentials — private feeds take per-schedule HTTP Basic / Bearer / custom-header auth via `setTriggerCredentials`. [Full RSS guide](./docs/sdk/usage.md#rss-feed-start-events)
+
 ### Per-instance synopsis — tell parallel cases apart at a glance
 
 **Worklists with twenty rows that all say "Customer Inquiry – 14:23" are unusable.** A new `instanceSynopsis` field on `ProcessInstance` carries a short human-readable label — "von Lisa Palfinger zu Glasscherben in Raum X" — so users can pick the right row without opening it. The platform owns the field, the SDK setter, and an audit-friendly source flag (`auto` vs `manual`). Generation policy stays in the host: prompt, model choice, language, length-in-words are all yours to tune per product.
@@ -209,7 +226,7 @@ class AcmePagerDutyTrigger implements StartTrigger {
 
 Register it and ship. **No in-concert release required.** A new attribute on an existing trigger? Plugin change only. A new trigger entirely? Plugin change only. The editor side is independent too — it declares its own `bpmn-moddle` extensions for round-trip serialisation, and those names never cross into the engine.
 
-The four built-in triggers (timer, graph-mailbox, sharepoint-folder, ai-listener) are the first consumers of the new contract and ship alongside the engine strictly as convenience — they happen to use the `tri:` namespace for their own attributes, but there's no special treatment in the core, and host apps are free to drop any of them. A companion `test/decoupling/engine-isolation.test.ts` guards the property in CI: if a file outside the documented allowlist references a specific trigger type or a hard-coded attribute name, the build fails.
+The five built-in triggers (timer, graph-mailbox, sharepoint-folder, rss, ai-listener) are the first consumers of the new contract and ship alongside the engine strictly as convenience — they happen to use the `tri:` namespace for their own attributes, but there's no special treatment in the core, and host apps are free to drop any of them. A companion `test/decoupling/engine-isolation.test.ts` guards the property in CI: if a file outside the documented allowlist references a specific trigger type or a hard-coded attribute name, the build fails.
 
 **Breaking change in 0.2.0:** `StartTrigger.claimFromBpmn` is required on the plugin interface, and `extractEvents` now returns `{ nodeId, triggerType, config }[]`. Migration is a ~15-line addition per plugin. [Full plugin guide](./docs/sdk/custom-triggers.md)
 
@@ -235,7 +252,7 @@ Weather alerts. Price-movement watches. System-health escalations. Fraud-signal 
 
 ### Unified start triggers — plus SharePoint folder events
 
-**Start a process from anything.** Timers, Microsoft 365 mailboxes, SharePoint folders, and AI-listener agents are all implementations of a single `StartTrigger` plugin interface. The engine core contains zero references to specific trigger types — register the ones you want, write your own, or strip out the ones you don't need.
+**Start a process from anything.** Timers, Microsoft 365 mailboxes, SharePoint folders, RSS/Atom feeds, and AI-listener agents are all implementations of a single `StartTrigger` plugin interface. The engine core contains zero references to specific trigger types — register the ones you want, write your own, or strip out the ones you don't need.
 
 **SharePoint folder triggers are new:** drop a file into a watched SharePoint folder and the engine starts a process with the file's metadata as initial variables. Uses the Graph `/delta` API — no full folder scans, no duplicate starts, no "mark as processed" dance.
 
@@ -546,7 +563,7 @@ Design & internals:
 
 in-concert implements a curated BPMN 2.0 subset. See the full [conformance matrix](./readme/TEST.md) for details. Unsupported elements fail fast and loudly — never silently.
 
-**Supported:** Start/End events · Timer start events (cron, ISO 8601, RRULE) · Message start events (Graph mailbox polling) · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
+**Supported:** Start/End events · Timer start events (cron, ISO 8601, RRULE) · Message start events (Graph mailbox polling, RSS/Atom feed polling) · Service tasks · User tasks · Script tasks · XOR gateways · Parallel gateways · Sequence flows · Boundary events · Sub-processes
 
 **Not in scope (yet):** Compensation · Complex gateways · Choreography · Conversation
 

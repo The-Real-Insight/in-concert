@@ -37,6 +37,7 @@ export class BpmnEngineClient {
   private initHandlers: CallbackHandlers | null = null;
   private serviceVocabulary: Record<string, unknown> | null = null;
   private _onMailReceived: EngineInitConfig['onMailReceived'] | null = null;
+  private _onFeedItemReceived: EngineInitConfig['onFeedItemReceived'] | null = null;
   private engineWorker: EngineWorker | null = null;
 
   constructor(config: SdkConfig) {
@@ -58,6 +59,7 @@ export class BpmnEngineClient {
     };
     this.serviceVocabulary = config.serviceVocabulary ?? null;
     this._onMailReceived = config.onMailReceived ?? null;
+    this._onFeedItemReceived = config.onFeedItemReceived ?? null;
 
     // Forward the onMailReceived hook to the registered graph-mailbox trigger.
     if (config.onMailReceived) {
@@ -69,6 +71,16 @@ export class BpmnEngineClient {
       }
     }
 
+    // Forward the onFeedItemReceived hook to the registered rss trigger.
+    if (config.onFeedItemReceived) {
+      const { getDefaultTriggerRegistry } = require('../triggers') as typeof import('../triggers');
+      const { RssTrigger, RSS_TRIGGER_TYPE } = require('../triggers/rss/rss-trigger') as typeof import('../triggers/rss/rss-trigger');
+      const rss = getDefaultTriggerRegistry().get(RSS_TRIGGER_TYPE);
+      if (rss instanceof RssTrigger) {
+        rss.setOnFeedItemReceived(config.onFeedItemReceived);
+      }
+    }
+
     // Deprecated: engine-level graph-mailbox credentials. Prefer per-schedule
     // credentials via client.setConnectorCredentials(). Forwarded to env so
     // the plugin picks them up via its own credential resolution.
@@ -77,6 +89,13 @@ export class BpmnEngineClient {
       if (gc.tenantId) process.env.GRAPH_TENANT_ID = gc.tenantId;
       if (gc.clientId) process.env.GRAPH_CLIENT_ID = gc.clientId;
       if (gc.clientSecret) process.env.GRAPH_CLIENT_SECRET = gc.clientSecret;
+    }
+
+    // Engine-level rss defaults — forwarded to env so the plugin picks them up
+    // via its own resolution (per-schedule values still take precedence).
+    const rc = config.connectors?.['rss'];
+    if (rc?.pollingIntervalMs) {
+      process.env.RSS_POLLING_INTERVAL_MS = String(rc.pollingIntervalMs);
     }
   }
 
@@ -150,6 +169,11 @@ export class BpmnEngineClient {
   /** Get the onMailReceived handler from init. Used by the connector worker. */
   getOnMailReceived(): EngineInitConfig['onMailReceived'] | null {
     return this._onMailReceived;
+  }
+
+  /** Get the onFeedItemReceived handler from init. Used by the rss connector worker. */
+  getOnFeedItemReceived(): EngineInitConfig['onFeedItemReceived'] | null {
+    return this._onFeedItemReceived;
   }
 
   /**

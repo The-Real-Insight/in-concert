@@ -2,7 +2,7 @@
 
 **Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
 
-in-concert ships three built-in start triggers (`timer`, `graph-mailbox`, `sharepoint-folder`), but the trigger system is pluggable. This guide walks through building your own — e.g. a webhook receiver, an S3 bucket watcher, an SQS queue poller — registering it with the engine, and using it from BPMN.
+in-concert ships several built-in start triggers (`timer`, `graph-mailbox`, `sharepoint-folder`, `rss`, `ai-listener`), but the trigger system is pluggable. This guide walks through building your own — e.g. a webhook receiver, an S3 bucket watcher, an SQS queue poller — registering it with the engine, and using it from BPMN.
 
 ---
 
@@ -113,6 +113,7 @@ Good dedup-key choices:
 | S3 object created | `${bucketName}/${objectKey}@${eTag}` |
 | SQS message | message id |
 | Filesystem file | absolute path + mtime + size (or inode if available) |
+| RSS/Atom item | feed item GUID / Atom `<id>`, falling back to link, then a hash of `title|pubDate|rawXml` (this is what the built-in `rss` trigger does) |
 
 If you can't produce a stable key, the engine can't dedupe. Pick something the upstream source gives you.
 
