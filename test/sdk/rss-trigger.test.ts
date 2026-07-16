@@ -62,6 +62,7 @@ function makeItem(overrides: Partial<RssFeedItem> = {}): RssFeedItem {
     content: '<p>Body</p>',
     contentSnippet: 'Body',
     categories: ['news'],
+    categoryTerms: [{ term: 'news' }],
     enclosures: [],
     rawXml: `<item><guid>${guid}</guid><title>Breaking news</title></item>`,
     ...overrides,

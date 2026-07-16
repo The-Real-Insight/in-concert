@@ -87,6 +87,16 @@ export type RssEnclosure = {
   length?: number;
 };
 
+/**
+ * One `<category>` with its optional `domain` attribute — the RSS 2.0 way a feed
+ * says *which taxonomy* a term belongs to (e.g. domain="nutsCodes" vs a CPV code).
+ * `categories` flattens these to bare terms; use this when the taxonomy matters.
+ */
+export type RssCategory = {
+  term: string;
+  domain?: string;
+};
+
 export type RssFeedItem = {
   /** Stable id: feed guid/atom id, else link, else a content hash. */
   guid: string;
@@ -99,7 +109,10 @@ export type RssFeedItem = {
   content: string;
   /** Plain-text snippet derived by the parser. */
   contentSnippet: string;
+  /** Category terms, attributes dropped. Same order as {@link categoryTerms}. */
   categories: string[];
+  /** Category terms with their `domain` attribute preserved. */
+  categoryTerms: RssCategory[];
   enclosures: RssEnclosure[];
   /** Raw XML of the underlying <item>/<entry> element, verbatim from the feed. */
   rawXml: string;
@@ -156,8 +169,8 @@ function toFeedItem(item: Record<string, unknown>, rawXml: string): RssFeedItem 
     ? [{ url: enc.url, type: enc.type, length: enc.length ? Number(enc.length) : undefined }]
     : [];
 
-  const categories = Array.isArray(item.categories)
-    ? (item.categories as unknown[]).map((c) => String(c))
+  const categoryTerms = Array.isArray(item.categories)
+    ? (item.categories as unknown[]).map(toCategory).filter((c) => c.term !== '')
     : [];
 
   return {
@@ -168,10 +181,32 @@ function toFeedItem(item: Record<string, unknown>, rawXml: string): RssFeedItem 
     author: asStr(item.creator) || asStr(item.author) || '',
     content: asStr(item['content:encoded']) || asStr(item.content) || '',
     contentSnippet: asStr(item.contentSnippet),
-    categories,
+    categories: categoryTerms.map((c) => c.term),
+    categoryTerms,
     enclosures,
     rawXml,
   };
+}
+
+/**
+ * Normalize one parsed `<category>`.
+ *
+ * rss-parser hands back a plain string for a bare `<category>Foo</category>`,
+ * but an xml2js node — `{ _: 'Foo', $: { domain: 'bar' } }` — as soon as the
+ * element carries an attribute. Those nodes have a **null prototype**, so the
+ * obvious `String(c)` does not yield '[object Object]': it throws
+ * `TypeError: Cannot convert object to primitive value`, which propagated out
+ * of fetchFeed and failed the entire poll — no item fired at all. Feeds hit
+ * this routinely (WordPress emits `<category domain="category">`).
+ */
+function toCategory(raw: unknown): RssCategory {
+  if (typeof raw === 'string') return { term: raw };
+  if (raw && typeof raw === 'object') {
+    const node = raw as { _?: unknown; $?: Record<string, unknown> };
+    const domain = typeof node.$?.domain === 'string' ? node.$.domain : undefined;
+    return { term: asStr(node._), ...(domain ? { domain } : {}) };
+  }
+  return { term: '' };
 }
 
 /**

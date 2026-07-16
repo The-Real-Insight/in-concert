@@ -14,5 +14,6 @@ export {
   type RssCredentials,
   type RssFeed,
   type RssFeedItem,
+  type RssCategory,
   type RssEnclosure,
 } from './feed-client';

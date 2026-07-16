@@ -2101,6 +2101,11 @@ client.init({
     // event.feedUrl, event.feedTitle
     // event.item.rawXml  — verbatim <item>/<entry> XML
     // event.item.{ guid, title, link, pubDate, author, content, contentSnippet, categories, enclosures }
+    // event.item.categories     — category terms only, e.g. ['90911200', 'DEF04']
+    // event.item.categoryTerms  — same order, with the RSS `domain` attribute kept:
+    //   [{ term: '90911200' }, { term: 'DEF04', domain: 'nutsCodes' }]
+    //   Use this when a feed separates taxonomies by domain; `categories` alone
+    //   cannot tell a CPV code from a NUTS code.
     await myStore.ingestFeedItem(event.instanceId, event.item.rawXml, event.item);
 
     // Return { skip: true } to terminate the instance without running the process.
