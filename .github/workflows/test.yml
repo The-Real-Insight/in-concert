@@ -21,6 +21,11 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+          # Load-bearing: without registry-url, setup-node writes no .npmrc, so
+          # NODE_AUTH_TOKEN below is never used and npm ci runs anonymous. Our
+          # private @the-real-insight/* deps then 404 (npm masks private packages
+          # as "not found" when unauthorized) and every run dies before testing.
+          registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
         env:
@@ -57,6 +62,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+          registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
         env:

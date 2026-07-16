@@ -8,7 +8,31 @@ on:
       - '**.mdx'
 
 jobs:
+  # Gate: an npm version can never be reused, so a bad publish is unrecoverable.
+  # This must live in *this* workflow — `needs:` cannot reference a job in
+  # test.yml, so that workflow running green in parallel gates nothing.
+  unit:
+    name: Unit tests (release gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - run: npm run build
+
+      - run: npm run test:unit
+
   publish:
+    needs: unit
     runs-on: ubuntu-latest
     permissions:
       contents: write  # required to push version bump commit
