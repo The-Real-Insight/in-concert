@@ -16,7 +16,7 @@
  */
 import { v4 as uuidv4 } from 'uuid';
 import type { ClientSession, Db } from 'mongodb';
-import { getCollections, type TriggerScheduleDoc } from '../db/collections';
+import { CLEAR_RETRY_BACKOFF, getCollections, type TriggerScheduleDoc } from '../db/collections';
 import { startInstance } from '../instance/service';
 import type { TriggerRegistry } from '../triggers/registry';
 import type {
@@ -280,9 +280,7 @@ async function persistFireResult(
         const unset: Record<string, ''> = {
           ownerId: '',
           leaseUntil: '',
-          lastError: '',
-          retryAfter: '',
-          consecutiveFailures: '',
+          ...CLEAR_RETRY_BACKOFF,
         };
 
         if (result.exhausted) {

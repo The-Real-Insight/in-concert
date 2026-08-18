@@ -336,6 +336,24 @@ export type ConnectorScheduleDoc = {
  */
 export type TriggerScheduleStatus = 'ACTIVE' | 'PAUSED' | 'EXHAUSTED' | 'DISABLED';
 
+/**
+ * `$unset` clause that clears a schedule's failure backoff.
+ *
+ * `retryAfter` deliberately survives a worker restart, so it also survives an operator fixing
+ * whatever was broken — and until it expires the repair looks like it did nothing. That is not
+ * hypothetical: a schedule whose feed URL was wrong had backed off to the 30-minute cap, the URL
+ * was corrected, and nothing happened for ten minutes because the next attempt simply was not due
+ * yet. Any edit that could plausibly *be* the fix — new config, new credentials, resumed from
+ * PAUSED — clears it, so the schedule is retried at once.
+ *
+ * Deliberately not applied on pause: pausing is not a repair, and the following resume clears it.
+ */
+export const CLEAR_RETRY_BACKOFF = {
+  retryAfter: '',
+  consecutiveFailures: '',
+  lastError: '',
+} as const;
+
 export type TriggerScheduleDoc = {
   _id: string;
   /** Stable id used in REST paths. Survives restarts; typically equals _id but

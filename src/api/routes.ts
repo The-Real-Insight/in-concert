@@ -12,7 +12,7 @@ import {
   completedActivities,
 } from '../instance/service';
 import { getProcessHistory } from '../history/service';
-import { getCollections, COLLECTION_NAMES } from '../db/collections';
+import { getCollections, COLLECTION_NAMES, CLEAR_RETRY_BACKOFF } from '../db/collections';
 import { claimContinuation, processContinuation } from '../workers/processor';
 
 export const apiRouter = Router();
@@ -510,7 +510,7 @@ apiRouter.post('/v1/timer-schedules/:scheduleId/resume', async (req: Request, re
     const { TriggerSchedules } = getCollections(db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: req.params.scheduleId, triggerType: 'timer', status: 'PAUSED' },
-      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
       { returnDocument: 'after' },
     );
     if (!result) {
@@ -583,7 +583,7 @@ apiRouter.post('/v1/connector-schedules/:scheduleId/resume', async (req: Request
     const { TriggerSchedules } = getCollections(db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: req.params.scheduleId, triggerType: { $ne: 'timer' }, status: 'PAUSED' },
-      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
       { returnDocument: 'after' },
     );
     if (!result) {
@@ -617,6 +617,7 @@ apiRouter.put('/v1/connector-schedules/:scheduleId/credentials', async (req: Req
           'config.clientSecret': clientSecret,
           updatedAt: new Date(),
         },
+        $unset: { ...CLEAR_RETRY_BACKOFF },
       },
       { returnDocument: 'after' },
     );
@@ -784,7 +785,7 @@ apiRouter.post('/v1/trigger-schedules/:scheduleId/resume', async (req: Request, 
     const { TriggerSchedules } = getCollections(db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: req.params.scheduleId, status: 'PAUSED' },
-      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
       { returnDocument: 'after' },
     );
     if (!result) {
@@ -828,7 +829,7 @@ apiRouter.put('/v1/trigger-schedules/:scheduleId/credentials', async (req: Reque
     const { TriggerSchedules } = getCollections(db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: req.params.scheduleId },
-      { $set: { credentials, updatedAt: new Date() } },
+      { $set: { credentials, updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
       { returnDocument: 'after' },
     );
     if (!result) {
