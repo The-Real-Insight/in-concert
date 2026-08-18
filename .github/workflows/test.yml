@@ -40,23 +40,36 @@ jobs:
     runs-on: ubuntu-latest
     needs: unit
 
-    services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.runCommand({ping:1})'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+    # No `services:` block: the engine needs a **replica set**, and a service container
+    # cannot be given the `--replSet` argument (services accept image/env/ports/options,
+    # never a command). Started as a step instead.
     env:
-      MONGO_URL: mongodb://localhost:27017
+      MONGO_URL: mongodb://localhost:27017/?replicaSet=rs0
       MONGO_BPM_DB: in-concert-test
 
     steps:
       - uses: actions/checkout@v4
+
+      # A standalone mongod fails every test that opens a transaction or a change stream:
+      #   MongoServerError: Transaction numbers are only allowed on a replica set member or mongos
+      #   MongoServerError: The $changeStream stage is only supported on replica sets
+      # That is not a flake — it took out all 20 SDK suites, and every run of this job on main
+      # had been red since 2026-05-19 because of it.
+      - name: Start MongoDB as a single-node replica set
+        run: |
+          set -euo pipefail
+          docker run -d --name mongo -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for _ in $(seq 1 60); do
+            docker exec mongo mongosh --quiet --eval 'db.runCommand({ping:1}).ok' | grep -q 1 && break
+            sleep 1
+          done
+          docker exec mongo mongosh --quiet --eval \
+            'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+          for _ in $(seq 1 60); do
+            docker exec mongo mongosh --quiet --eval 'rs.status().ok' | grep -q 1 && break
+            sleep 1
+          done
+          docker exec mongo mongosh --quiet --eval 'rs.status().ok' | grep -q 1
 
       - uses: actions/setup-node@v4
         with:

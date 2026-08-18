@@ -23,7 +23,14 @@ let db: Db;
 let client: BpmnEngineClient;
 let unsubscribeProjection: (() => void) | null = null;
 
+/**
+ * Every CALLBACK_WORK this suite's client sees — including work items belonging to *other*
+ * instances. Suites share one database and run in-band, so a leftover continuation from an
+ * earlier suite is legitimately delivered here; the assertions below therefore filter by the
+ * instance the test itself started rather than trusting the collector to be exclusive.
+ */
 const workCallbacks: Array<{
+  instanceId: string;
   workItemId: string;
   name?: string;
   executionIndex?: number;
@@ -57,6 +64,7 @@ beforeAll(async () => {
       if (item.kind === 'CALLBACK_WORK') {
         const p = item.payload as CallbackWorkPayload;
         workCallbacks.push({
+          instanceId: item.instanceId,
           workItemId: p.workItemId,
           name: p.name,
           executionIndex: p.executionIndex,
@@ -71,6 +79,7 @@ beforeAll(async () => {
       if (item.kind === 'CALLBACK_WORK') {
         const p = item.payload as CallbackWorkPayload;
         workCallbacks.push({
+          instanceId: item.instanceId,
           workItemId: p.workItemId,
           name: p.name,
           executionIndex: p.executionIndex,
@@ -123,24 +132,25 @@ describe('SDK: multi-instance', () => {
     expect(resolveCallbacks).toHaveLength(1);
     expect(resolveCallbacks[0]!.nodeId).toBe('Activity_MI');
 
-    expect(workCallbacks).toHaveLength(3);
-    expect(workCallbacks[0]).toMatchObject({
+    const mine = workCallbacks.filter((c) => c.instanceId === instanceId);
+    expect(mine).toHaveLength(3);
+    expect(mine[0]).toMatchObject({
       name: 'Process Items',
       executionIndex: 0,
       loopCounter: 1,
       totalItems: 3,
     });
-    expect(workCallbacks[1]).toMatchObject({
+    expect(mine[1]).toMatchObject({
       executionIndex: 1,
       loopCounter: 2,
       totalItems: 3,
     });
-    expect(workCallbacks[2]).toMatchObject({
+    expect(mine[2]).toMatchObject({
       executionIndex: 2,
       loopCounter: 3,
       totalItems: 3,
     });
-    expect(workCallbacks.every((c) => c.multiInstanceData === 'processList')).toBe(true);
+    expect(mine.every((c) => c.multiInstanceData === 'processList')).toBe(true);
   });
 
   it('fans out external sub-process: onMultiInstanceResolve then N onSubProcess calls', async () => {
