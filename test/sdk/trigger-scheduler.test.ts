@@ -34,6 +34,7 @@ import {
   processOneTrigger,
 } from '../../src/workers/trigger-scheduler';
 import { deployDefinition } from '../../src/model/service';
+import { BpmnEngineClient } from '../../src/sdk/client';
 
 jest.setTimeout(15_000);
 
@@ -267,6 +268,32 @@ describe('trigger-scheduler', () => {
     expect(third?.lastError).toBeUndefined();
     expect(third?.retryAfter).toBeUndefined();
     expect(third?.consecutiveFailures).toBeUndefined();
+  });
+
+  it('resuming a paused schedule clears the failure backoff, so the retry is immediate', async () => {
+    const schedule = await insertSchedule({ nextFireAt: new Date(Date.now() - 1000) });
+    const { trigger } = makeFakeTrigger(() => {
+      throw new Error('boom');
+    });
+    const registry = new TriggerRegistry();
+    registry.register(trigger);
+    const { TriggerSchedules } = getCollections(db);
+
+    await fireClaimedSchedule(db, registry, (await claimDueSchedule(db))!);
+    expect(await claimDueSchedule(db)).toBeNull(); // backed off
+
+    // An operator turning event detection off and on again is the natural "try it now" gesture,
+    // and is usually preceded by fixing whatever was broken. If the backoff survived it, the
+    // repair would sit unused until the retry window expired — up to the 30-minute cap.
+    const client = new BpmnEngineClient({ mode: 'local', db });
+    await client.pauseTriggerSchedule(schedule._id);
+    await client.resumeTriggerSchedule(schedule._id);
+
+    const row = await TriggerSchedules.findOne({ _id: schedule._id });
+    expect(row?.retryAfter).toBeUndefined();
+    expect(row?.consecutiveFailures).toBeUndefined();
+    expect(row?.lastError).toBeUndefined();
+    expect(await claimDueSchedule(db)).not.toBeNull();
   });
 
   it('unregistered triggerType is recorded as lastError', async () => {

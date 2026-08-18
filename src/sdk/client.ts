@@ -1183,11 +1183,11 @@ export class BpmnEngineClient {
       if (!res.ok) throw new Error(`Resume trigger failed: ${res.status}`);
       return;
     }
-    const { getCollections } = await import('../db/collections');
+    const { getCollections, CLEAR_RETRY_BACKOFF } = await import('../db/collections');
     const { TriggerSchedules } = getCollections(this.config.db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: scheduleId, status: 'PAUSED' },
-      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
     );
     if (!result) throw new Error('Trigger schedule not found or not PAUSED');
   }
@@ -1209,11 +1209,11 @@ export class BpmnEngineClient {
       if (!res.ok) throw new Error(`Set trigger credentials failed: ${res.status}`);
       return;
     }
-    const { getCollections } = await import('../db/collections');
+    const { getCollections, CLEAR_RETRY_BACKOFF } = await import('../db/collections');
     const { TriggerSchedules } = getCollections(this.config.db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: scheduleId },
-      { $set: { credentials, updatedAt: new Date() } },
+      { $set: { credentials, updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
     );
     if (!result) throw new Error('Trigger schedule not found');
   }
@@ -1264,11 +1264,11 @@ export class BpmnEngineClient {
       if (!res.ok) throw new Error(`Resume timer failed: ${res.status}`);
       return;
     }
-    const { getCollections } = await import('../db/collections');
+    const { getCollections, CLEAR_RETRY_BACKOFF } = await import('../db/collections');
     const { TriggerSchedules } = getCollections(this.config.db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: scheduleId, triggerType: 'timer', status: 'PAUSED' },
-      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
     );
     if (!result) throw new Error('Timer schedule not found or not PAUSED');
   }
@@ -1322,11 +1322,11 @@ export class BpmnEngineClient {
       if (!res.ok) throw new Error(`Resume connector failed: ${res.status}`);
       return;
     }
-    const { getCollections } = await import('../db/collections');
+    const { getCollections, CLEAR_RETRY_BACKOFF } = await import('../db/collections');
     const { TriggerSchedules } = getCollections(this.config.db);
     const result = await TriggerSchedules.findOneAndUpdate(
       { _id: scheduleId, triggerType: { $ne: 'timer' }, status: 'PAUSED' },
-      { $set: { status: 'ACTIVE', updatedAt: new Date() } },
+      { $set: { status: 'ACTIVE', updatedAt: new Date() }, $unset: { ...CLEAR_RETRY_BACKOFF } },
     );
     if (!result) throw new Error('Connector schedule not found or not PAUSED');
   }

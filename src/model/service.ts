@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { parseBpmnXml } from './parser';
 import type { NodeDef, NormalizedGraph } from './types';
 import type { Db } from 'mongodb';
-import { getCollections } from '../db/collections';
+import { getCollections, CLEAR_RETRY_BACKOFF } from '../db/collections';
 import { config } from '../config';
 import { getDefaultTriggerRegistry, type TriggerRegistry } from '../triggers';
 import type {
@@ -217,9 +217,12 @@ async function syncTriggerSchedules(
     };
     if (ownerTenantId) setOnInsertBase.startingTenantId = ownerTenantId;
 
+    // A redeploy is how a broken schedule's config gets repaired (the feed URL lives in the
+    // BPMN attributes), so it must also clear the failure backoff — otherwise the fix sits
+    // unused until the last retry window expires.
     await TriggerSchedules.updateOne(
       matchFilter,
-      { $set: setClause, $setOnInsert: setOnInsertBase },
+      { $set: setClause, $setOnInsert: setOnInsertBase, $unset: { ...CLEAR_RETRY_BACKOFF } },
       { upsert: true },
     );
   }
