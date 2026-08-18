@@ -364,6 +364,16 @@ export type TriggerScheduleDoc = {
   lastFiredAt?: Date;
   /** Last failure message, for observability. Cleared on next successful fire. */
   lastError?: string;
+  /**
+   * Earliest time a *failed* schedule may be claimed again.
+   *
+   * `lastFiredAt` deliberately means "last **successful** fire" — it is the anchor the interval
+   * form is measured from — so a failing schedule never advances it and would otherwise stay
+   * permanently due. This is the separate gate for that case; cleared on the next success.
+   */
+  retryAfter?: Date;
+  /** Consecutive failed fires, drives the retry backoff. Cleared on the next success. */
+  consecutiveFailures?: number;
   /** Fire counter — useful for bounded-repetition triggers (RRULE COUNT, repeating timers). */
   remainingReps?: number | null;
   ownerId?: string;

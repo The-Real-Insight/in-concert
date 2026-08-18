@@ -9,7 +9,7 @@
  *   - TriggerSchedule.cursor ← result.nextCursor
  *   - TriggerSchedule.lastFiredAt ← now
  *   - TriggerSchedule.nextFireAt or intervalMs ← derived from nextSchedule()
- *   - TriggerSchedule.lastError cleared
+ *   - TriggerSchedule.lastError, retryAfter and consecutiveFailures cleared
  *
  * Either everything lands or nothing does; a crash mid-fire leaves the
  * schedule unchanged and the sweeper reclaims the lease.
@@ -54,15 +54,22 @@ export async function claimDueSchedule(
 
   const due: Record<string, unknown> = {
     status: 'ACTIVE',
-    $or: [
-      { nextFireAt: { $lte: now } },
-      { lastFiredAt: { $exists: false }, intervalMs: { $exists: true } },
+    $and: [
       {
-        intervalMs: { $exists: true },
-        $expr: {
-          $gte: [{ $subtract: [now, '$lastFiredAt'] }, '$intervalMs'],
-        },
+        $or: [
+          { nextFireAt: { $lte: now } },
+          { lastFiredAt: { $exists: false }, intervalMs: { $exists: true } },
+          {
+            intervalMs: { $exists: true },
+            $expr: {
+              $gte: [{ $subtract: [now, '$lastFiredAt'] }, '$intervalMs'],
+            },
+          },
+        ],
       },
+      // A failed fire leaves the due-clauses above permanently true — see `retryAfter`
+      // on TriggerScheduleDoc — so it is gated separately rather than by overloading them.
+      { $or: [{ retryAfter: { $exists: false } }, { retryAfter: { $lte: now } }] },
     ],
   };
   if (options?.triggerTypes && options.triggerTypes.length > 0) {
@@ -102,7 +109,7 @@ export async function fireClaimedSchedule(
   const trigger = registry.get(schedule.triggerType);
   if (!trigger) {
     const msg = `No trigger registered for type "${schedule.triggerType}"`;
-    await recordFireError(db, schedule._id, msg);
+    await recordFireError(db, schedule, msg);
     await writeFireEvent(db, schedule, {
       firedAt: new Date(),
       durationMs: 0,
@@ -152,7 +159,7 @@ export async function fireClaimedSchedule(
       message: msg,
       rawSnippet: stack ? stack.slice(0, 500) : undefined,
     };
-    await recordFireError(db, schedule._id, msg);
+    await recordFireError(db, schedule, msg);
   }
 
   // Persist instances first so the reporter reflects actual created counts
@@ -270,7 +277,13 @@ async function persistFireResult(
           lastFiredAt: now,
           updatedAt: now,
         };
-        const unset: Record<string, ''> = { ownerId: '', leaseUntil: '', lastError: '' };
+        const unset: Record<string, ''> = {
+          ownerId: '',
+          leaseUntil: '',
+          lastError: '',
+          retryAfter: '',
+          consecutiveFailures: '',
+        };
 
         if (result.exhausted) {
           update.status = 'EXHAUSTED';
@@ -322,13 +335,56 @@ function applyScheduleTiming(
   }
 }
 
-async function recordFireError(db: Db, id: string, message: string): Promise<void> {
+/**
+ * Back off after a failed fire.
+ *
+ * Without this a broken schedule is re-fired as fast as the worker loops. `lastFiredAt` is the
+ * anchor the interval form is measured from and means "last **successful** fire", so a failure
+ * never advances it and `now - lastFiredAt >= intervalMs` stays true forever; the lease is
+ * released immediately, so the very next tick claims the same row again. The fire-at form fails
+ * the same way — an un-advanced `nextFireAt` also stays `<= now`. Measured on production: an RSS
+ * schedule configured at `intervalMs: 60_000` fired **1,182,831 times in 24 h** (~14/s, ~820×
+ * its interval), every one of them the same failed fetch, each writing a TriggerFireEvent —
+ * 4.87M rows in a fortnight.
+ *
+ * The delay doubles per consecutive failure and is never shorter than the schedule's own
+ * interval, so backing off can only ever slow a schedule down, never speed it up.
+ */
+const RETRY_BASE_MS = 30_000;
+const RETRY_CAP_MS = 30 * 60_000;
+
+export function computeRetryDelayMs(
+  consecutiveFailures: number,
+  intervalMs?: number,
+): number {
+  const attempt = Math.max(1, consecutiveFailures);
+  // 2 ** 30 already exceeds the cap; clamping the exponent keeps it finite for absurd counts.
+  const exponential = Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** Math.min(attempt - 1, 30));
+  // The interval is applied *after* the cap, not before: a schedule that normally polls once a
+  // day must not start retrying every 30 minutes because it failed.
+  return Math.max(exponential, intervalMs ?? 0);
+}
+
+async function recordFireError(
+  db: Db,
+  schedule: TriggerScheduleDoc,
+  message: string,
+): Promise<void> {
   const { TriggerSchedules } = getCollections(db);
   const now = new Date();
+  const failures = (schedule.consecutiveFailures ?? 0) + 1;
+  const retryAfter = new Date(
+    now.getTime() + computeRetryDelayMs(failures, schedule.intervalMs),
+  );
   await TriggerSchedules.updateOne(
-    { _id: id },
+    { _id: schedule._id },
     {
-      $set: { lastError: message, updatedAt: now },
+      $set: {
+        lastError: message,
+        consecutiveFailures: failures,
+        retryAfter,
+        updatedAt: now,
+      },
       $unset: { ownerId: '', leaseUntil: '' },
     },
   );
