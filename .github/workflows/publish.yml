@@ -6,6 +6,9 @@ on:
     paths-ignore:
       - '**.md'
       - '**.mdx'
+      # A workflow-only change ships no code; publishing an identical package under a new
+      # version number is pure noise, and an npm version can never be reused.
+      - '.github/**'
 
 jobs:
   # Gate: an npm version can never be reused, so a bad publish is unrecoverable.
