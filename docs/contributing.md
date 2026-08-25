@@ -2,7 +2,7 @@
 
 **Powered by The Real Insight GmbH BPMN Engine ([the-real-insight.com](https://the-real-insight.com)).**
 
-Thank you for your interest in **tri-bpmn-engine**. Community contributions help harden BPMN execution, documentation, and tooling.
+Thank you for your interest in **in-concert**. Community contributions help harden BPMN execution, documentation, and tooling.
 
 ## Ways to contribute
 
@@ -27,7 +27,7 @@ Thank you for your interest in **tri-bpmn-engine**. Community contributions help
 
 ## Publishing
 
-The repository may use CI to publish **`@the-real-insight/tri-bpmn-engine`** to npm (see root **README** and `.github/workflows/`). Release mechanics are maintained by project owners; contributors normally do not need publish tokens.
+The repository may use CI to publish **`@the-real-insight/in-concert`** to npm (see root **README** and `.github/workflows/`). Release mechanics are maintained by project owners; contributors normally do not need publish tokens.
 
 ## Code of conduct
 
