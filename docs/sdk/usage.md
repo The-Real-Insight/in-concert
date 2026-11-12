@@ -397,6 +397,41 @@ In REST mode, the server worker will pick it up. In local mode, `processUntilCom
 
 ---
 
+### deliverMessage(instanceId, { messageName, messageId?, data? })
+
+Resume a token waiting in an **intermediate message catch event**. The event names a
+`<bpmn:message>` (declared at `definitions` level) and the engine matches on that message's `name`:
+
+```xml
+<bpmn:message id="Msg_Due" name="Prüfung fällig" />
+…
+<bpmn:intermediateCatchEvent id="Wait">
+  <bpmn:messageEventDefinition messageRef="Msg_Due" />
+</bpmn:intermediateCatchEvent>
+```
+
+```typescript
+const { subscribed } = await client.deliverMessage(instanceId, {
+  messageName: 'Prüfung fällig',
+  messageId: `due:${defectId}:${deadlineIso}`, // idempotent: one id is applied at most once
+  data: { reason: 'deadline' },                // recorded on the MESSAGE_RECEIVED event
+});
+```
+
+- **No buffering.** A message for which no token waits is discarded when processed
+  (`MESSAGE_DISCARDED`). `subscribed` says whether a subscription existed when you sent it — deliver
+  level-triggered ("whoever waits now and is due"), not edge-triggered.
+- Two tokens waiting for the same name: the one that has waited longest receives it.
+- REST: `POST /v1/instances/:instanceId/messages` → `202 { accepted, subscribed }`.
+
+**Intermediate timers** need no API: `<bpmn:timerEventDefinition>` with `timeDuration` (`P14D`),
+`timeDate` (ISO), a cycle or cron schedules a `TIMER_DUE` continuation at the due time; the engine
+worker's fallback poll picks it up then. Any other catch event (signal, conditional, none) and a timer
+expression the engine cannot compute are **validation errors** at deploy time — they used to park the
+token silently.
+
+---
+
 ### activateSchedules(definitionId, options?)
 
 Activate all schedules (timers + connectors) for a definition in one call. Optionally sets Graph credentials on connector schedules. Moves all schedules from `PAUSED` to `ACTIVE`.

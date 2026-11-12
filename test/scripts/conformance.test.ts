@@ -182,8 +182,42 @@ describe('T06-T07 - OR split/join', () => {
   it.skip('OR multiple branches - requires OR gateway', async () => {});
 });
 
+const noopHandlers = {
+  onWorkItem: async () => {},
+  onServiceCall: async () => {},
+};
+
 describe('T08 - Intermediate timer', () => {
-  it.skip('Timer fires - requires timer support', async () => {});
+  it('Token waits until the timer is due, then the instance completes', async () => {
+    const { instanceId } = await deployAndStart(db, bpmnFile('intermediate-timer.bpmn'), {
+      processName: `T08_Timer_${runId}`,
+      user: MOCK_USER,
+    });
+
+    // Before PT1S elapses there is nothing claimable: the instance waits.
+    const first = await client.processUntilComplete(instanceId, noopHandlers);
+    expect(first.status).toBe('RUNNING');
+    const waiting = await getState(db, instanceId);
+    expect(waiting!.waits.timers).toHaveLength(1);
+    expect(waiting!.waits.timers[0]!.nodeId).toBe('Timer_1');
+    expect(waiting!.tokens.find((t) => t.nodeId === 'Timer_1')?.status).toBe('WAITING');
+    const due = waiting!.waits.timers[0]!.dueAt.getTime();
+    expect(due - waiting!.waits.timers[0]!.createdAt.getTime()).toBe(1000);
+
+    await new Promise((r) => setTimeout(r, Math.max(0, due - Date.now()) + 50));
+    const second = await client.processUntilComplete(instanceId, noopHandlers);
+    expect(second.status).toBe('COMPLETED');
+
+    const finalState = await getState(db, instanceId);
+    expect(finalState!.waits.timers).toHaveLength(0);
+    const events = await getEvents(db, instanceId);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('TIMER_SCHEDULED');
+    expect(types).toContain('TIMER_FIRED');
+    expect(types.indexOf('TIMER_FIRED')).toBeGreaterThan(types.indexOf('TIMER_SCHEDULED'));
+    assertMonotonicEvents(events);
+    assertNoDuplicateTokens(finalState!);
+  });
 });
 
 describe('T09-T10 - Boundary timer', () => {
@@ -197,8 +231,58 @@ describe('T11-T12 - Boundary error', () => {
 });
 
 describe('T13-T14 - Message catch', () => {
-  it.skip('Message resumes token - requires message support', async () => {});
-  it.skip('Non-matching message - requires message support', async () => {});
+  const completeWork = async (item: { instanceId: string; payload: { workItemId: string } }) => {
+    await client.completeWorkItem(item.instanceId, item.payload.workItemId, { user: MOCK_USER });
+  };
+
+  it('Message resumes token; a repeated messageId is applied once', async () => {
+    const { instanceId } = await deployAndStart(db, bpmnFile('message-catch.bpmn'), {
+      processName: `T13_Message_${runId}`,
+      user: MOCK_USER,
+    });
+    const first = await client.processUntilComplete(instanceId, { onServiceCall: completeWork });
+    expect(first.status).toBe('RUNNING');
+    const waiting = await getState(db, instanceId);
+    expect(waiting!.waits.messageSubs).toHaveLength(1);
+    expect(waiting!.waits.messageSubs[0]!.messageName).toBe('OrderPaid');
+
+    const delivered = await client.deliverMessage(instanceId, {
+      messageName: 'OrderPaid',
+      messageId: 'pay-1',
+      data: { amount: 42 },
+    });
+    expect(delivered.subscribed).toBe(true);
+    // The same message again (e.g. a retried webhook) must not do anything.
+    await client.deliverMessage(instanceId, { messageName: 'OrderPaid', messageId: 'pay-1' });
+
+    const done = await client.processUntilComplete(instanceId, { onServiceCall: completeWork });
+    expect(done.status).toBe('COMPLETED');
+    const events = await getEvents(db, instanceId);
+    const received = events.filter((e) => e.type === 'MESSAGE_RECEIVED');
+    expect(received).toHaveLength(1);
+    expect(received[0]!.payload).toMatchObject({ messageName: 'OrderPaid', data: { amount: 42 } });
+    expect(events.filter((e) => e.type === 'WORK_ITEM_COMPLETED')).toHaveLength(1);
+    assertMonotonicEvents(events);
+  });
+
+  it('Non-matching message is discarded and the token keeps waiting', async () => {
+    const { instanceId } = await deployAndStart(db, bpmnFile('message-catch.bpmn'), {
+      processName: `T14_Message_${runId}`,
+      user: MOCK_USER,
+    });
+    await client.processUntilComplete(instanceId, { onServiceCall: completeWork });
+
+    const res = await client.deliverMessage(instanceId, { messageName: 'OrderCancelled' });
+    expect(res.subscribed).toBe(false);
+    const after = await client.processUntilComplete(instanceId, { onServiceCall: completeWork });
+    expect(after.status).toBe('RUNNING');
+
+    const state = await getState(db, instanceId);
+    expect(state!.waits.messageSubs).toHaveLength(1);
+    const events = await getEvents(db, instanceId);
+    expect(events.some((e) => e.type === 'MESSAGE_DISCARDED')).toBe(true);
+    expect(events.some((e) => e.type === 'MESSAGE_RECEIVED')).toBe(false);
+  });
 });
 
 describe('T15 - Message throw', () => {

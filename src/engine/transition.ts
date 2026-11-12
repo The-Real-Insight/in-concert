@@ -9,6 +9,7 @@ import type {
   OutboxDoc,
 } from '../db/collections';
 import type { NormalizedGraph, NodeDef, FlowDef } from '../model/types';
+import { classifyTimer, computeNextFire } from '../timers/expressions';
 
 export type TransitionResult = {
   events: ProcessInstanceEventDoc[];
@@ -84,6 +85,29 @@ export function applyTransition(
   };
   const patchScopes = (fn: (scopes: Scope[]) => Scope[]) => {
     statePatch.scopes = fn(scopes);
+  };
+
+  const setTokenStatus = (tokenId: string, status: Token['status']) => {
+    const idx = tokens.findIndex((t) => t.tokenId === tokenId);
+    if (idx >= 0) {
+      tokens[idx] = { ...tokens[idx], status };
+      patchTokens(() => [...tokens]);
+    }
+  };
+
+  /** Consume `tokenId` at `fromNodeId` and put a new token on every outgoing flow. */
+  const advanceToken = (fromNodeId: string, tokenId: string, scopeId: string) => {
+    setTokenStatus(tokenId, 'CONSUMED');
+    emit('TOKEN_CONSUMED', { tokenId });
+    for (const flow of getOutgoingFlows(graph, fromNodeId)) {
+      const toNodeId = getTargetNode(graph, flow.id);
+      if (!toNodeId) continue;
+      const newTokenId = uuidv4();
+      emit('TOKEN_CREATED', { tokenId: newTokenId, nodeId: toNodeId, scopeId, status: 'ACTIVE' });
+      tokens.push({ tokenId: newTokenId, nodeId: toNodeId, scopeId, status: 'ACTIVE', createdAt: now });
+      newContinuations.push(createTokenAtNodeCont(state._id, newTokenId, toNodeId, scopeId, flow.id, now));
+    }
+    patchTokens(() => [...tokens]);
   };
 
   const rootScope = scopes.find((s) => s.kind === 'ROOT');
@@ -630,10 +654,100 @@ export function applyTransition(
           }
         }
       }
+    } else if (node.type === 'intermediateCatchEvent' && node.timerDefinition) {
+      // Wait until the timer is due. The TIMER_DUE continuation carries the
+      // due time; the claim loop only picks it up once dueAt <= now.
+      const expr = classifyTimer(node.timerDefinition);
+      const dueAt = computeNextFire(expr, now);
+      const timerId = uuidv4();
+      setTokenStatus(tokenId, 'WAITING');
+      waits.timers = [
+        ...(waits.timers ?? []),
+        { timerId, nodeId, tokenId, scopeId, dueAt, isBoundary: false, createdAt: now },
+      ];
+      statePatch.waits = waits;
+      emit('TIMER_SCHEDULED', { timerId, nodeId, tokenId, dueAt });
+      newContinuations.push({
+        instanceId: state._id,
+        dueAt,
+        kind: 'TIMER_DUE',
+        payload: { timerId },
+        status: 'READY',
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else if (node.type === 'intermediateCatchEvent' && node.messageRef) {
+      // Wait until the host delivers a message with this name (deliverMessage).
+      const subscriptionId = uuidv4();
+      setTokenStatus(tokenId, 'WAITING');
+      waits.messageSubs = [
+        ...(waits.messageSubs ?? []),
+        { subscriptionId, messageName: node.messageRef, nodeId, tokenId, scopeId, createdAt: now },
+      ];
+      statePatch.waits = waits;
+      emit('MESSAGE_SUBSCRIBED', { subscriptionId, messageName: node.messageRef, nodeId, tokenId });
+    } else if (node.type === 'intermediateThrowEvent') {
+      // A throw event without a handler is a pass-through (BPMN "none" event or
+      // a milestone); nothing is sent.
+      advanceToken(nodeId, tokenId, scopeId);
     } else {
       return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
     }
 
+    statePatch.version = state.version + 1;
+    statePatch.lastEventSeq = lastSeq;
+    statePatch.updatedAt = now;
+    return { events, statePatch, newContinuations, outbox };
+  }
+
+  if (continuation.kind === 'TIMER_DUE') {
+    const { timerId } = continuation.payload as { timerId: string };
+    const timer = (waits.timers ?? []).find((t) => t.timerId === timerId);
+    if (!timer || state.status !== 'RUNNING') {
+      return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
+    }
+    waits.timers = (waits.timers ?? []).filter((t) => t.timerId !== timerId);
+    statePatch.waits = waits;
+    emit('TIMER_FIRED', { timerId, nodeId: timer.nodeId, tokenId: timer.tokenId });
+    advanceToken(timer.nodeId, timer.tokenId, timer.scopeId);
+    statePatch.version = state.version + 1;
+    statePatch.lastEventSeq = lastSeq;
+    statePatch.updatedAt = now;
+    return { events, statePatch, newContinuations, outbox };
+  }
+
+  if (continuation.kind === 'MESSAGE') {
+    const { messageName, messageId, data } = continuation.payload as {
+      messageName: string;
+      messageId: string;
+      data?: Record<string, unknown>;
+    };
+    if (state.status !== 'RUNNING' || (state.dedupe.processedMessageIds ?? []).includes(messageId)) {
+      return { events: [], statePatch: {}, newContinuations: [], outbox: [] };
+    }
+    statePatch.dedupe = {
+      ...state.dedupe,
+      processedMessageIds: [...(state.dedupe.processedMessageIds ?? []), messageId].slice(-1000),
+    };
+    // Oldest subscription first: with two waiting tokens for the same name,
+    // the one that has waited longest receives the message.
+    const sub = (waits.messageSubs ?? []).find((s) => s.messageName === messageName);
+    if (!sub) {
+      // No buffering: a message nobody waits for is dropped, and says so.
+      emit('MESSAGE_DISCARDED', { messageName, messageId });
+    } else {
+      waits.messageSubs = (waits.messageSubs ?? []).filter((s) => s.subscriptionId !== sub.subscriptionId);
+      statePatch.waits = waits;
+      emit('MESSAGE_RECEIVED', {
+        messageName,
+        messageId,
+        nodeId: sub.nodeId,
+        tokenId: sub.tokenId,
+        ...(data && { data }),
+      });
+      advanceToken(sub.nodeId, sub.tokenId, sub.scopeId);
+    }
     statePatch.version = state.version + 1;
     statePatch.lastEventSeq = lastSeq;
     statePatch.updatedAt = now;

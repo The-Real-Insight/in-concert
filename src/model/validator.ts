@@ -1,5 +1,6 @@
 import { parseBpmnXml } from './parser';
 import type { NormalizedGraph } from './types';
+import { classifyTimer, computeNextFire } from '../timers/expressions';
 
 export type ValidationIssue = {
   rule: string;
@@ -224,7 +225,48 @@ export function validateBpmnGraph(graph: NormalizedGraph): ValidationIssue[] {
   }
 
   issues.push(...validateNoOrphanedNodes(graph));
+  issues.push(...validateIntermediateCatchEvents(graph));
 
+  return issues;
+}
+
+/**
+ * The engine executes an intermediate catch event only with a timer or a
+ * message definition. Anything else (signal, conditional, link, none) used to
+ * park the token forever without a word, so it is an error at deploy time —
+ * as is a timer expression the engine cannot compute.
+ */
+function validateIntermediateCatchEvents(graph: NormalizedGraph): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const [nodeId, node] of Object.entries(graph.nodes)) {
+    if (node.type !== 'intermediateCatchEvent') continue;
+    const label = node.name || nodeId;
+    if (node.timerDefinition) {
+      try {
+        computeNextFire(classifyTimer(node.timerDefinition), new Date());
+      } catch (err) {
+        issues.push({
+          rule: 'INTERMEDIATE_TIMER_EXPRESSION',
+          severity: 'error',
+          elementId: nodeId,
+          elementType: node.type,
+          message: `"${label}": timer expression "${node.timerDefinition}" cannot be evaluated (${
+            err instanceof Error ? err.message : String(err)
+          })`,
+        });
+      }
+    } else if (!node.messageRef) {
+      issues.push({
+        rule: 'INTERMEDIATE_CATCH_UNSUPPORTED',
+        severity: 'error',
+        elementId: nodeId,
+        elementType: node.type,
+        message: `"${label}": only timer and message intermediate catch events are executed${
+          node.eventDefinition ? ` (found ${node.eventDefinition})` : ''
+        }`,
+      });
+    }
+  }
   return issues;
 }
 

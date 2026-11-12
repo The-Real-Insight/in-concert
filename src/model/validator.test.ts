@@ -175,3 +175,41 @@ describe('validateBpmnXml', () => {
     expect(roles).toContainEqual({ roleId: 'canonical-role', roleName: 'LaneA' });
   });
 });
+
+describe('validateBpmnXml – intermediate catch events', () => {
+  const withCatch = (definition: string, extraRoot = '') => `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+  ${extraRoot}
+  <bpmn:process id="P" isExecutable="true">
+    <bpmn:startEvent id="S"/>
+    <bpmn:intermediateCatchEvent id="C" name="Warten">${definition}</bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="E"/>
+    <bpmn:sequenceFlow id="F1" sourceRef="S" targetRef="C"/>
+    <bpmn:sequenceFlow id="F2" sourceRef="C" targetRef="E"/>
+  </bpmn:process>
+</bpmn:definitions>`;
+  const rules = async (xml: string) => (await validateBpmnXml(xml)).map((i) => i.rule);
+
+  it('accepts a timer with an ISO duration or date', async () => {
+    for (const expr of ['<bpmn:timeDuration>P14D</bpmn:timeDuration>', '<bpmn:timeDate>2027-01-31T10:00:00Z</bpmn:timeDate>']) {
+      expect(await rules(withCatch(`<bpmn:timerEventDefinition>${expr}</bpmn:timerEventDefinition>`))).not.toContain(
+        'INTERMEDIATE_TIMER_EXPRESSION'
+      );
+    }
+  });
+
+  it('rejects a timer expression the engine cannot compute', async () => {
+    const xml = withCatch('<bpmn:timerEventDefinition><bpmn:timeDuration>${frist}</bpmn:timeDuration></bpmn:timerEventDefinition>');
+    expect(await rules(xml)).toContain('INTERMEDIATE_TIMER_EXPRESSION');
+  });
+
+  it('accepts a message catch event', async () => {
+    const xml = withCatch('<bpmn:messageEventDefinition messageRef="M"/>', '<bpmn:message id="M" name="Frist abgelaufen"/>');
+    expect(await rules(xml)).not.toContain('INTERMEDIATE_CATCH_UNSUPPORTED');
+  });
+
+  it('rejects a catch event the engine does not execute (signal, none)', async () => {
+    expect(await rules(withCatch('<bpmn:signalEventDefinition/>'))).toContain('INTERMEDIATE_CATCH_UNSUPPORTED');
+    expect(await rules(withCatch(''))).toContain('INTERMEDIATE_CATCH_UNSUPPORTED');
+  });
+});

@@ -5,6 +5,8 @@
   id="Defs_MessageCatch"
   targetNamespace="http://example.com/bpmn">
 
+  <bpmn:message id="Message_OrderPaid" name="OrderPaid"/>
+
   <bpmn:process id="Process_MessageCatch" isExecutable="true">
     <bpmn:startEvent id="StartEvent_1"/>
 
@@ -15,7 +17,6 @@
     <bpmn:serviceTask id="Task_A" name="A"/>
     <bpmn:endEvent id="EndEvent_1"/>
 
-    <bpmn:message id="Message_OrderPaid" name="OrderPaid"/>
 
     <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Catch_OrderPaid"/>
     <bpmn:sequenceFlow id="Flow_2" sourceRef="Catch_OrderPaid" targetRef="Task_A"/>

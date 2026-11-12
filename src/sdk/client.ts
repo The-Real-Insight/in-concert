@@ -726,6 +726,53 @@ export class BpmnEngineClient {
   }
 
   /**
+   * Deliver a message to an instance that waits in an intermediate message
+   * catch event (`<bpmn:messageEventDefinition messageRef=…>`, matched by the
+   * message's `name`). Messages are not buffered: one that arrives while no
+   * token waits for it is discarded (event `MESSAGE_DISCARDED`). The result
+   * says whether a subscription existed when the message was queued, so a
+   * caller can tell "delivered" from "nobody was waiting". `messageId` makes
+   * delivery idempotent — the same id is applied at most once.
+   */
+  async deliverMessage(
+    instanceId: string,
+    params: { messageName: string; messageId?: string; data?: Record<string, unknown> }
+  ): Promise<{ subscribed: boolean }> {
+    const messageId = params.messageId ?? uuidv4();
+    if (this.config.mode === 'rest') {
+      const res = await fetch(`${this.config.baseUrl}/v1/instances/${instanceId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageName: params.messageName, messageId, data: params.data }),
+      });
+      if (!res.ok && res.status !== 202) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error((err as { error?: string }).error ?? `Deliver message failed: ${res.status}`);
+      }
+      const body = (await res.json().catch(() => ({}))) as { subscribed?: boolean };
+      return { subscribed: body.subscribed === true };
+    }
+    const { getCollections } = await import('../db/collections');
+    const { Continuations, ProcessInstanceState } = getCollections(this.config.db);
+    const state = await ProcessInstanceState.findOne({ _id: instanceId });
+    if (!state) throw new Error(`Instance not found: ${instanceId}`);
+    const subscribed = (state.waits?.messageSubs ?? []).some((s) => s.messageName === params.messageName);
+    const now = new Date();
+    await Continuations.insertOne({
+      _id: uuidv4(),
+      instanceId,
+      dueAt: now,
+      kind: 'MESSAGE',
+      payload: { messageName: params.messageName, messageId, ...(params.data && { data: params.data }) },
+      status: 'READY',
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { subscribed };
+  }
+
+  /**
    * Restore in-flight work after a server restart. Call once at startup,
    * after {@link init}, before the first {@link run}.
    *
