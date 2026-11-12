@@ -333,6 +333,46 @@ apiRouter.get('/v1/instances/:instanceId/state', async (req: Request, res: Respo
   }
 });
 
+/**
+ * Deliver a message to an instance (intermediate message catch event).
+ * Without a waiting subscription the message is discarded when processed —
+ * `subscribed` tells the caller whether one existed at delivery time.
+ */
+apiRouter.post('/v1/instances/:instanceId/messages', async (req: Request, res: Response) => {
+  try {
+    const { instanceId } = req.params;
+    const { messageName, messageId, data } = req.body ?? {};
+    if (!messageName || typeof messageName !== 'string') {
+      res.status(400).json({ error: 'messageName is required' });
+      return;
+    }
+    const db = getDb();
+    const { ProcessInstanceState, Continuations } = getCollections(db);
+    const state = await ProcessInstanceState.findOne({ _id: instanceId });
+    if (!state) {
+      res.status(404).json({ error: 'Instance not found' });
+      return;
+    }
+    const subscribed = (state.waits?.messageSubs ?? []).some((s) => s.messageName === messageName);
+    const now = new Date();
+    await Continuations.insertOne({
+      _id: uuidv4(),
+      instanceId,
+      dueAt: now,
+      kind: 'MESSAGE',
+      payload: { messageName, messageId: messageId ?? uuidv4(), ...(data && { data }) },
+      status: 'READY',
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    res.status(202).json({ accepted: true, subscribed });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Message delivery failed';
+    res.status(400).json({ error: message });
+  }
+});
+
 apiRouter.post(
   '/v1/instances/:instanceId/decisions/:decisionId',
   async (req: Request, res: Response) => {
